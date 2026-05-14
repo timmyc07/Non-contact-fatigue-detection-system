@@ -1,0 +1,33 @@
+# rppg_mediapipe_system_v2
+
+rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a web dashboard.
+
+## Features
+- Live camera preview with MediaPipe annotations
+- rPPG heart-rate and HRV metrics
+- Fatigue/behavior analysis overlays
+- Recording to SQLite (.db) and video (.mp4)
+- Web dashboard for live metrics and playback
+
+## Requirements
+- Python 3.10+ recommended
+- Windows supported (camera backend)
+
+## Setup
+```bash
+pip install -r requirements.txt
+```
+
+## Run
+```bash
+python main.py
+```
+
+Optional demo:
+```bash
+python demo_rppg_live.py
+```
+
+## Notes
+- Recordings are saved under the `recordings/` folder.
+- If playback video is needed in the web dashboard, make sure ffmpeg is available (imageio-ffmpeg is supported via requirements).

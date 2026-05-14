@@ -1,0 +1,1193 @@
+<!DOCTYPE html>
+<html lang="zh-tw">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>rPPG 疲勞檢測系統 - 專業儀表板</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
+    <style>
+        /* ===== Material Design 3 — Design Tokens ===== */
+        :root {
+            /* MD3 色彩系統 — 暗色主題 (Dark Scheme) */
+            --md-sys-color-primary: #b4c6ff;
+            --md-sys-color-on-primary: #002d6e;
+            --md-sys-color-primary-container: #0f4396;
+            --md-sys-color-on-primary-container: #dce1ff;
+            --md-sys-color-secondary: #c1c5dd;
+            --md-sys-color-on-secondary: #2b3042;
+            --md-sys-color-secondary-container: #414659;
+            --md-sys-color-tertiary: #e2bbdb;
+            --md-sys-color-tertiary-container: #5d3f5a;
+            --md-sys-color-surface: #121318;
+            --md-sys-color-surface-dim: #121318;
+            --md-sys-color-surface-bright: #38393f;
+            --md-sys-color-surface-container-lowest: #0d0e13;
+            --md-sys-color-surface-container-low: #1a1b21;
+            --md-sys-color-surface-container: #1e1f25;
+            --md-sys-color-surface-container-high: #292a2f;
+            --md-sys-color-surface-container-highest: #33343a;
+            --md-sys-color-on-surface: #e3e2e9;
+            --md-sys-color-on-surface-variant: #c5c5d0;
+            --md-sys-color-outline: #8f909a;
+            --md-sys-color-outline-variant: #44464f;
+            --md-sys-color-error: #ffb4ab;
+            --md-sys-color-on-error: #690005;
+
+            /* 語義色彩 */
+            --color-success: #7ddc7a;
+            --color-warning: #f5c344;
+            --color-danger: #ffb4ab;
+            --color-info: #7ecfff;
+            --color-heart: #ffb2b8;
+
+            /* MD3 elevation (tonal surface) */
+            --md-sys-elevation-1: color-mix(in srgb, var(--md-sys-color-primary) 5%, var(--md-sys-color-surface));
+            --md-sys-elevation-2: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface));
+            --md-sys-elevation-3: color-mix(in srgb, var(--md-sys-color-primary) 11%, var(--md-sys-color-surface));
+
+            /* MD3 Shape */
+            --md-sys-shape-corner-small: 8px;
+            --md-sys-shape-corner-medium: 12px;
+            --md-sys-shape-corner-large: 16px;
+            --md-sys-shape-corner-extra-large: 28px;
+
+            /* MD3 Typography scale */
+            --md-sys-typescale-display-large: 800 2.25rem/2.75rem 'Inter', sans-serif;
+            --md-sys-typescale-headline-medium: 600 1.75rem/2.25rem 'Inter', sans-serif;
+            --md-sys-typescale-title-large: 600 1.375rem/1.75rem 'Inter', sans-serif;
+            --md-sys-typescale-title-medium: 600 1rem/1.5rem 'Inter', sans-serif;
+            --md-sys-typescale-body-large: 400 1rem/1.5rem 'Inter', sans-serif;
+            --md-sys-typescale-body-medium: 400 0.875rem/1.25rem 'Inter', sans-serif;
+            --md-sys-typescale-label-large: 500 0.875rem/1.25rem 'Inter', sans-serif;
+            --md-sys-typescale-label-medium: 500 0.75rem/1rem 'Inter', sans-serif;
+            --md-sys-typescale-label-small: 500 0.688rem/1rem 'Inter', sans-serif;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font: var(--md-sys-typescale-body-large);
+            font-family: 'Inter', 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+            background-color: var(--md-sys-color-surface);
+            color: var(--md-sys-color-on-surface);
+            min-height: 100vh;
+            padding: 24px;
+            line-height: 1.5;
+        }
+
+        .container { max-width: 1440px; margin: 0 auto; }
+
+        /* ===== MD3 Top App Bar ===== */
+        .header {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 16px; }
+
+        .header-icon {
+            width: 48px; height: 48px;
+            background: var(--md-sys-color-primary-container);
+            border-radius: var(--md-sys-shape-corner-medium);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .header-icon .material-symbols-outlined {
+            font-size: 28px; color: var(--md-sys-color-on-primary-container);
+        }
+
+        .header h1 {
+            font: var(--md-sys-typescale-headline-medium);
+            color: var(--md-sys-color-on-surface);
+            letter-spacing: -0.02em;
+        }
+        .header p {
+            font: var(--md-sys-typescale-body-medium);
+            color: var(--md-sys-color-on-surface-variant);
+            margin-top: 2px;
+        }
+
+        #live-time {
+            font: var(--md-sys-typescale-label-medium);
+            color: var(--md-sys-color-on-surface-variant);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* ===== MD3 Navigation Tabs ===== */
+        .tabs {
+            display: flex;
+            gap: 0;
+            background: var(--md-sys-color-surface-container);
+            border-radius: var(--md-sys-shape-corner-extra-large);
+            width: fit-content;
+            margin-bottom: 24px;
+            padding: 4px;
+        }
+
+        .tab-btn {
+            padding: 10px 24px;
+            border: none;
+            border-radius: var(--md-sys-shape-corner-extra-large);
+            background: transparent;
+            color: var(--md-sys-color-on-surface-variant);
+            font: var(--md-sys-typescale-label-large);
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+        }
+
+        .tab-btn:hover { background: rgba(180, 198, 255, 0.08); }
+
+        .tab-btn.active {
+            background: var(--md-sys-color-secondary-container);
+            color: var(--md-sys-color-on-secondary-container);
+        }
+
+        /* ===== 內容切換 ===== */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: md3FadeIn 0.3s cubic-bezier(0.2, 0, 0, 1); }
+        @keyframes md3FadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* ===== MD3 Cards (Filled) ===== */
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: var(--md-sys-color-surface-container);
+            border-radius: var(--md-sys-shape-corner-large);
+            padding: 24px;
+            border: none;
+            transition: background 0.2s;
+        }
+
+        .card-title {
+            font: var(--md-sys-typescale-title-medium);
+            color: var(--md-sys-color-on-surface);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .card-title .icon-circle {
+            width: 36px; height: 36px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px;
+        }
+        .card-title .icon-circle.eye {
+            background: rgba(126, 207, 255, 0.15); color: var(--color-info);
+        }
+        .card-title .icon-circle.heart {
+            background: rgba(255, 178, 184, 0.15); color: var(--color-heart);
+        }
+        .card-title .icon-circle.brain {
+            background: rgba(226, 187, 219, 0.15); color: var(--md-sys-color-tertiary);
+        }
+        .card-title .icon-circle.chart {
+            background: rgba(180, 198, 255, 0.15); color: var(--md-sys-color-primary);
+        }
+        .card-title .icon-circle.folder {
+            background: rgba(125, 220, 122, 0.15); color: var(--color-success);
+        }
+
+        /* ===== Metric Grid (MD3 Tonal Surface) ===== */
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .metric-item {
+            padding: 14px 16px;
+            background: var(--md-sys-color-surface-container-highest);
+            border-radius: var(--md-sys-shape-corner-medium);
+            text-align: center;
+            transition: background 0.15s;
+        }
+        .metric-item:hover {
+            background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container-highest));
+        }
+
+        .metric-label {
+            font: var(--md-sys-typescale-label-small);
+            color: var(--md-sys-color-on-surface-variant);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--md-sys-color-on-surface);
+            font-family: 'JetBrains Mono', monospace;
+            transition: color 0.3s ease;
+        }
+
+        /* ===== Waveform Container ===== */
+        .waveform-container {
+            background: var(--md-sys-color-surface-container);
+            border-radius: var(--md-sys-shape-corner-large);
+            padding: 24px;
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        .chart-box h4 {
+            font: var(--md-sys-typescale-label-large);
+            margin-bottom: 16px;
+            color: var(--md-sys-color-on-surface-variant);
+            padding-left: 12px;
+            border-left: 3px solid var(--md-sys-color-primary);
+        }
+
+        /* ===== MD3 System Status Bar ===== */
+        .system-status-bar {
+            background: var(--md-sys-color-surface-container-high);
+            border-radius: var(--md-sys-shape-corner-medium);
+            padding: 12px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font: var(--md-sys-typescale-label-large);
+            transition: background 0.3s, color 0.3s;
+        }
+        .system-status-bar .status-indicator {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            transition: background 0.3s;
+        }
+
+        /* ===== Recording List (MD3 List) ===== */
+        .recording-list {
+            margin-bottom: 16px;
+        }
+
+        .recording-item {
+            background: var(--md-sys-color-surface-container-high);
+            border: 1px solid transparent;
+            padding: 16px 20px;
+            margin-bottom: 8px;
+            border-radius: var(--md-sys-shape-corner-medium);
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+        }
+        .recording-item:hover {
+            background: var(--md-sys-color-surface-container-highest);
+        }
+        .recording-item.active {
+            background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container));
+            border-color: var(--md-sys-color-primary);
+        }
+
+        /* ===== MD3 Connection Status (Badge) ===== */
+        .connection-status {
+            position: fixed; bottom: 24px; right: 24px;
+            padding: 8px 16px;
+            border-radius: var(--md-sys-shape-corner-extra-large);
+            font: var(--md-sys-typescale-label-medium);
+            z-index: 1000;
+            display: flex; align-items: center; gap: 8px;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            transition: all 0.3s;
+        }
+        .connection-status.connected {
+            background: rgba(125, 220, 122, 0.15);
+            color: var(--color-success);
+            border: 1px solid rgba(125, 220, 122, 0.3);
+        }
+        .connection-status.disconnected {
+            background: rgba(255, 180, 171, 0.15);
+            color: var(--color-danger);
+            border: 1px solid rgba(255, 180, 171, 0.3);
+        }
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        /* ===== MD3 Buttons ===== */
+        .btn-primary {
+            background: var(--md-sys-color-primary);
+            color: var(--md-sys-color-on-primary);
+            padding: 10px 24px;
+            border-radius: var(--md-sys-shape-corner-extra-large);
+            border: none;
+            font: var(--md-sys-typescale-label-large);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex; align-items: center; gap: 8px;
+        }
+        .btn-primary:hover {
+            box-shadow: 0 1px 3px 1px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.3);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--md-sys-color-primary);
+            padding: 10px 24px;
+            border-radius: var(--md-sys-shape-corner-extra-large);
+            border: 1px solid var(--md-sys-color-outline);
+            font: var(--md-sys-typescale-label-large);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex; align-items: center; gap: 8px;
+        }
+        .btn-secondary:hover {
+            background: rgba(180, 198, 255, 0.08);
+        }
+
+        /* ===== MD3 Playback Controls ===== */
+        .playback-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            gap: 16px;
+        }
+        .playback-controls-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .play-btn {
+            width: 48px; height: 48px;
+            border-radius: 50%;
+            border: none;
+            background: var(--md-sys-color-primary);
+            color: var(--md-sys-color-on-primary);
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px;
+            transition: all 0.2s;
+        }
+        .play-btn:hover {
+            box-shadow: 0 1px 3px 1px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.3);
+        }
+
+        .speed-select {
+            background: var(--md-sys-color-surface-container-highest);
+            color: var(--md-sys-color-on-surface);
+            border: 1px solid var(--md-sys-color-outline-variant);
+            border-radius: var(--md-sys-shape-corner-small);
+            padding: 8px 12px;
+            font: var(--md-sys-typescale-label-large);
+        }
+
+        .time-display {
+            font-family: 'JetBrains Mono', monospace;
+            font: var(--md-sys-typescale-label-medium);
+            color: var(--md-sys-color-on-surface-variant);
+        }
+
+        /* MD3 Slider */
+        input[type="range"] {
+            width: 100%;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: var(--md-sys-color-surface-container-highest);
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px; height: 20px;
+            border-radius: 50%;
+            background: var(--md-sys-color-primary);
+            border: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            transition: box-shadow 0.2s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            box-shadow: 0 0 0 8px rgba(180, 198, 255, 0.12), 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        /* ===== 影片播放器 ===== */
+        .video-playback-section {
+            background: var(--md-sys-color-surface-container);
+            border-radius: var(--md-sys-shape-corner-large);
+            padding: 24px;
+            margin-top: 16px;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+            border-radius: var(--md-sys-shape-corner-medium);
+            overflow: hidden;
+            background: var(--md-sys-color-surface-container-lowest);
+            aspect-ratio: 16/9;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .video-container video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: var(--md-sys-shape-corner-medium);
+        }
+        .video-placeholder {
+            color: var(--md-sys-color-on-surface-variant);
+            font: var(--md-sys-typescale-body-medium);
+            text-align: center;
+        }
+        .video-placeholder .material-symbols-outlined {
+            font-size: 48px;
+            display: block;
+            margin-bottom: 8px;
+            opacity: 0.5;
+        }
+
+        /* ===== 子分頁（歷史回放內） ===== */
+        .sub-tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--md-sys-color-surface-container-high);
+            border-radius: var(--md-sys-shape-corner-large);
+            padding: 4px;
+            margin-bottom: 16px;
+            width: fit-content;
+        }
+        .sub-tab-btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: var(--md-sys-shape-corner-large);
+            background: transparent;
+            color: var(--md-sys-color-on-surface-variant);
+            font: var(--md-sys-typescale-label-large);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .sub-tab-btn:hover { background: rgba(180,198,255,0.08); }
+        .sub-tab-btn.active {
+            background: var(--md-sys-color-secondary-container);
+            color: var(--md-sys-color-on-secondary-container);
+        }
+        .sub-tab-panel { display: none; }
+        .sub-tab-panel.active { display: block; animation: md3FadeIn 0.25s; }
+
+        /* 共用回放區 */
+        #shared-playback {
+            margin-top: 16px;
+            border-top: 1px solid var(--md-sys-color-outline-variant);
+            padding-top: 16px;
+        }
+        #pb-source-banner {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 16px;
+            background: var(--md-sys-color-surface-container-high);
+            border-radius: var(--md-sys-shape-corner-medium);
+            margin-bottom: 12px;
+            font: var(--md-sys-typescale-label-large);
+        }
+        .pb-source-badge {
+            padding: 2px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;
+        }
+        .pb-source-badge.local {
+            background: rgba(100,160,255,0.15); color: var(--md-sys-color-primary);
+        }
+        .pb-source-badge.cloud {
+            background: rgba(100,220,180,0.15); color: #4dd9b0;
+        }
+
+        /* File Browser 連線表單 */
+        .fb-connect-form input {
+            width: 100%; padding: 10px 14px; border-radius: 10px;
+            border: 1px solid var(--md-sys-color-outline-variant);
+            background: var(--md-sys-color-surface-container-highest);
+            color: var(--md-sys-color-on-surface); margin-bottom: 10px;
+        }
+        .fb-connect-form input:focus { outline: none; border-color: var(--md-sys-color-primary); }
+
+        /* 影片可用 badge */
+        .video-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(180, 198, 255, 0.15);
+            color: var(--md-sys-color-primary);
+            padding: 2px 8px;
+            border-radius: var(--md-sys-shape-corner-small);
+            font: var(--md-sys-typescale-label-small);
+        }
+        .video-badge.unavailable {
+            background: rgba(255,255,255,0.05);
+            color: var(--md-sys-color-on-surface-variant);
+            opacity: 0.6;
+        }
+
+        /* ===== MD3 State Layer 互動回饋 ===== */
+        .card {
+            position: relative;
+            overflow: hidden;
+        }
+        .card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            pointer-events: none;
+            transition: background 0.2s;
+        }
+        .card:hover::after {
+            background: rgba(180, 198, 255, 0.04);
+        }
+
+        .metric-item {
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* ===== MD3 Divider ===== */
+        .section-divider {
+            height: 1px;
+            background: var(--md-sys-color-outline-variant);
+            margin: 24px 0;
+            opacity: 0.5;
+        }
+
+        /* ===== MD3 Chip（速度選擇器增強） ===== */
+        .speed-select {
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .speed-select:focus {
+            border-color: var(--md-sys-color-primary);
+            box-shadow: 0 0 0 2px rgba(180, 198, 255, 0.2);
+            outline: none;
+        }
+
+        /* ===== 影片播放器增強 ===== */
+        .video-playback-section {
+            animation: md3FadeIn 0.3s cubic-bezier(0.2, 0, 0, 1);
+        }
+        .video-container {
+            transition: box-shadow 0.2s;
+        }
+        .video-container:hover {
+            box-shadow: 0 2px 6px 2px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.3);
+        }
+
+        /* ===== 錄製列表增強 ===== */
+        .recording-item {
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        .recording-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: transparent;
+            transition: background 0.2s;
+            border-radius: 0 2px 2px 0;
+        }
+        .recording-item.active::before {
+            background: var(--md-sys-color-primary);
+        }
+
+        /* ===== Scrollbar ===== */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            background: var(--md-sys-color-outline-variant);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--md-sys-color-outline);
+        }
+
+        /* ===== MD3 Skeleton Loading ===== */
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .skeleton {
+            background: linear-gradient(90deg,
+                var(--md-sys-color-surface-container-high) 25%,
+                var(--md-sys-color-surface-container-highest) 50%,
+                var(--md-sys-color-surface-container-high) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            border-radius: var(--md-sys-shape-corner-small);
+        }
+
+        /* ===== 即時鏡頭預覽 ===== */
+        .preview-section {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .preview-card {
+            background: var(--md-sys-color-surface-container);
+            border-radius: var(--md-sys-shape-corner-large);
+            padding: 24px;
+        }
+        .preview-frame-container {
+            position: relative;
+            width: 100%;
+            border-radius: var(--md-sys-shape-corner-medium);
+            overflow: hidden;
+            background: var(--md-sys-color-surface-container-lowest);
+            aspect-ratio: 4/3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .preview-frame-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: var(--md-sys-shape-corner-medium);
+        }
+        .preview-placeholder {
+            color: var(--md-sys-color-on-surface-variant);
+            font: var(--md-sys-typescale-body-medium);
+            text-align: center;
+        }
+        .preview-placeholder .material-symbols-outlined {
+            font-size: 48px;
+            display: block;
+            margin-bottom: 8px;
+            opacity: 0.5;
+        }
+        .preview-fps-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.6);
+            color: var(--md-sys-color-on-surface);
+            padding: 2px 8px;
+            border-radius: var(--md-sys-shape-corner-small);
+            font: var(--md-sys-typescale-label-small);
+            font-family: 'JetBrains Mono', monospace;
+            backdrop-filter: blur(4px);
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 1024px) {
+            .chart-grid { grid-template-columns: 1fr; }
+            .preview-section { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 768px) {
+            body { padding: 16px; }
+            .dashboard { grid-template-columns: 1fr; }
+            .header { flex-direction: column; align-items: flex-start; gap: 12px; }
+            .video-container { max-width: 100%; }
+        }
+        @media (max-width: 480px) {
+            .tabs { width: 100%; }
+            .tab-btn { flex: 1; justify-content: center; padding: 10px 16px; }
+            .playback-controls { flex-direction: column; gap: 12px; }
+            .playback-controls-left { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="header-left">
+                <div class="header-icon">
+                    <span class="material-symbols-outlined">monitor_heart</span>
+                </div>
+                <div>
+                    <h1>rPPG 疲勞檢測系統</h1>
+                    <p>非接觸式生理疲勞監測儀表板</p>
+                </div>
+            </div>
+            <div id="live-time"></div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" onclick="switchTab('dashboard', event)">
+                <span class="material-symbols-outlined" style="font-size:20px;">monitoring</span> 實時監測
+            </button>
+            <button class="tab-btn" onclick="switchTab('playback', event)">
+                <span class="material-symbols-outlined" style="font-size:20px;">history</span> 歷史回放
+            </button>
+        </nav>
+
+        <main id="tab-dashboard" class="tab-content active">
+            <!-- 系統狀態列 -->
+            <div class="system-status-bar" id="system-status-bar">
+                <div class="status-indicator" id="pipeline-icon" style="background: var(--color-danger);"></div>
+                <span id="pipeline-status-text">等待系統啟動...</span>
+                <span style="margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--md-sys-color-on-surface-variant);" id="system-info-text"></span>
+            </div>
+
+            <div class="preview-section">
+                <div class="preview-card">
+                    <div class="card-title">
+                        <div class="icon-circle chart"><span class="material-symbols-outlined" style="font-size:20px;">videocam</span></div>
+                        鏡頭預覽
+                    </div>
+                    <div class="preview-frame-container" id="preview-container">
+                        <img id="preview-frame" alt="鏡頭預覽" style="display:none;">
+                        <div class="preview-placeholder" id="preview-placeholder">
+                            <span class="material-symbols-outlined">videocam_off</span>
+                            等待鏡頭畫面...
+                        </div>
+                        <div class="preview-fps-badge" id="preview-fps" style="display:none;">-- fps</div>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                    <section class="card">
+                        <div class="card-title">
+                            <div class="icon-circle eye"><i class="fas fa-eye"></i></div>
+                            眼睛疲勞指標
+                        </div>
+                        <div class="metric-grid">
+                            <div class="metric-item"><div class="metric-label">疲勞狀態</div><div class="metric-value" id="pv-fusion-state" style="font-size: 1.1rem;">--</div></div>
+                            <div class="metric-item"><div class="metric-label">信心度</div><div class="metric-value" id="pv-fusion-confidence">--</div></div>
+                            <div class="metric-item"><div class="metric-label">眼睛狀態</div><div class="metric-value" id="pv-eye-status" style="font-size: 1.1rem;">--</div></div>
+                            <div class="metric-item"><div class="metric-label">壓力概率</div><div class="metric-value" id="pv-stress-prob">--</div></div>
+                        </div>
+                    </section>
+                    <section class="card">
+                        <div class="card-title">
+                            <div class="icon-circle heart"><i class="fas fa-heartbeat"></i></div>
+                            即時心率
+                        </div>
+                        <div style="text-align:center; padding: 16px 0;">
+                            <div style="font-size: 3.5rem; font-weight: 800; color: var(--color-heart); font-family: 'JetBrains Mono', monospace;" id="bpm-large">--</div>
+                            <div style="font: var(--md-sys-typescale-label-medium); color: var(--md-sys-color-on-surface-variant); margin-top: 4px;">BPM</div>
+                        </div>
+                        <div id="warmup-bar-container" style="padding: 0 16px 8px; display: none;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                <span style="font: var(--md-sys-typescale-label-small); color: var(--md-sys-color-on-surface-variant);">rPPG 暖機中</span>
+                                <span id="warmup-pct" style="font: var(--md-sys-typescale-label-small); color: var(--color-heart); font-family: 'JetBrains Mono', monospace;">0%</span>
+                            </div>
+                            <div style="width: 100%; height: 6px; background: var(--md-sys-color-surface-variant); border-radius: 3px; overflow: hidden;">
+                                <div id="warmup-fill" style="width: 0%; height: 100%; background: var(--color-heart); border-radius: 3px; transition: width 0.3s ease;"></div>
+                            </div>
+                        </div>
+                        <div class="metric-grid">
+                            <div class="metric-item"><div class="metric-label">SQI 品質</div><div class="metric-value" id="sqi-compact">--</div></div>
+                            <div class="metric-item"><div class="metric-label">rPPG 模組</div><div class="metric-value" id="stress-enabled-compact" style="font-size: 1.1rem;">--</div></div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="dashboard">
+                <section class="card">
+                    <div class="card-title">
+                        <div class="icon-circle eye"><i class="fas fa-eye"></i></div>
+                        眼睛疲勞指標
+                    </div>
+                    <div class="metric-grid">
+                        <div class="metric-item"><div class="metric-label">EAR 比值</div><div class="metric-value" id="ear-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">PERCLOS %</div><div class="metric-value" id="perclos-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">眨眼次數</div><div class="metric-value" id="blink-value">--</div></div>
+                        <div class="metric-item">
+                            <div class="metric-label">臉部偵測</div>
+                            <div class="metric-value" id="face-status" style="font-size: 1.1rem;">--</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <div class="card-title">
+                        <div class="icon-circle" style="background:rgba(162,89,255,0.15);color:#c084fc;"><i class="fas fa-user-clock"></i></div>
+                        行為警覺指標
+                    </div>
+                    <div class="metric-grid">
+                        <div class="metric-item">
+                            <div class="metric-label">俯仰角 Pitch</div>
+                            <div class="metric-value" id="head-pitch-value">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">偏航角 Yaw</div>
+                            <div class="metric-value" id="head-yaw-value">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">側傾角 Roll</div>
+                            <div class="metric-value" id="head-roll-value">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">微睡眠次數</div>
+                            <div class="metric-value" id="microsleep-count" style="color:var(--color-danger);">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">哈欠次數</div>
+                            <div class="metric-value" id="yawn-count" style="color:var(--color-warning);">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">嘴部開合 MAR</div>
+                            <div class="metric-value" id="mar-value">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">注視穩定度</div>
+                            <div class="metric-value" id="gaze-stability-value">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">心理疲勞（注視）</div>
+                            <div class="metric-value" id="gaze-mental-fatigue" style="font-size:1.1rem;">--</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <div class="card-title">
+                        <div class="icon-circle heart"><i class="fas fa-heartbeat"></i></div>
+                        生理壓力指標 (rPPG)
+                    </div>
+                    <div class="metric-grid">
+                        <div class="metric-item"><div class="metric-label">心率 BPM</div><div class="metric-value" id="bpm-value" style="color: var(--color-heart);">--</div></div>
+                        <div class="metric-item"><div class="metric-label">HRV 信心</div><div class="metric-value" id="hrv-confidence-value" style="font-size: 1.1rem;">--</div></div>
+                        <div class="metric-item"><div class="metric-label">RMSSD (ms)</div><div class="metric-value" id="rmssd-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">SDNN (ms)</div><div class="metric-value" id="sdnn-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">LF/HF 比值 <span id="lf-hf-warn" style="display:none;color:#f59e0b;font-size:0.7rem;" title="IBI 窗口 < 120s，LF/HF 無生理意義">(&lt;120s)</span></div><div class="metric-value" id="lf-hf-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">SQI 品質</div><div class="metric-value" id="sqi-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">IBI 偽影</div><div class="metric-value" id="ibi-artifact-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">峰值頻率 (Hz)</div><div class="metric-value" id="peak-freq-value">--</div></div>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <div class="card-title">
+                        <div class="icon-circle" style="background:rgba(6,182,212,0.15);color:#22d3ee;"><i class="fas fa-microchip"></i></div>
+                        DL rPPG (EfficientPhys)
+                    </div>
+                    <div class="metric-grid">
+                        <div class="metric-item"><div class="metric-label">DL BPM</div><div class="metric-value" id="dl-bpm-value" style="color: #22d3ee;">--</div></div>
+                        <div class="metric-item"><div class="metric-label">信心值</div><div class="metric-value" id="dl-confidence-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">BPM 差距</div><div class="metric-value" id="dl-bpm-diff">--</div></div>
+                        <div class="metric-item"><div class="metric-label">DL 狀態</div><div class="metric-value" id="dl-status-value" style="font-size: 1.1rem;">--</div></div>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <div class="card-title">
+                        <div class="icon-circle brain"><i class="fas fa-brain"></i></div>
+                        AI 融合分析
+                    </div>
+                    <div class="metric-grid">
+                        <div class="metric-item"><div class="metric-label">疲勞狀態</div><div class="metric-value" id="fusion-state" style="font-size: 1.1rem;">--</div></div>
+                        <div class="metric-item"><div class="metric-label">信心度</div><div class="metric-value" id="fusion-confidence">--</div></div>
+                        <div class="metric-item"><div class="metric-label">壓力概率</div><div class="metric-value" id="stress-prob">--</div></div>
+                        <div class="metric-item"><div class="metric-label">眼睛狀態</div><div class="metric-value" id="eye-status" style="font-size: 1.1rem;">--</div></div>
+                        <div class="metric-item"><div class="metric-label">FPS</div><div class="metric-value" id="fps-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">rPPG 模組</div><div class="metric-value" id="stress-enabled-status" style="font-size: 1.1rem;">--</div></div>
+                    </div>
+                </section>
+            </div>
+
+            <div class="waveform-container">
+                <div class="card-title">
+                    <div class="icon-circle chart"><i class="fas fa-wave-square"></i></div>
+                    實時波形分析
+                </div>
+                <div class="chart-grid">
+                    <div class="chart-box">
+                        <h4>脈搏波形 (Filtered Pulse)</h4>
+                        <div style="height: 300px;"><canvas id="pulseWaveformChart"></canvas></div>
+                    </div>
+                    <div class="chart-box">
+                        <h4>頻率掃描 (PSD Spectrum)</h4>
+                        <div style="height: 300px;"><canvas id="psdSpectrumChart"></canvas></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <main id="tab-playback" class="tab-content">
+
+            <!-- ── 子分頁列 ── -->
+            <nav class="sub-tabs">
+                <button class="sub-tab-btn active" id="sub-tab-local-btn" onclick="switchSubTab('local', event)">
+                    <span class="material-symbols-outlined" style="font-size:18px;">folder_open</span> 本地回放
+                </button>
+                <button class="sub-tab-btn" id="sub-tab-cloud-btn" onclick="switchSubTab('cloud', event)">
+                    <span class="material-symbols-outlined" style="font-size:18px;">cloud</span> 雲端回放
+                </button>
+            </nav>
+
+            <!-- ── 本地回放面板 ── -->
+            <div class="sub-tab-panel active" id="sub-panel-local">
+                <div class="card">
+                    <div class="card-title">
+                        <div class="icon-circle folder"><i class="fas fa-folder-open"></i></div>
+                        選擇本地錄製檔案
+                    </div>
+                    <div style="display:flex; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+                        <button class="btn-primary" id="refresh-list-btn">
+                            <span class="material-symbols-outlined" style="font-size:18px;">refresh</span> 刷新列表
+                        </button>
+                        <button class="btn-secondary" id="clear-playback-btn">
+                            <span class="material-symbols-outlined" style="font-size:18px;">close</span> 清除回放
+                        </button>
+                    </div>
+                    <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
+                        <input id="recording-search-input" type="search" placeholder="搜尋 session 名稱"
+                            style="flex:1 1 240px; min-width:220px; padding:10px 14px; border-radius:12px;
+                                   border:1px solid var(--md-sys-color-outline-variant);
+                                   background:var(--md-sys-color-surface-container-highest);
+                                   color:var(--md-sys-color-on-surface);">
+                        <select id="recording-sort-select" class="speed-select" style="min-width:180px;">
+                            <option value="desc" selected>日期新到舊</option>
+                            <option value="asc">日期舊到新</option>
+                        </select>
+                    </div>
+                    <div class="recording-list" id="recording-list" style="max-height:240px; overflow-y:auto; border-radius:8px;">
+                        <div style="text-align:center; color:var(--md-sys-color-on-surface-variant); padding:20px;">正在讀取資料庫檔案...</div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; flex-wrap:wrap;">
+                        <div id="recording-page-info" style="color:var(--md-sys-color-on-surface-variant); font-size:0.9rem;">第 1 頁</div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn-secondary" id="recording-prev-page-btn">上一頁</button>
+                            <button class="btn-secondary" id="recording-next-page-btn">下一頁</button>
+                        </div>
+                    </div>
+                    <div id="pb-loading" style="display:none; text-align:center; padding:20px; color:var(--md-sys-color-primary);">
+                        <i class="fas fa-spinner fa-spin"></i> 正在載入錄製數據...
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── 雲端回放面板 ── -->
+            <div class="sub-tab-panel" id="sub-panel-cloud">
+                <!-- 連線狀態欄 -->
+                <div class="card" style="margin-bottom:12px;">
+                    <!-- 未連線：顯示表單 -->
+                    <div id="fb-connect-section">
+                        <div class="card-title">
+                            <div class="icon-circle" style="background:rgba(100,220,180,0.15);color:#4dd9b0;">
+                                <span class="material-symbols-outlined" style="font-size:20px;">cloud_off</span>
+                            </div>
+                            連線至 File Browser
+                        </div>
+                        <div class="fb-connect-form">
+                            <input type="url" id="fb-url-input" placeholder="File Browser URL（例：http://192.168.1.100:8080）">
+                            <div style="display:flex; gap:10px;">
+                                <input type="text" id="fb-username-input" placeholder="帳號" style="flex:1;">
+                                <input type="password" id="fb-password-input" placeholder="密碼" style="flex:1;">
+                            </div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px; flex-wrap:wrap; gap:8px;">
+                                <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; color:var(--md-sys-color-on-surface-variant); cursor:pointer; user-select:none;">
+                                    <input type="checkbox" id="fb-remember-pwd" style="width:15px;height:15px;cursor:pointer;accent-color:var(--md-sys-color-primary);">
+                                    記住密碼
+                                </label>
+                                <button class="btn-primary" id="fb-connect-btn">
+                                    <span class="material-symbols-outlined" style="font-size:18px;">login</span> 連線
+                                </button>
+                            </div>
+                        </div>
+                        <div id="fb-connect-error" style="display:none; color:var(--md-sys-color-error); font-size:0.85rem; margin-top:8px;"></div>
+                    </div>
+
+                    <!-- 已連線：顯示狀態 -->
+                    <div id="fb-status-section" style="display:none;">
+                        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                            <span class="material-symbols-outlined" style="color:#4dd9b0; font-size:24px;">cloud_done</span>
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-weight:600; font-size:0.95rem;">已連線 File Browser ✓</div>
+                                <div style="font-size:0.82rem; color:var(--md-sys-color-on-surface-variant); margin-top:2px;">
+                                    <span id="fb-status-url"></span> &nbsp;·&nbsp; <span id="fb-status-user"></span>
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:8px; flex-shrink:0;">
+                                <button class="btn-primary" id="fb-refresh-btn">
+                                    <span class="material-symbols-outlined" style="font-size:18px;">refresh</span> 刷新
+                                </button>
+                                <button class="btn-secondary" id="fb-disconnect-btn">
+                                    <span class="material-symbols-outlined" style="font-size:18px;">logout</span> 登出/切換
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 雲端錄製列表 -->
+                <div class="card">
+                    <div class="card-title">
+                        <div class="icon-circle folder"><i class="fas fa-cloud"></i></div>
+                        雲端錄製檔案
+                    </div>
+                    <div class="recording-list" id="cloud-recording-list" style="max-height:260px; overflow-y:auto; border-radius:8px;">
+                        <div style="text-align:center; color:var(--md-sys-color-on-surface-variant); padding:30px 20px;">
+                            <span class="material-symbols-outlined" style="font-size:36px; opacity:0.4; display:block; margin-bottom:8px;">cloud</span>
+                            請先連線 File Browser
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; flex-wrap:wrap;">
+                        <div id="cloud-recording-page-info" style="color:var(--md-sys-color-on-surface-variant); font-size:0.9rem;">第 1 頁</div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn-secondary" id="cloud-recording-prev-page-btn">上一頁</button>
+                            <button class="btn-secondary" id="cloud-recording-next-page-btn">下一頁</button>
+                        </div>
+                    </div>
+                    <div id="cloud-pb-loading" style="display:none; text-align:center; padding:20px; color:var(--md-sys-color-primary);">
+                        <i class="fas fa-spinner fa-spin"></i> 正在從雲端下載數據...
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── 共用回放區（本地 / 雲端共享，選錄製後顯示） ── -->
+            <div id="shared-playback" style="display:none;">
+                <!-- 來源 Banner -->
+                <div id="pb-source-banner">
+                    <span class="material-symbols-outlined" style="color:var(--md-sys-color-primary);">play_circle</span>
+                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="pb-source-name">--</span>
+                    <span class="pb-source-badge local" id="pb-source-badge">本地</span>
+                </div>
+
+                <!-- 進度條與控制 -->
+                <div id="pb-controls" class="card" style="display:none; margin-bottom:12px;">
+                    <div class="playback-controls">
+                        <div class="playback-controls-left">
+                            <button class="play-btn" id="pb-play-btn">
+                                <i class="fas fa-play" id="pb-play-icon"></i>
+                            </button>
+                            <select id="pb-speed" class="speed-select">
+                                <option value="0.5">0.5x</option>
+                                <option value="1" selected>1x</option>
+                                <option value="2">2x</option>
+                                <option value="5">5x</option>
+                                <option value="10">10x</option>
+                            </select>
+                        </div>
+                        <div class="time-display">
+                            <span id="pb-time-current">00:00</span> / <span id="pb-time-total">00:00</span>
+                            &nbsp;(<span id="pb-idx">0</span> / <span id="pb-total">0</span> 筆)
+                        </div>
+                    </div>
+                    <input type="range" id="pb-slider" min="0" max="0" value="0" step="1">
+                </div>
+
+                <!-- 影片回放 -->
+                <div id="pb-video-section" class="video-playback-section" style="display:none; margin-bottom:12px;">
+                    <div class="card-title">
+                        <div class="icon-circle chart">
+                            <span class="material-symbols-outlined" style="font-size:20px;">videocam</span>
+                        </div>
+                        臉部影像回放
+                    </div>
+                    <div class="video-container" id="pb-video-container">
+                        <video id="pb-video" muted playsinline controls></video>
+                        <div class="video-placeholder" id="pb-video-placeholder">
+                            <span class="material-symbols-outlined">videocam_off</span>
+                            此錄製無對應影片檔
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 數值卡片 -->
+                <div id="pb-data" style="display:none;">
+                    <div class="dashboard">
+                        <section class="card">
+                            <div class="card-title">
+                                <div class="icon-circle eye"><i class="fas fa-eye"></i></div>
+                                眼睛疲勞指標
+                            </div>
+                            <div class="metric-grid">
+                                <div class="metric-item"><div class="metric-label">EAR 比值</div><div class="metric-value" id="pb-ear">--</div></div>
+                                <div class="metric-item"><div class="metric-label">PERCLOS %</div><div class="metric-value" id="pb-perclos">--</div></div>
+                                <div class="metric-item"><div class="metric-label">眨眼次數</div><div class="metric-value" id="pb-blink">--</div></div>
+                                <div class="metric-item"><div class="metric-label">臉部偵測</div><div class="metric-value" id="pb-face" style="font-size:1.1rem;">--</div></div>
+                            </div>
+                        </section>
+                        <section class="card">
+                            <div class="card-title">
+                                <div class="icon-circle heart"><i class="fas fa-heartbeat"></i></div>
+                                生理壓力指標 (rPPG)
+                            </div>
+                            <div class="metric-grid">
+                                <div class="metric-item"><div class="metric-label">心率 BPM</div><div class="metric-value" id="pb-bpm" style="color:var(--color-heart);">--</div></div>
+                                <div class="metric-item"><div class="metric-label">RMSSD (ms)</div><div class="metric-value" id="pb-rmssd">--</div></div>
+                                <div class="metric-item"><div class="metric-label">SDNN (ms)</div><div class="metric-value" id="pb-sdnn">--</div></div>
+                                <div class="metric-item"><div class="metric-label">LF/HF 比值</div><div class="metric-value" id="pb-lfhf">--</div></div>
+                                <div class="metric-item"><div class="metric-label">SQI 品質</div><div class="metric-value" id="pb-sqi">--</div></div>
+                                <div class="metric-item"><div class="metric-label">壓力概率</div><div class="metric-value" id="pb-prob">--</div></div>
+                            </div>
+                        </section>
+                        <section class="card">
+                            <div class="card-title">
+                                <div class="icon-circle" style="background:rgba(6,182,212,0.15);color:#22d3ee;"><i class="fas fa-microchip"></i></div>
+                                DL rPPG
+                            </div>
+                            <div class="metric-grid">
+                                <div class="metric-item"><div class="metric-label">DL BPM</div><div class="metric-value" id="pb-dl-bpm" style="color:#22d3ee;">--</div></div>
+                                <div class="metric-item"><div class="metric-label">信心值</div><div class="metric-value" id="pb-dl-conf">--</div></div>
+                            </div>
+                        </section>
+                        <section class="card">
+                            <div class="card-title">
+                                <div class="icon-circle brain"><i class="fas fa-brain"></i></div>
+                                AI 融合分析
+                            </div>
+                            <div class="metric-grid">
+                                <div class="metric-item"><div class="metric-label">疲勞狀態</div><div class="metric-value" id="pb-fstate" style="font-size:1.1rem;">--</div></div>
+                                <div class="metric-item"><div class="metric-label">信心度</div><div class="metric-value" id="pb-fconf">--</div></div>
+                                <div class="metric-item"><div class="metric-label">眼睛狀態</div><div class="metric-value" id="pb-estatus" style="font-size:1.1rem;">--</div></div>
+                                <div class="metric-item"><div class="metric-label">時間戳</div><div class="metric-value" id="pb-timestamp" style="font-size:0.75rem;">--</div></div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- 歷史波形圖 -->
+                    <div class="waveform-container" style="margin-top:16px;">
+                        <div class="card-title">
+                            <div class="icon-circle chart"><i class="fas fa-chart-area"></i></div>
+                            歷史趨勢波形
+                        </div>
+                        <div class="chart-grid">
+                            <div class="chart-box">
+                                <h4>心率 BPM / RMSSD</h4>
+                                <div style="height:280px;"><canvas id="pb-chart-hr"></canvas></div>
+                            </div>
+                            <div class="chart-box">
+                                <h4>EAR / PERCLOS</h4>
+                                <div style="height:280px;"><canvas id="pb-chart-eye"></canvas></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <div class="connection-status disconnected" id="connection-status">
+        <span class="status-dot"></span>
+        <span id="status-text">斷線中...</span>
+    </div>
+
+    <script>
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('live-time').innerText = now.toLocaleString();
+        }, 1000);
+    </script>
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
