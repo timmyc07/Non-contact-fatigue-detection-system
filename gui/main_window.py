@@ -36,7 +36,7 @@ from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserPro
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
 from gui.preview_overlay_window import PreviewOverlayWindow
-from gui.rppg_worker import RppgWorker
+from rppg.rppg_worker import RppgWorker
 from gui.video_recorder import VideoRecorderWorker
 from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread
 

@@ -50,7 +50,7 @@ except ImportError:
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig
 from .fatigue_worker import draw_fatigue_annotations
-from .rppg_worker import (
+from rppg.rppg_worker import (
     RppgEngine, RppgMetrics,
     draw_rois, roi_mean_bgr, ROI_SPECS,
     ensure_face_model, _MODELS_DIR,

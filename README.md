@@ -15,7 +15,8 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 
 ## Setup
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
 ## Run
@@ -25,8 +26,12 @@ python main.py
 
 Optional demo:
 ```bash
-python demo_rppg_live.py
+python -m rppg.demo_rppg_live
 ```
+
+## Project layout
+- `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo
+- `gui/`: desktop GUI, fatigue analysis, recording, and web dashboard integration
 
 ## Notes
 - Recordings are saved under the `recordings/` folder.

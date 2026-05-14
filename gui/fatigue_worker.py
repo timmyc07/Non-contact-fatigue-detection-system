@@ -32,7 +32,7 @@ except ImportError:
     _HAS_MP = False
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
-from .rppg_worker import ensure_face_model, _MODELS_DIR
+from rppg.rppg_worker import ensure_face_model, _MODELS_DIR
 
 
 # ── Drawing constants ────────────────────────────────────────────────────────

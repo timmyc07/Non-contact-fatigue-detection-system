@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from gui.rppg_worker import RppgMetrics
+    from rppg.rppg_worker import RppgMetrics
     from gui.fatigue_engine import FatigueMetrics
 
 

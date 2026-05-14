@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 if TYPE_CHECKING:
-    from gui.rppg_worker import RppgMetrics
+    from rppg.rppg_worker import RppgMetrics
     from gui.fatigue_engine import FatigueMetrics
     from gui.fatigue_scorer import FusedFatigueScore
 

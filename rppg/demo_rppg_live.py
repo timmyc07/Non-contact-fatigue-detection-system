@@ -7,13 +7,13 @@ Metrics (aligned with mediapipe_rppg_system stress_* fields, minus enable flags)
   optional waveform + PSD preview, frame brightness.
 
 Usage:
-  python demo_rppg_live.py
-  python demo_rppg_live.py --list-cameras
-  python demo_rppg_live.py --pick
-  python demo_rppg_live.py --camera 1
-  python demo_rppg_live.py --backend msmf   # DroidCam / virtual cams often need MSMF
+  python -m rppg.demo_rppg_live
+  python -m rppg.demo_rppg_live --list-cameras
+  python -m rppg.demo_rppg_live --pick
+  python -m rppg.demo_rppg_live --camera 1
+  python -m rppg.demo_rppg_live --backend msmf   # DroidCam / virtual cams often need MSMF
 
-PowerShell: options belong to Python, e.g. python demo_rppg_live.py --list-cameras
+PowerShell: options belong to Python, e.g. python -m rppg.demo_rppg_live --list-cameras
 (not "--list-cameras" alone).
 
 Windows: pygrabber gives DirectShow names; capture may use MSMF first (--backend auto).
@@ -593,7 +593,7 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
     from mediapipe.tasks import python
     from mediapipe.tasks.python import vision
 
-    model_path = ensure_face_model(Path(__file__).resolve().parent / "models")
+    model_path = ensure_face_model(Path(__file__).resolve().parents[1] / "models")
     base_options = python.BaseOptions(model_asset_path=str(model_path))
     options = vision.FaceLandmarkerOptions(
         base_options=base_options,
@@ -607,7 +607,7 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
     if cap is None:
         print(
             f"Cannot open camera index {camera_id} with backend={backend!r}. "
-            f"Try: python demo_rppg_live.py --list-cameras --backend auto"
+            f"Try: python -m rppg.demo_rppg_live --list-cameras --backend auto"
         )
         print("  Virtual cameras (e.g. DroidCam): --backend msmf")
         return
