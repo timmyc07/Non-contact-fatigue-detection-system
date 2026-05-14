@@ -192,10 +192,41 @@ function updateMetricsDisplay(m) {
     setVal('head-pitch-value', m.head_pitch, _deg);
     setVal('head-yaw-value',   m.head_yaw,   _deg);
     setVal('head-roll-value',  m.head_roll,  _deg);
+    const ew = document.getElementById('early-warning');
+    if (ew) {
+        if (m.early_warning) { ew.textContent = '警示'; ew.style.color = '#ef4444'; }
+        else { ew.textContent = '正常'; ew.style.color = '#22c55e'; }
+    }
+    setVal('blink-rate', m.blink_rate_pm, v => v > 0 ? v.toFixed(1) : '--');
+    const msAlert = document.getElementById('microsleep-alert');
+    if (msAlert) {
+        if (m.microsleep_alert) { msAlert.textContent = '警示'; msAlert.style.color = '#ef4444'; }
+        else { msAlert.textContent = '正常'; msAlert.style.color = '#22c55e'; }
+    }
     setVal('microsleep-count', m.microsleep_count, v => v != null ? v : '--');
     setVal('yawn-count',       m.yawn_count,       v => v != null ? v : '--');
     setVal('mar-value',        m.mar,              v => v != null ? v.toFixed(3) : '--');
     setVal('gaze-stability-value', m.gaze_stability_index, v => v != null ? v.toFixed(2) : '--');
+    setVal('fixation-duration', m.fixation_duration, v => v > 0 ? v.toFixed(1) : '--');
+    setVal('saccade-freq', m.saccade_freq_pm, v => v > 0 ? v.toFixed(1) : '--');
+    const sq = document.getElementById('squinting-status');
+    if (sq) {
+        if (m.is_squinting) { sq.textContent = '有'; sq.style.color = '#f59e0b'; }
+        else { sq.textContent = '無'; sq.style.color = '#22c55e'; }
+    }
+    const fr = document.getElementById('frowning-status');
+    if (fr) {
+        if (m.is_frowning) { fr.textContent = '有'; fr.style.color = '#f59e0b'; }
+        else { fr.textContent = '無'; fr.style.color = '#22c55e'; }
+    }
+    const it = document.getElementById('iris-trend');
+    if (it) {
+        const t = m.iris_ratio_trend;
+        if (t == null) { it.textContent = '--'; it.style.color = '#94a3b8'; }
+        else if (Math.abs(t) < 0.005) { it.textContent = '平穩'; it.style.color = '#94a3b8'; }
+        else if (t > 0) { it.textContent = `擴張 +${t.toFixed(3)}`; it.style.color = '#22c55e'; }
+        else { it.textContent = `收縮 ${t.toFixed(3)}`; it.style.color = '#f59e0b'; }
+    }
     const gmf = document.getElementById('gaze-mental-fatigue');
     if (gmf) {
         if (m.gaze_mental_fatigue) { gmf.textContent = '● 注視固定'; gmf.style.color = '#ef4444'; }
@@ -322,8 +353,14 @@ function _cachePbDom() {
     const ids = [
         'pb-slider', 'pb-time-current', 'pb-idx',
         'pb-ear', 'pb-perclos', 'pb-blink', 'pb-face',
+        'pb-head-pitch', 'pb-head-yaw', 'pb-head-roll',
+        'pb-early-warning', 'pb-blink-rate',
+        'pb-microsleep-alert', 'pb-microsleep-count',
+        'pb-yawn-count', 'pb-mar',
+        'pb-fixation-duration', 'pb-saccade-freq',
+        'pb-squinting-status', 'pb-frowning-status', 'pb-iris-trend',
+        'pb-gaze-stability', 'pb-gaze-mental',
         'pb-bpm', 'pb-rmssd', 'pb-sdnn', 'pb-lfhf', 'pb-sqi', 'pb-prob',
-        'pb-dl-bpm', 'pb-dl-conf',
         'pb-fstate', 'pb-fconf', 'pb-estatus', 'pb-timestamp',
         'pb-play-icon', 'pb-speed', 'pb-time-total', 'pb-total',
         'pb-controls', 'pb-data', 'pb-loading'
@@ -344,6 +381,14 @@ const _displayThresholds = {
     'pb-sqi': 0.02,     // SQI ±0.02 才更新
     'pb-prob': 1.5,     // 壓力概率 ±1.5% 才更新（顯示整數百分比）
     'pb-fconf': 1.5,    // 信心度 ±1.5% 才更新
+    'pb-head-pitch': 0.2,
+    'pb-head-yaw': 0.2,
+    'pb-head-roll': 0.2,
+    'pb-blink-rate': 0.2,
+    'pb-fixation-duration': 0.2,
+    'pb-saccade-freq': 0.2,
+    'pb-mar': 0.01,
+    'pb-gaze-stability': 0.02,
 };
 
 /**
@@ -687,6 +732,50 @@ function seekTo(idx) {
     if (faceEl) {
         if (d.face) { faceEl.textContent = d.cal ? '已校準' : '校準中'; faceEl.style.color = d.cal ? '#22c55e' : '#f59e0b'; }
         else { faceEl.textContent = '未偵測'; faceEl.style.color = '#ef4444'; }
+    }
+    const _deg = v => (v != null ? (v >= 0 ? '+' : '') + v.toFixed(1) + '°' : '--');
+    _stableSet('pb-head-pitch', d.head_pitch, _deg);
+    _stableSet('pb-head-yaw', d.head_yaw, _deg);
+    _stableSet('pb-head-roll', d.head_roll, _deg);
+    const pbEarly = _pb['pb-early-warning'];
+    if (pbEarly) {
+        if (d.early_warning) { pbEarly.textContent = '警示'; pbEarly.style.color = '#ef4444'; }
+        else { pbEarly.textContent = '正常'; pbEarly.style.color = '#22c55e'; }
+    }
+    _stableSet('pb-blink-rate', d.blink_rate_pm, v => v > 0 ? v.toFixed(1) : '--');
+    const pbMsAlert = _pb['pb-microsleep-alert'];
+    if (pbMsAlert) {
+        if (d.microsleep_alert) { pbMsAlert.textContent = '警示'; pbMsAlert.style.color = '#ef4444'; }
+        else { pbMsAlert.textContent = '正常'; pbMsAlert.style.color = '#22c55e'; }
+    }
+    _setElText(_pb['pb-microsleep-count'], d.microsleep_count, v => v != null ? v : '--');
+    _setElText(_pb['pb-yawn-count'], d.yawn_count, v => v != null ? v : '--');
+    _stableSet('pb-mar', d.mar, v => v != null ? v.toFixed(3) : '--');
+    _stableSet('pb-fixation-duration', d.fixation_duration, v => v > 0 ? v.toFixed(1) : '--');
+    _stableSet('pb-saccade-freq', d.saccade_freq_pm, v => v > 0 ? v.toFixed(1) : '--');
+    const pbSq = _pb['pb-squinting-status'];
+    if (pbSq) {
+        if (d.is_squinting) { pbSq.textContent = '有'; pbSq.style.color = '#f59e0b'; }
+        else { pbSq.textContent = '無'; pbSq.style.color = '#22c55e'; }
+    }
+    const pbFr = _pb['pb-frowning-status'];
+    if (pbFr) {
+        if (d.is_frowning) { pbFr.textContent = '有'; pbFr.style.color = '#f59e0b'; }
+        else { pbFr.textContent = '無'; pbFr.style.color = '#22c55e'; }
+    }
+    const pbIris = _pb['pb-iris-trend'];
+    if (pbIris) {
+        const t = d.iris_ratio_trend;
+        if (t == null) { pbIris.textContent = '--'; pbIris.style.color = '#94a3b8'; }
+        else if (Math.abs(t) < 0.005) { pbIris.textContent = '平穩'; pbIris.style.color = '#94a3b8'; }
+        else if (t > 0) { pbIris.textContent = `擴張 +${t.toFixed(3)}`; pbIris.style.color = '#22c55e'; }
+        else { pbIris.textContent = `收縮 ${t.toFixed(3)}`; pbIris.style.color = '#f59e0b'; }
+    }
+    _stableSet('pb-gaze-stability', d.gaze_stability_index, v => v != null ? v.toFixed(2) : '--');
+    const pbGaze = _pb['pb-gaze-mental'];
+    if (pbGaze) {
+        if (d.gaze_mental_fatigue) { pbGaze.textContent = '● 注視固定'; pbGaze.style.color = '#ef4444'; }
+        else { pbGaze.textContent = '○ 正常'; pbGaze.style.color = '#22c55e'; }
     }
     _stableSet('pb-bpm', d.bpm, v => v > 0 ? Math.round(v) : '--');
     _stableSet('pb-rmssd', d.rmssd, v => v > 0 ? v.toFixed(1) : '--');

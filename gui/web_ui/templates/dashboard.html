@@ -834,8 +834,40 @@
                             <div class="metric-value" id="head-roll-value">--</div>
                         </div>
                         <div class="metric-item">
+                            <div class="metric-label">早期警示</div>
+                            <div class="metric-value" id="early-warning" style="font-size:1.1rem;">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">眨眼率 / 分</div>
+                            <div class="metric-value" id="blink-rate">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">微睡眠警示</div>
+                            <div class="metric-value" id="microsleep-alert" style="font-size:1.1rem;">--</div>
+                        </div>
+                        <div class="metric-item">
                             <div class="metric-label">微睡眠次數</div>
                             <div class="metric-value" id="microsleep-count" style="color:var(--color-danger);">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">注視時長 (s)</div>
+                            <div class="metric-value" id="fixation-duration">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">掃視頻率 / 分</div>
+                            <div class="metric-value" id="saccade-freq">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">瞇眼狀態</div>
+                            <div class="metric-value" id="squinting-status">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">皺眉狀態</div>
+                            <div class="metric-value" id="frowning-status">--</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">瞳孔趨勢</div>
+                            <div class="metric-value" id="iris-trend">--</div>
                         </div>
                         <div class="metric-item">
                             <div class="metric-label">哈欠次數</div>
@@ -1101,6 +1133,30 @@
                                 <div class="metric-item"><div class="metric-label">PERCLOS %</div><div class="metric-value" id="pb-perclos">--</div></div>
                                 <div class="metric-item"><div class="metric-label">眨眼次數</div><div class="metric-value" id="pb-blink">--</div></div>
                                 <div class="metric-item"><div class="metric-label">臉部偵測</div><div class="metric-value" id="pb-face" style="font-size:1.1rem;">--</div></div>
+                            </div>
+                        </section>
+                        <section class="card">
+                            <div class="card-title">
+                                <div class="icon-circle" style="background:rgba(162,89,255,0.15);color:#c084fc;"><i class="fas fa-user-clock"></i></div>
+                                行為警覺指標
+                            </div>
+                            <div class="metric-grid">
+                                <div class="metric-item"><div class="metric-label">俯仰角 Pitch</div><div class="metric-value" id="pb-head-pitch">--</div></div>
+                                <div class="metric-item"><div class="metric-label">偏航角 Yaw</div><div class="metric-value" id="pb-head-yaw">--</div></div>
+                                <div class="metric-item"><div class="metric-label">側傾角 Roll</div><div class="metric-value" id="pb-head-roll">--</div></div>
+                                <div class="metric-item"><div class="metric-label">早期警示</div><div class="metric-value" id="pb-early-warning" style="font-size:1.1rem;">--</div></div>
+                                <div class="metric-item"><div class="metric-label">眨眼率 / 分</div><div class="metric-value" id="pb-blink-rate">--</div></div>
+                                <div class="metric-item"><div class="metric-label">微睡眠警示</div><div class="metric-value" id="pb-microsleep-alert" style="font-size:1.1rem;">--</div></div>
+                                <div class="metric-item"><div class="metric-label">微睡眠次數</div><div class="metric-value" id="pb-microsleep-count" style="color:var(--color-danger);">--</div></div>
+                                <div class="metric-item"><div class="metric-label">哈欠次數</div><div class="metric-value" id="pb-yawn-count" style="color:var(--color-warning);">--</div></div>
+                                <div class="metric-item"><div class="metric-label">嘴部開合 MAR</div><div class="metric-value" id="pb-mar">--</div></div>
+                                <div class="metric-item"><div class="metric-label">注視時長 (s)</div><div class="metric-value" id="pb-fixation-duration">--</div></div>
+                                <div class="metric-item"><div class="metric-label">掃視頻率 / 分</div><div class="metric-value" id="pb-saccade-freq">--</div></div>
+                                <div class="metric-item"><div class="metric-label">瞇眼狀態</div><div class="metric-value" id="pb-squinting-status">--</div></div>
+                                <div class="metric-item"><div class="metric-label">皺眉狀態</div><div class="metric-value" id="pb-frowning-status">--</div></div>
+                                <div class="metric-item"><div class="metric-label">瞳孔趨勢</div><div class="metric-value" id="pb-iris-trend">--</div></div>
+                                <div class="metric-item"><div class="metric-label">注視穩定度</div><div class="metric-value" id="pb-gaze-stability">--</div></div>
+                                <div class="metric-item"><div class="metric-label">心理疲勞（注視）</div><div class="metric-value" id="pb-gaze-mental" style="font-size:1.1rem;">--</div></div>
                             </div>
                         </section>
                         <section class="card">
