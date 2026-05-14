@@ -201,22 +201,6 @@ function updateMetricsDisplay(m) {
         if (m.gaze_mental_fatigue) { gmf.textContent = '● 注視固定'; gmf.style.color = '#ef4444'; }
         else { gmf.textContent = '○ 正常'; gmf.style.color = '#22c55e'; }
     }
-    // DL rPPG 指標
-    if (m.dl_available) {
-        setVal('dl-bpm-value', m.dl_bpm, v => v > 0 ? Math.round(v) : '--');
-        setVal('dl-confidence-value', m.dl_confidence, v => v != null ? (v * 100).toFixed(0) + '%' : '--');
-        const dlDiff = (m.dl_bpm > 0 && m.stress_bpm > 0) ? Math.abs(m.dl_bpm - m.stress_bpm) : null;
-        const dlDiffEl = document.getElementById('dl-bpm-diff');
-        if (dlDiffEl && dlDiff != null) {
-            dlDiffEl.textContent = dlDiff.toFixed(1);
-            dlDiffEl.style.color = dlDiff <= 10 ? '#22c55e' : dlDiff <= 20 ? '#f59e0b' : '#ef4444';
-        }
-    }
-    const dlSt = document.getElementById('dl-status-value');
-    if (dlSt) {
-        if (m.dl_available) { dlSt.textContent = m.dl_status || '運行中'; dlSt.style.color = '#22d3ee'; }
-        else { dlSt.textContent = '等待中'; dlSt.style.color = '#94a3b8'; }
-    }
     // 預覽區域的精簡指標
     setVal('bpm-large', m.stress_bpm, v => v > 0 ? Math.round(v) : '--');
     setVal('sqi-compact', m.stress_sqi, v => v > 0 ? v.toFixed(2) : '--');
@@ -722,11 +706,6 @@ function seekTo(idx) {
     }
     _stableSet('pb-fconf', d.f_conf * 100, v => v > 0 ? v.toFixed(0) + '%' : '--');
 
-    // DL rPPG 回放指標
-    if (d.dl_avail) {
-        _stableSet('pb-dl-bpm', d.dl_bpm, v => v > 0 ? Math.round(v) : '--');
-        _stableSet('pb-dl-conf', d.dl_conf * 100, v => v > 0 ? v.toFixed(0) + '%' : '--');
-    }
 
     const esEl = _pb['pb-estatus'];
     if (esEl) {
