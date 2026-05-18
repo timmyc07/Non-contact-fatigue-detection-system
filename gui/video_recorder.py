@@ -5,22 +5,14 @@ from __future__ import annotations
 import queue
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 import shutil
 import subprocess
 
+import cv2
+import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
-
-try:
-    import numpy as np
-except ImportError:
-    np = None  # type: ignore
-
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
 
 
 class VideoRecorderWorker(QObject):
@@ -40,7 +32,7 @@ class VideoRecorderWorker(QObject):
         self._fps = float(fps) if fps > 0 else 30.0
         self._stop = False
         self._proc: Optional[subprocess.Popen] = None
-        self._writer: Optional[object] = None
+        self._writer: Optional[Any] = None
         self._started = False
         self._width: int | None = None
         self._height: int | None = None
@@ -100,16 +92,14 @@ class VideoRecorderWorker(QObject):
             return None
 
     def _start_opencv_writer(self, width: int, height: int) -> Optional[object]:
-        if cv2 is None:
-            return None
-
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        fourcc_fn = getattr(cv2, "VideoWriter_fourcc")
+        fourcc = fourcc_fn(*"mp4v")
         writer = cv2.VideoWriter(str(self._output_path), fourcc, self._fps, (width, height))
         if writer.isOpened():
             return writer
 
         alt_path = self._output_path.with_suffix(".avi")
-        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        fourcc = fourcc_fn(*"XVID")
         writer = cv2.VideoWriter(str(alt_path), fourcc, self._fps, (width, height))
         if writer.isOpened():
             self._output_path = alt_path

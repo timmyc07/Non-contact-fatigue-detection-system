@@ -22,31 +22,21 @@ import urllib.request
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
+import cv2
+import mediapipe as mp
+from mediapipe.tasks import python as _mp_python
+from mediapipe.tasks.python import vision as _mp_vision
+from scipy.interpolate import interp1d as _scipy_interp1d
+from scipy.signal import butter, filtfilt, find_peaks, welch
 
-try:
-    import mediapipe as mp
-    from mediapipe.tasks import python as _mp_python
-    from mediapipe.tasks.python import vision as _mp_vision
-    _HAS_MP = True
-except ImportError:
-    _HAS_MP = False
-
-try:
-    from scipy.signal import butter, filtfilt, welch, find_peaks
-    from scipy.interpolate import interp1d as _scipy_interp1d
-    _HAS_SCIPY = True
-except ImportError:
-    _HAS_SCIPY = False
+_HAS_MP = True
+_HAS_SCIPY = True
 
 # ── ROI landmark indices (MediaPipe 478-point face mesh) ────────────────────
 FOREHEAD_ROI_IDX  = [107, 66, 69, 109, 10, 338, 299, 296, 336, 9]
@@ -145,7 +135,7 @@ def butter_bandpass(
     hi = min(high / nyq, 0.99)
     if hi <= lo:
         return sig.astype(np.float64)
-    b, a = butter(order, [lo, hi], btype="band")
+    b, a = cast(tuple[Any, Any], butter(order, [lo, hi], btype="band"))
     try:
         return filtfilt(b, a, sig.astype(np.float64))
     except ValueError:
@@ -214,7 +204,7 @@ def lf_hf_from_tachogram(ibis_ms: np.ndarray, fs_resample: float = 4.0) -> float
         return 0.0
     t_uniform = np.arange(0.0, t[-1], 1.0 / fs_resample)
     try:
-        series = _scipy_interp1d(t, ibi_s, kind="linear", fill_value="extrapolate")(t_uniform)
+        series = _scipy_interp1d(t, ibi_s, kind="linear", fill_value=cast(Any, "extrapolate"))(t_uniform)
         series = series - np.mean(series)
     except Exception:
         return 0.0

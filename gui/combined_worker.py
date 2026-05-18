@@ -27,25 +27,13 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
+import cv2
+import mediapipe as mp
+from mediapipe.tasks import python as _mp_python
+from mediapipe.tasks.python import vision as _mp_vision
 
-try:
-    import mediapipe as mp
-    from mediapipe.tasks import python as _mp_python
-    from mediapipe.tasks.python import vision as _mp_vision
-    _HAS_MP = True
-except ImportError:
-    _HAS_MP = False
-
-try:
-    from scipy.signal import butter, filtfilt, welch, find_peaks
-    from scipy.interpolate import interp1d as _scipy_interp1d
-    _HAS_SCIPY = True
-except ImportError:
-    _HAS_SCIPY = False
+_HAS_MP = True
+_HAS_SCIPY = True
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig

@@ -11,10 +11,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
+import cv2
 
 # How long to wait for the first frame before declaring failure (seconds).
 _FIRST_FRAME_TIMEOUT = 10.0

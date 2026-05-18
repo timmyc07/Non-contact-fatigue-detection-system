@@ -29,17 +29,14 @@ import urllib.request
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import cv2
 import numpy as np
 
 _IS_WIN = platform.system() == "Windows"
 # OpenCV: device description (MSMF / some backends)
-try:
-    _CAP_DEVICE_DESC = cv2.CAP_PROP_DEVICE_DESCRIPTION
-except AttributeError:
-    _CAP_DEVICE_DESC = None
+_CAP_DEVICE_DESC = getattr(cv2, "CAP_PROP_DEVICE_DESCRIPTION", None)
 
 try:
     cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
@@ -67,7 +64,7 @@ MODEL_URL = (
 )
 
 
-def _video_capture_single(index: int, backend: str) -> tuple[Optional[cv2.VideoCapture], str]:
+def _video_capture_single(index: int, backend: str) -> tuple[Optional[Any], str]:
     """Try one backend. Returns (cap_or_none, tag)."""
     b = backend.lower().strip()
     if b == "dshow":
@@ -82,7 +79,7 @@ def _video_capture_single(index: int, backend: str) -> tuple[Optional[cv2.VideoC
     return None, ""
 
 
-def open_video_capture(index: int, backend: str = "auto") -> tuple[Optional[cv2.VideoCapture], str]:
+def open_video_capture(index: int, backend: str = "auto") -> tuple[Optional[Any], str]:
     """Open camera; on Windows 'auto' tries MSMF then DSHOW then default (DroidCam often needs MSMF)."""
     b = backend.lower().strip()
     if b != "auto":
@@ -248,7 +245,7 @@ def butter_bandpass(sig: np.ndarray, fs: float, low: float, high: float, order: 
     hi = min(high / nyq, 0.99)
     if hi <= lo:
         return sig.astype(np.float64)
-    b, a = butter(order, [lo, hi], btype="band")
+    b, a = cast(tuple[Any, Any], butter(order, [lo, hi], btype="band"))
     try:
         return filtfilt(b, a, sig.astype(np.float64))
     except ValueError:
@@ -324,7 +321,7 @@ def lf_hf_from_tachogram(ibis_ms: np.ndarray, fs_resample: float = 4.0) -> float
         return 0.0
     t_uniform = np.arange(0.0, t[-1], 1.0 / fs_resample)
     try:
-        f = interp1d(t, ibi_s, kind="linear", fill_value="extrapolate")
+        f = interp1d(t, ibi_s, kind="linear", fill_value=cast(Any, "extrapolate"))
         series = f(t_uniform)
         series = series - np.mean(series)
     except Exception:

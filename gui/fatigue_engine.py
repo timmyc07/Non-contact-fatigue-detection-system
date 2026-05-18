@@ -23,13 +23,9 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import numpy as np
+import cv2 as _cv2
 
-try:
-    import cv2 as _cv2
-    _CV2_OK = True
-except ImportError:
-    _cv2 = None  # type: ignore[assignment]
-    _CV2_OK = False
+_CV2_OK = True
 
 # ── Landmark indices (MediaPipe 478-pt FaceLandmarker) ───────────────────────
 
@@ -532,12 +528,10 @@ class EyeCognitiveModule:
 
             a = p.iris_ratio_ema_alpha
             prev = self._iris_ratio_ema
-            self._iris_ratio_ema = (
-                iris_ratio if prev is None
-                else a * iris_ratio + (1 - a) * prev
-            )
+            new_ema = iris_ratio if prev is None else a * iris_ratio + (1 - a) * prev
+            self._iris_ratio_ema = new_ema
             self.iris_ratio_trend = (
-                float(self._iris_ratio_ema - prev) if prev is not None else 0.0
+                float(new_ema - prev) if prev is not None else 0.0
             )
             self.iris_ratio = iris_ratio
         self.has_iris = has_iris
@@ -800,7 +794,7 @@ class FatigueEngine:
             fh_px = abs(_p(lm, w, h, CHIN_IDX)[1] - _p(lm, w, h, FOREHEAD_IDX)[1])
             face_area = (fh_px ** 2) / max(1, w * h)
         else:
-            ow, oh = oval[:, 0].ptp(), oval[:, 1].ptp()
+            ow, oh = np.ptp(oval[:, 0]), np.ptp(oval[:, 1])
             face_area = (ow * oh) / max(1, w * h)
 
         le_pt = _p(lm, w, h, LEFT_EYE_OUTER)
@@ -851,7 +845,7 @@ class FatigueEngine:
             fatigue_ok = False
 
         # ── Module steps ────────────────────────────────────────────────────
-        self.eye.step(lm, w, h, t_now, blink_ok, fatigue_ok, fatigue_q, run_brow)
+        self.eye.step(lm, w, h, t_now, bool(blink_ok), bool(fatigue_ok), fatigue_q, run_brow)
 
         has_iris = self.eye.has_iris
         self.gaze.step(lm, t_now, has_iris)

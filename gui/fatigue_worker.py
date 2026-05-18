@@ -18,18 +18,12 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
+import cv2
+import mediapipe as mp
+from mediapipe.tasks import python as _mp_python
+from mediapipe.tasks.python import vision as _mp_vision
 
-try:
-    import mediapipe as mp
-    from mediapipe.tasks import python as _mp_python
-    from mediapipe.tasks.python import vision as _mp_vision
-    _HAS_MP = True
-except ImportError:
-    _HAS_MP = False
+_HAS_MP = True
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from rppg.rppg_worker import ensure_face_model, _MODELS_DIR

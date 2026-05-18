@@ -6,6 +6,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 import ctypes
 from ctypes import wintypes
@@ -549,7 +550,7 @@ class MainWindow(QMainWindow):
         seq = QKeySequence(seq_text)
         if seq.isEmpty():
             return None
-        first = seq[0]
+        first = cast(Any, seq)[0]
         if hasattr(first, "toCombined"):
             combined = int(first.toCombined())
         else:
@@ -560,7 +561,7 @@ class MainWindow(QMainWindow):
             | Qt.KeyboardModifier.AltModifier
             | Qt.KeyboardModifier.MetaModifier
         )
-        mod_mask = int(mod_mask_flag.value) if hasattr(mod_mask_flag, "value") else int(mod_mask_flag)
+        mod_mask = self._qt_enum_int(mod_mask_flag)
         modifiers = combined & mod_mask
         qt_key = combined & ~mod_mask
 
@@ -569,10 +570,10 @@ class MainWindow(QMainWindow):
         alt_flag = Qt.KeyboardModifier.AltModifier
         shift_flag = Qt.KeyboardModifier.ShiftModifier
         meta_flag = Qt.KeyboardModifier.MetaModifier
-        ctrl_mask = int(ctrl_flag.value) if hasattr(ctrl_flag, "value") else int(ctrl_flag)
-        alt_mask = int(alt_flag.value) if hasattr(alt_flag, "value") else int(alt_flag)
-        shift_mask = int(shift_flag.value) if hasattr(shift_flag, "value") else int(shift_flag)
-        meta_mask = int(meta_flag.value) if hasattr(meta_flag, "value") else int(meta_flag)
+        ctrl_mask = self._qt_enum_int(ctrl_flag)
+        alt_mask = self._qt_enum_int(alt_flag)
+        shift_mask = self._qt_enum_int(shift_flag)
+        meta_mask = self._qt_enum_int(meta_flag)
 
         if modifiers & ctrl_mask:
             mod_flags |= 0x0002
@@ -587,6 +588,10 @@ class MainWindow(QMainWindow):
         if vk is None:
             return None
         return mod_flags, vk
+
+    @staticmethod
+    def _qt_enum_int(value: object) -> int:
+        return int(cast(Any, getattr(value, "value", value)))
 
     def _register_global_hotkeys(self) -> None:
         if not self._global_hotkey_enabled:
@@ -635,7 +640,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _encode_bytes(data: QByteArray) -> str:
-        return bytes(data.toBase64()).decode("ascii")
+        return bytes(cast(Any, data.toBase64())).decode("ascii")
 
     @staticmethod
     def _decode_bytes(text: str) -> QByteArray:
@@ -989,11 +994,11 @@ class MainWindow(QMainWindow):
         buffer = QByteArray()
         qbuffer = QBuffer(buffer)
         qbuffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        ok = image.save(qbuffer, "JPEG", quality)
+        ok = image.save(qbuffer, b"JPEG", quality)
         qbuffer.close()
         if not ok:
             return None
-        return bytes(buffer.toBase64()).decode("ascii")
+        return bytes(cast(Any, buffer.toBase64())).decode("ascii")
 
     def _emit_web_frame(self, image: QImage) -> None:
         if self._web_server is None:
@@ -1818,4 +1823,4 @@ class MainWindow(QMainWindow):
             if msg.message == 0x0312:
                 self._on_global_hotkey(int(msg.wParam))
                 return True, 0
-        return super().nativeEvent(event_type, message)
+        return super().nativeEvent(cast(Any, event_type), message)

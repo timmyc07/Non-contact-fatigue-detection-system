@@ -7,12 +7,9 @@ index (instant list, same as V1). Only fall back to OpenCV probing when names ar
 from __future__ import annotations
 
 import sys
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
+import cv2
 
 try:
     _CAP_DEVICE_DESC = cv2.CAP_PROP_DEVICE_DESCRIPTION  # type: ignore[union-attr]
@@ -66,8 +63,6 @@ def _list_linux_v4l2_device_names() -> dict[int, str]:
 
 
 def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
-    if cv2 is None:
-        return [0]
     if api_preferences is not None:
         return [int(api) for api in api_preferences]
 
@@ -87,10 +82,8 @@ def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
 
 
 def _probe_camera_index(index: int, warmup_read: bool, api_preferences: Sequence[int]) -> bool:
-    if cv2 is None:
-        return False
     for api in api_preferences:
-        cap: Optional[cv2.VideoCapture] = None
+        cap: Optional[Any] = None
         try:
             cap = cv2.VideoCapture(index, int(api))
             if not cap.isOpened():
@@ -142,7 +135,7 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
     return found
 
 
-def open_camera_capture(index: int, backend: str = "ffmpeg"):  # -> Optional[cv2.VideoCapture]
+def open_camera_capture(index: int, backend: str = "ffmpeg"):
     """Open the first working VideoCapture for ``index``.
 
     ``backend``:
@@ -159,7 +152,7 @@ def open_camera_capture(index: int, backend: str = "ffmpeg"):  # -> Optional[cv2
 
     b = backend.lower().strip()
 
-    def _try(api: int) -> "Optional[cv2.VideoCapture]":
+    def _try(api: int) -> Optional[Any]:
         try:
             cap = cv2.VideoCapture(index, api)
             if cap.isOpened():
