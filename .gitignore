@@ -24,6 +24,7 @@ htmlcov/
 # App data
 recordings/
 settings.json
+docs/
 
 # OS/Editor
 .DS_Store

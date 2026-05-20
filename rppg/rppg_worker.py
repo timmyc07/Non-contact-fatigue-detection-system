@@ -33,7 +33,7 @@ import mediapipe as mp
 from mediapipe.tasks import python as _mp_python
 from mediapipe.tasks.python import vision as _mp_vision
 from scipy.interpolate import interp1d as _scipy_interp1d
-from scipy.signal import butter, filtfilt, find_peaks, welch
+from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 
 _HAS_MP = True
 _HAS_SCIPY = True
@@ -135,11 +135,18 @@ def butter_bandpass(
     hi = min(high / nyq, 0.99)
     if hi <= lo:
         return sig.astype(np.float64)
-    b, a = cast(tuple[Any, Any], butter(order, [lo, hi], btype="band"))
+    sig64 = sig.astype(np.float64)
     try:
-        return filtfilt(b, a, sig.astype(np.float64))
+        sos = butter(order, [lo, hi], btype="band", output="sos")
+        return sosfiltfilt(sos, sig64)
     except ValueError:
-        return sig.astype(np.float64)
+        return sig64
+    except Exception:
+        try:
+            b, a = cast(tuple[Any, Any], butter(order, [lo, hi], btype="band"))
+            return filtfilt(b, a, sig64)
+        except Exception:
+            return sig64
 
 
 def welch_peak_hz(
@@ -148,8 +155,16 @@ def welch_peak_hz(
     if not _HAS_SCIPY:
         return 0.0, np.array([]), np.array([])
     n = len(sig)
-    nperseg = min(256, max(32, n // 2))
-    f, pxx = welch(sig, fs=fs, nperseg=nperseg, noverlap=nperseg // 2)
+    nperseg = min(n, max(64, int(fs * 5)))
+    noverlap = min(nperseg - 1, nperseg * 3 // 4)
+    f, pxx = welch(
+        sig,
+        fs=fs,
+        nperseg=nperseg,
+        noverlap=noverlap,
+        nfft=max(512, nperseg),
+        window="blackmanharris",
+    )
     band = (f >= 0.7) & (f <= 3.5)
     if not np.any(band):
         return 0.0, f, pxx
@@ -160,8 +175,16 @@ def welch_peak_hz(
 def compute_sqi(sig: np.ndarray, fs: float) -> float:
     if not _HAS_SCIPY or len(sig) < 32:
         return 0.0
-    nperseg = min(256, max(32, len(sig) // 2))
-    f, pxx = welch(sig, fs=fs, nperseg=nperseg, noverlap=nperseg // 2)
+    nperseg = min(len(sig), max(64, int(fs * 5)))
+    noverlap = min(nperseg - 1, nperseg * 3 // 4)
+    f, pxx = welch(
+        sig,
+        fs=fs,
+        nperseg=nperseg,
+        noverlap=noverlap,
+        nfft=max(512, nperseg),
+        window="blackmanharris",
+    )
     total = float(np.sum(pxx)) + 1e-12
     inband = float(np.sum(pxx[(f >= 0.6) & (f <= 4.0)]))
     return float(np.clip(inband / total, 0.0, 1.0))
@@ -178,6 +201,42 @@ def ibi_from_peaks(sig: np.ndarray, fs: float) -> np.ndarray:
     return np.diff(peaks) / fs * 1000.0  # ms
 
 
+def validate_ibi_intervals(ibis_ms: np.ndarray) -> np.ndarray:
+    """Remove implausible and locally inconsistent rPPG IBI intervals."""
+    ibis = np.asarray(ibis_ms, dtype=np.float64)
+    ibis = ibis[np.isfinite(ibis)]
+    if ibis.size == 0:
+        return np.array([], dtype=np.float64)
+
+    valid = ibis[(ibis >= 300.0) & (ibis <= 2000.0)]
+    if valid.size < 3:
+        return valid
+
+    if valid.size >= 5:
+        half_w = 2
+        padded = np.pad(valid, (half_w, half_w), mode="edge")
+        windows = np.lib.stride_tricks.sliding_window_view(padded, 2 * half_w + 1)
+        local_median = np.median(windows, axis=1)
+    else:
+        local_median = np.full(valid.shape, float(np.median(valid)), dtype=np.float64)
+
+    local_median = np.where(local_median < 1e-6, float(np.median(valid)), local_median)
+    delta = np.abs(valid - local_median)
+    q1, q3 = np.percentile(delta, [25, 75])
+    adaptive = float(np.median(delta)) + 5.2 * float(q3 - q1)
+    threshold = np.maximum(adaptive, 0.20 * local_median)
+    valid = valid[delta <= threshold]
+    if valid.size < 3:
+        return valid
+
+    half_w = 2
+    padded = np.pad(valid, (half_w, half_w), mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, 2 * half_w + 1)
+    local_median = np.median(windows, axis=1)
+    keep = np.abs(valid - local_median) <= 0.30 * local_median
+    return valid[keep]
+
+
 def hrv_time_domain(ibis_ms: np.ndarray) -> tuple[float, float]:
     if ibis_ms.size < 2:
         return 0.0, 0.0
@@ -187,11 +246,13 @@ def hrv_time_domain(ibis_ms: np.ndarray) -> tuple[float, float]:
     return rmssd, sdnn
 
 
-def ibi_artifact_ratio(ibis_ms: np.ndarray) -> float:
+def ibi_artifact_ratio(ibis_ms: np.ndarray, clean_ibis_ms: Optional[np.ndarray] = None) -> float:
     if ibis_ms.size == 0:
         return 1.0
-    good = (ibis_ms >= 300.0) & (ibis_ms <= 2000.0)
-    return float(1.0 - np.mean(good.astype(np.float64)))
+    if clean_ibis_ms is None:
+        good = (ibis_ms >= 300.0) & (ibis_ms <= 2000.0)
+        return float(1.0 - np.mean(good.astype(np.float64)))
+    return float(np.clip(1.0 - clean_ibis_ms.size / max(ibis_ms.size, 1), 0.0, 1.0))
 
 
 def lf_hf_from_tachogram(ibis_ms: np.ndarray, fs_resample: float = 4.0) -> float:
@@ -324,8 +385,8 @@ class RppgEngine:
         sqi = compute_sqi(filt, fs)
 
         ibis = ibi_from_peaks(filt, fs)
-        art = ibi_artifact_ratio(ibis)
-        ibis_clean = ibis[(ibis >= 300.0) & (ibis <= 2000.0)]
+        ibis_clean = validate_ibi_intervals(ibis)
+        art = ibi_artifact_ratio(ibis, ibis_clean)
         rmssd, sdnn = hrv_time_domain(ibis_clean)
         lf_hf = lf_hf_from_tachogram(ibis_clean)
         prob, st = stress_heuristic(lf_hf, rmssd)
