@@ -35,6 +35,8 @@ from mediapipe.tasks.python import vision as _mp_vision
 from scipy.interpolate import interp1d as _scipy_interp1d
 from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 
+from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
+
 _HAS_MP = True
 _HAS_SCIPY = True
 
@@ -202,10 +204,18 @@ def _roi_weights_from_pose(
     lm: Any,
     w: int,
     h: int,
+    tuning: MediaPipeTuning | None = None,
 ) -> dict[str, float]:
-    roll_q = _clamp(1.0 - abs(roll_deg) / 42.0, 0.35, 1.0)
-    yaw_q = _clamp(1.0 - abs(yaw_deg) / 42.0, 0.35, 1.0)
-    pitch_q = _clamp(1.0 - max(0.0, abs(pitch_deg) - 8.0) / 34.0, 0.35, 1.0)
+    roi_cfg = (tuning or load_mediapipe_tuning()).rppg_roi
+    base = roi_cfg.base_weights or ROI_BASE_WEIGHTS
+    roll_q = _clamp(1.0 - abs(roll_deg) / max(roi_cfg.roll_full_penalty_deg, 1e-6), 0.35, 1.0)
+    yaw_q = _clamp(1.0 - abs(yaw_deg) / max(roi_cfg.yaw_full_penalty_deg, 1e-6), 0.35, 1.0)
+    pitch_q = _clamp(
+        1.0 - max(0.0, abs(pitch_deg) - roi_cfg.pitch_free_deg)
+        / max(roi_cfg.pitch_full_penalty_deg, 1e-6),
+        0.35,
+        1.0,
+    )
 
     n_pt = _lm_xyf(lm, NOSE_TIP_IDX, w, h)
     l_pt = _lm_xyf(lm, LEFT_CHEEK_IDX, w, h)
@@ -217,10 +227,10 @@ def _roi_weights_from_pose(
     right_bias = _clamp(d_l / total, 0.35, 1.15)
 
     weights = {
-        "forehead": ROI_BASE_WEIGHTS["forehead"] * roll_q * pitch_q,
-        "L_cheek": ROI_BASE_WEIGHTS["L_cheek"] * roll_q * yaw_q * left_bias,
-        "R_cheek": ROI_BASE_WEIGHTS["R_cheek"] * roll_q * yaw_q * right_bias,
-        "glabella": ROI_BASE_WEIGHTS["glabella"] * (0.70 * roll_q + 0.30 * pitch_q),
+        "forehead": float(base.get("forehead", ROI_BASE_WEIGHTS["forehead"])) * roll_q * pitch_q,
+        "L_cheek": float(base.get("L_cheek", ROI_BASE_WEIGHTS["L_cheek"])) * roll_q * yaw_q * left_bias,
+        "R_cheek": float(base.get("R_cheek", ROI_BASE_WEIGHTS["R_cheek"])) * roll_q * yaw_q * right_bias,
+        "glabella": float(base.get("glabella", ROI_BASE_WEIGHTS["glabella"])) * (0.70 * roll_q + 0.30 * pitch_q),
     }
     total_w = sum(weights.values()) or 1.0
     return {k: float(v / total_w) for k, v in weights.items()}
@@ -233,7 +243,9 @@ def _face_quality_from_pose(
     face_area_ratio: float,
     face_motion_norm: float,
     roi_valid_ratio: float,
+    tuning: MediaPipeTuning | None = None,
 ) -> float:
+    q_cfg = (tuning or load_mediapipe_tuning()).quality
     pose_q = _clamp(
         0.40 * (1.0 - abs(roll_deg) / 48.0)
         + 0.35 * (1.0 - abs(yaw_deg) / 48.0)
@@ -243,7 +255,43 @@ def _face_quality_from_pose(
     motion_q = _clamp(1.0 - face_motion_norm / 0.85, 0.0, 1.0)
     coverage_q = _clamp(face_area_ratio / 0.08, 0.0, 1.0)
     roi_q = _clamp(roi_valid_ratio, 0.0, 1.0)
-    return float(_clamp(0.30 * pose_q + 0.25 * motion_q + 0.25 * coverage_q + 0.20 * roi_q))
+    total = q_cfg.pose_weight + q_cfg.motion_weight + q_cfg.coverage_weight + q_cfg.roi_weight
+    if total <= 1e-9:
+        return 0.0
+    return float(_clamp(
+        (
+            q_cfg.pose_weight * pose_q
+            + q_cfg.motion_weight * motion_q
+            + q_cfg.coverage_weight * coverage_q
+            + q_cfg.roi_weight * roi_q
+        ) / total
+    ))
+
+
+def roi_obstruction_score(
+    frame_bgr: np.ndarray,
+    lm: Any,
+    indices: list[int],
+    tuning: MediaPipeTuning | None = None,
+) -> float:
+    """Return 0..1 penalty for likely unusable ROI colour/illumination."""
+    cfg = (tuning or load_mediapipe_tuning()).rppg_roi
+    h, w = frame_bgr.shape[:2]
+    pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.int32)
+    if pts.shape[0] < 3:
+        return 1.0
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, pts, 255)
+    if cv2.countNonZero(mask) < 30:
+        return 1.0
+    mean_b, mean_g, mean_r, _ = cv2.mean(frame_bgr, mask=mask)
+    luma = 0.114 * mean_b + 0.587 * mean_g + 0.299 * mean_r
+    chroma = float(np.std([mean_b, mean_g, mean_r]))
+    dark_penalty = _clamp((cfg.obstruction_dark_luma - luma) / max(cfg.obstruction_dark_luma, 1e-6))
+    bright_penalty = _clamp((luma - cfg.obstruction_bright_luma) / max(255.0 - cfg.obstruction_bright_luma, 1e-6))
+    low_chroma_penalty = _clamp((cfg.obstruction_low_chroma - chroma) / max(cfg.obstruction_low_chroma, 1e-6))
+    high_chroma_penalty = _clamp((chroma - cfg.obstruction_high_chroma) / max(80.0 - cfg.obstruction_high_chroma, 1e-6))
+    return float(max(dark_penalty, bright_penalty, low_chroma_penalty, high_chroma_penalty))
 
 
 def roi_mean_bgr(
@@ -679,6 +727,7 @@ class RppgWorker(QObject):
         self._target_fps = target_fps
         self._buffer_sec = buffer_sec
         self._stop = False
+        self._tuning = load_mediapipe_tuning()
 
     def request_stop(self) -> None:
         self._stop = True
@@ -719,9 +768,9 @@ class RppgWorker(QObject):
             base_options=base_opts,
             output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
-            min_face_detection_confidence=0.55,
-            min_face_presence_confidence=0.55,
-            min_tracking_confidence=0.60,
+            min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
+            min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
+            min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
@@ -779,13 +828,16 @@ class RppgWorker(QObject):
                     draw_rois(annotated, lm, transform_matrix)
 
                     roi_weights = _roi_weights_from_pose(
-                        roll_deg, yaw_deg, pitch_deg, lm, bgr.shape[1], bgr.shape[0]
+                        roll_deg, yaw_deg, pitch_deg, lm, bgr.shape[1], bgr.shape[0], self._tuning
                     )
                     rgbs: list[tuple[float, float, float]] = []
                     weights: list[float] = []
                     for name, indices in ROI_SPECS:
                         val = roi_mean_bgr(bgr, lm, indices, transform_matrix=transform_matrix)
-                        weight = roi_weights.get(name, 0.0)
+                        obstruction = roi_obstruction_score(bgr, lm, indices, self._tuning)
+                        weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
+                        if weight < self._tuning.rppg_roi.min_roi_weight:
+                            weight = 0.0
                         if val is not None and weight > 0.0:
                             rgbs.append(val)
                             weights.append(weight)

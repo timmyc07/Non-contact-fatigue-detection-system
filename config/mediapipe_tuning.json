@@ -1,0 +1,41 @@
+{
+  "face_landmarker": {
+    "min_face_detection_confidence": 0.55,
+    "min_face_presence_confidence": 0.55,
+    "min_tracking_confidence": 0.6
+  },
+  "rppg_roi": {
+    "base_weights": {
+      "forehead": 0.34,
+      "L_cheek": 0.25,
+      "R_cheek": 0.25,
+      "glabella": 0.16
+    },
+    "roll_full_penalty_deg": 42.0,
+    "yaw_full_penalty_deg": 42.0,
+    "pitch_free_deg": 8.0,
+    "pitch_full_penalty_deg": 34.0,
+    "obstruction_dark_luma": 35.0,
+    "obstruction_bright_luma": 232.0,
+    "obstruction_low_chroma": 2.5,
+    "obstruction_high_chroma": 48.0,
+    "min_roi_weight": 0.04
+  },
+  "quality": {
+    "pose_weight": 0.3,
+    "motion_weight": 0.25,
+    "coverage_weight": 0.25,
+    "roi_weight": 0.2,
+    "signal_weight": 0.45,
+    "face_weight": 0.55
+  },
+  "blendshape": {
+    "calib_sec": 4.0,
+    "min_samples": 24,
+    "ema_alpha": 0.22,
+    "blink_gate": 0.2,
+    "squint_gate": 0.18,
+    "brow_gate": 0.18,
+    "jaw_gate": 0.2
+  }
+}

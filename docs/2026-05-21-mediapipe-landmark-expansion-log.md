@@ -19,8 +19,18 @@
 - rPPG 精準度提升：
   - 已加入 transformation matrix 驅動的 ROI roll 補償。
   - 已加入 ROI 動態權重，依 yaw / roll / pitch 調整 forehead、左右 cheek、glabella 的取樣比重。
+  - 已加入 ROI 遮擋降權，依亮度、色度與極端值偵測降低異常 ROI 權重。
   - 已建立 `quality_score`，整合姿態、face area、motion proxy、ROI 可用率、SQI 與 artifact ratio。
   - `quality_score` 已同步接到 GUI、Web metrics、SQLite 錄製與融合分數。
+- 個人化校準：
+  - blendshape baseline 已支援跨 session 持久化，校準結果儲存在 `config/mediapipe_calibration.json`。
+  - 該檔案已加入 `.gitignore`，避免提交個人或環境特徵。
+- 參數外部化：
+  - 新增 `config/mediapipe_tuning.json`，集中管理 Face Landmarker confidence、ROI 權重、遮擋門檻、quality score 權重與 blendshape gate。
+- 回放與診斷：
+  - SQLite 錄製欄位新增 rPPG quality、pose、ROI 權重、fatigue quality 與 blend calibration progress。
+  - Web dashboard live/playback 已顯示新增診斷欄位。
+  - 新增 `scripts/replay_calibration_summary.py`，可從錄製資料庫彙整品質與 ROI 權重狀態。
 - 參數調整與優化方向：
   - 已採用保守值：`min_face_detection_confidence=0.55`、`min_face_presence_confidence=0.55`、`min_tracking_confidence=0.60`。
   - 已補上後續調參建議與可再擴充方向。
@@ -37,20 +47,27 @@
 - `gui/fatigue_scorer.py`
 - `gui/main_window.py`
 - `gui/metrics_recorder.py`
+- `gui/mediapipe_tuning.py`
+- `gui/web_server.py`
+- `gui/web_ui/templates/dashboard.html`
+- `gui/web_ui/static/dashboard.js`
+- `config/mediapipe_tuning.json`
+- `scripts/replay_calibration_summary.py`
 - `tests/test_mediapipe_enhancements.py`
 
-## 驗證規劃
+## 驗證紀錄
 
-- `python -m compileall`
-- `pytest`
-- 實機預覽檢查新增提示是否正常顯示
+- `.venv/bin/python -m py_compile rppg/rppg_worker.py rppg/demo_rppg_live.py gui/fatigue_engine.py gui/combined_worker.py gui/fatigue_worker.py gui/fatigue_scorer.py gui/main_window.py gui/metrics_recorder.py gui/preview_overlay_window.py gui/web_server.py gui/mediapipe_tuning.py scripts/replay_calibration_summary.py tests/test_mediapipe_enhancements.py`
+- `.venv/bin/python -m compileall -q main.py gui rppg tests scripts`
+- `.venv/bin/python -m pytest -q`
+- `.venv/bin/python -m pip check`
 
 ## 備註
 
 - 這次擴充只使用現有 MediaPipe Face Landmarker 的 landmark，沒有更換模型。
 - rPPG 的 POS / 濾波 / Welch / IBI 主流程沒有更動。
 - 參數調整原則仍採保守策略，優先降低誤判與提升穩定度。
-- 目前 transformation matrix 補償以 roll 為主，尚未做完整 3D ROI warp。
+- transformation matrix 目前落地為 roll 補償與姿態導向 ROI 權重；完整 3D mesh warp 仍屬下一階段精修項目，避免在未驗證資料集前大幅改變 rPPG 數值行為。
 
 ## 參考文獻
 

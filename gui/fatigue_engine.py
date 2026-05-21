@@ -26,6 +26,8 @@ from typing import Any, Optional
 import numpy as np
 import cv2 as _cv2
 
+from .mediapipe_tuning import CalibrationStore, MediaPipeTuning, load_mediapipe_tuning
+
 _CV2_OK = True
 log = logging.getLogger(__name__)
 
@@ -960,17 +962,57 @@ class FatigueEngine:
     """
 
     def __init__(self, params: Optional[FatigueParams] = None) -> None:
-        self.p      = params or FatigueParams()
+        self._tuning: MediaPipeTuning = load_mediapipe_tuning()
+        self._calibration_store = CalibrationStore()
+        self.p      = params or FatigueParams(
+            blend_calib_sec=self._tuning.blendshape.calib_sec,
+            blend_min_samples=self._tuning.blendshape.min_samples,
+            blend_ema_alpha=self._tuning.blendshape.ema_alpha,
+            blend_blink_gate=self._tuning.blendshape.blink_gate,
+            blend_squint_gate=self._tuning.blendshape.squint_gate,
+            blend_brow_gate=self._tuning.blendshape.brow_gate,
+            blend_jaw_gate=self._tuning.blendshape.jaw_gate,
+        )
         self.eye    = EyeCognitiveModule(self.p)
         self.gaze   = GazeTrackingModule(self.p)
         self.head   = HeadMouthModule(self.p)
         self._frame = 0
+        self._load_persisted_calibration()
 
     def reset(self) -> None:
         self.eye.reset(full=True)
         self.gaze.reset()
         self.head.reset(full=True)
         self._frame = 0
+        self._load_persisted_calibration()
+
+    def _load_persisted_calibration(self) -> None:
+        eye_cal = self._calibration_store.get_section("fatigue_eye_blendshape")
+        mouth_cal = self._calibration_store.get_section("fatigue_mouth_blendshape")
+        if eye_cal:
+            for key in ("blink", "squint", "brow"):
+                if key in eye_cal:
+                    self.eye._blend_baseline[key] = float(eye_cal.get(key, 0.0) or 0.0)
+            self.eye._blend_calibrated = True
+        if mouth_cal:
+            self.head._mouth_blend_baseline = float(mouth_cal.get("baseline", 0.0) or 0.0)
+            self.head._mouth_blend_calibrated = True
+
+    def _save_persisted_calibration(self) -> None:
+        if self.eye._blend_calibrated:
+            self._calibration_store.set_section(
+                "fatigue_eye_blendshape",
+                {
+                    "blink": self.eye._blend_baseline["blink"],
+                    "squint": self.eye._blend_baseline["squint"],
+                    "brow": self.eye._blend_baseline["brow"],
+                },
+            )
+        if self.head._mouth_blend_calibrated:
+            self._calibration_store.set_section(
+                "fatigue_mouth_blendshape",
+                {"baseline": self.head._mouth_blend_baseline},
+            )
 
     def on_no_face(self) -> FatigueMetrics:
         self.eye.reset(full=False)
@@ -1090,6 +1132,8 @@ class FatigueEngine:
             blend_calib_progress=self.eye.blend_calib_progress,
             run_pose=run_pose,
         )
+        if self.eye._blend_calibrated or self.head._mouth_blend_calibrated:
+            self._save_persisted_calibration()
 
         # ── Status & composite fatigue level ─────────────────────────────────
         # V2 early-warning: cognitive / micro-expression driven

@@ -314,6 +314,10 @@ class PreviewOverlayWindow(QWidget):
         stress_row.addStretch(1)
         rp.addLayout(stress_row)
 
+        self._lbl_rppg_diag = QLabel("Pose: —  ROI: —")
+        self._lbl_rppg_diag.setStyleSheet("color: #6c757d; font-size: 10px;")
+        rp.addWidget(self._lbl_rppg_diag)
+
         # Waveform
         lbl_wf_cap = QLabel("帶通脈搏波形（POS）")
         lbl_wf_cap.setStyleSheet("color: #495057; font-size: 10px; margin-top: 2px;")
@@ -615,6 +619,16 @@ class PreviewOverlayWindow(QWidget):
                          f"{prob_str}  ({metrics.stress_status})")
         q_str = f"{metrics.quality_score:.2f}" if metrics.quality_score > 0 else "—"
         self._set_metric(self._lbl_rppg_q, "品質", q_str)
+        self._lbl_rppg_diag.setText(
+            "Pose R/Y/P: "
+            f"{metrics.pose_roll_deg:+.0f}/{metrics.pose_yaw_deg:+.0f}/{metrics.pose_pitch_deg:+.0f}  "
+            f"ROI: {metrics.roi_valid_count}  "
+            "W "
+            f"F:{metrics.roi_weight_forehead:.2f} "
+            f"L:{metrics.roi_weight_l_cheek:.2f} "
+            f"R:{metrics.roi_weight_r_cheek:.2f} "
+            f"G:{metrics.roi_weight_glabella:.2f}"
+        )
 
         # HRV confidence
         conf_color = {"HIGH": "#40c057", "MEDIUM": "#ffd43b", "LOW": "#ff6b6b"}.get(

@@ -36,11 +36,13 @@ _HAS_MP = True
 _HAS_SCIPY = True
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
+from .mediapipe_tuning import load_mediapipe_tuning
 from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig
 from .fatigue_worker import draw_fatigue_annotations
 from rppg.rppg_worker import (
     RppgEngine, RppgMetrics,
     draw_rois, roi_mean_bgr, ROI_SPECS,
+    roi_obstruction_score,
     _pose_from_matrix, _roi_weights_from_pose,
     ensure_face_model, _MODELS_DIR,
 )
@@ -96,6 +98,7 @@ class CombinedWorker(QObject):
         self._fatigue_params = fatigue_params or FatigueParams()
         self._fuser          = FatigueFuser()
         self._stop           = False
+        self._tuning         = load_mediapipe_tuning()
 
     def request_stop(self) -> None:
         self._stop = True
@@ -133,9 +136,9 @@ class CombinedWorker(QObject):
             base_options=base_opts,
             output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
-            min_face_detection_confidence=0.55,
-            min_face_presence_confidence=0.55,
-            min_tracking_confidence=0.60,
+            min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
+            min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
+            min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
@@ -212,7 +215,7 @@ class CombinedWorker(QObject):
                             transform_matrix, lm, w_px, h_px
                         )
                         roi_weights = _roi_weights_from_pose(
-                            roll_deg, yaw_deg, pitch_deg, lm, w_px, h_px
+                            roll_deg, yaw_deg, pitch_deg, lm, w_px, h_px, self._tuning
                         )
                         rgbs: list[tuple[float, float, float]] = []
                         weights: list[float] = []
@@ -220,7 +223,10 @@ class CombinedWorker(QObject):
                             val = roi_mean_bgr(
                                 bgr, lm, indices, transform_matrix=transform_matrix
                             )
-                            weight = roi_weights.get(name, 0.0)
+                            obstruction = roi_obstruction_score(bgr, lm, indices, self._tuning)
+                            weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
+                            if weight < self._tuning.rppg_roi.min_roi_weight:
+                                weight = 0.0
                             if val and weight > 0.0:
                                 rgbs.append(val)
                                 weights.append(weight)

@@ -69,6 +69,12 @@ def _parse_pagination_args() -> tuple[Optional[tuple[int, int]], Optional[Any]]:
     return (offset, limit), None
 
 
+def _row_get(row: dict[str, Any], columns: set[str], key: str, default: Any = None) -> Any:
+    if key in columns:
+        return row.get(key, default)
+    return default
+
+
 class MetricsBuffer:
     def __init__(self, maxsize: int = 300):
         self.maxsize = maxsize
@@ -333,6 +339,8 @@ def create_app(
             with sqlite3.connect(str(allowed_db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(metrics)")
+                columns = {str(item[1]) for item in cursor.fetchall()}
                 cursor.execute("SELECT COUNT(*) FROM metrics")
                 total = cursor.fetchone()[0]
                 cursor.execute("SELECT * FROM metrics ORDER BY timestamp ASC")
@@ -341,40 +349,54 @@ def create_app(
             data = []
             for row in rows:
                 row = dict(row)
-                perclos = _safe_float(row.get("perclos")) * 100.0
+                perclos = _safe_float(_row_get(row, columns, "perclos")) * 100.0
                 entry = {
-                    "t": _safe_float(row.get("timestamp")),
-                    "fps": _safe_float(row.get("fps")),
-                    "face": bool(row.get("fatigue_face_detected") or row.get("rppg_face_detected")),
-                    "cal": bool(row.get("calibrated")),
-                    "ear": _safe_float(row.get("ear")),
+                    "t": _safe_float(_row_get(row, columns, "timestamp")),
+                    "fps": _safe_float(_row_get(row, columns, "fps")),
+                    "face": bool(
+                        _row_get(row, columns, "fatigue_face_detected")
+                        or _row_get(row, columns, "rppg_face_detected")
+                    ),
+                    "cal": bool(_row_get(row, columns, "calibrated")),
+                    "ear": _safe_float(_row_get(row, columns, "ear")),
                     "perclos": perclos,
-                    "blink": int(row.get("blink_count") or 0),
-                    "blink_rate_pm": _safe_float(row.get("blink_rate_pm")),
-                    "status": str(row.get("status") or "--"),
-                    "early_warning": bool(row.get("early_warning")),
-                    "bpm": _safe_float(row.get("bpm")),
-                    "rmssd": _safe_float(row.get("rmssd")),
-                    "sdnn": _safe_float(row.get("sdnn")),
-                    "lf_hf": _safe_float(row.get("lf_hf")),
-                    "sqi": _safe_float(row.get("sqi")),
-                    "prob": _safe_float(row.get("stress_prob")),
-                    "f_state": str(row.get("fused_level") or "--"),
-                    "f_conf": _safe_float(row.get("fused_score")),
-                    "head_pitch": _safe_float(row.get("head_pitch")),
-                    "head_yaw": _safe_float(row.get("head_yaw")),
-                    "head_roll": _safe_float(row.get("head_roll")),
-                    "microsleep_alert": bool(row.get("microsleep_alert")),
-                    "microsleep_count": int(row.get("microsleep_count") or 0),
-                    "yawn_count": int(row.get("yawn_count") or 0),
-                    "mar": _safe_float(row.get("mar")),
-                    "gaze_stability_index": _safe_float(row.get("gaze_stability_index")),
-                    "gaze_mental_fatigue": bool(row.get("gaze_mental_fatigue")),
-                    "fixation_duration": _safe_float(row.get("fixation_duration")),
-                    "saccade_freq_pm": _safe_float(row.get("saccade_freq_pm")),
-                    "is_squinting": bool(row.get("is_squinting")),
-                    "is_frowning": bool(row.get("is_frowning")),
-                    "iris_ratio_trend": _safe_float(row.get("iris_ratio_trend")),
+                    "blink": int(_row_get(row, columns, "blink_count") or 0),
+                    "blink_rate_pm": _safe_float(_row_get(row, columns, "blink_rate_pm")),
+                    "status": str(_row_get(row, columns, "status", "--") or "--"),
+                    "early_warning": bool(_row_get(row, columns, "early_warning")),
+                    "bpm": _safe_float(_row_get(row, columns, "bpm")),
+                    "rmssd": _safe_float(_row_get(row, columns, "rmssd")),
+                    "sdnn": _safe_float(_row_get(row, columns, "sdnn")),
+                    "lf_hf": _safe_float(_row_get(row, columns, "lf_hf")),
+                    "sqi": _safe_float(_row_get(row, columns, "sqi")),
+                    "rppg_quality_score": _safe_float(_row_get(row, columns, "rppg_quality_score")),
+                    "rppg_pose_roll_deg": _safe_float(_row_get(row, columns, "rppg_pose_roll_deg")),
+                    "rppg_pose_yaw_deg": _safe_float(_row_get(row, columns, "rppg_pose_yaw_deg")),
+                    "rppg_pose_pitch_deg": _safe_float(_row_get(row, columns, "rppg_pose_pitch_deg")),
+                    "rppg_roi_valid_count": int(_row_get(row, columns, "rppg_roi_valid_count") or 0),
+                    "rppg_roi_weight_forehead": _safe_float(_row_get(row, columns, "rppg_roi_weight_forehead")),
+                    "rppg_roi_weight_l_cheek": _safe_float(_row_get(row, columns, "rppg_roi_weight_l_cheek")),
+                    "rppg_roi_weight_r_cheek": _safe_float(_row_get(row, columns, "rppg_roi_weight_r_cheek")),
+                    "rppg_roi_weight_glabella": _safe_float(_row_get(row, columns, "rppg_roi_weight_glabella")),
+                    "prob": _safe_float(_row_get(row, columns, "stress_prob")),
+                    "f_state": str(_row_get(row, columns, "fused_level", "--") or "--"),
+                    "f_conf": _safe_float(_row_get(row, columns, "fused_score")),
+                    "head_pitch": _safe_float(_row_get(row, columns, "head_pitch")),
+                    "head_yaw": _safe_float(_row_get(row, columns, "head_yaw")),
+                    "head_roll": _safe_float(_row_get(row, columns, "head_roll")),
+                    "fatigue_quality_score": _safe_float(_row_get(row, columns, "fatigue_quality_score")),
+                    "fatigue_blend_calib_progress": _safe_float(_row_get(row, columns, "fatigue_blend_calib_progress")),
+                    "microsleep_alert": bool(_row_get(row, columns, "microsleep_alert")),
+                    "microsleep_count": int(_row_get(row, columns, "microsleep_count") or 0),
+                    "yawn_count": int(_row_get(row, columns, "yawn_count") or 0),
+                    "mar": _safe_float(_row_get(row, columns, "mar")),
+                    "gaze_stability_index": _safe_float(_row_get(row, columns, "gaze_stability_index")),
+                    "gaze_mental_fatigue": bool(_row_get(row, columns, "gaze_mental_fatigue")),
+                    "fixation_duration": _safe_float(_row_get(row, columns, "fixation_duration")),
+                    "saccade_freq_pm": _safe_float(_row_get(row, columns, "saccade_freq_pm")),
+                    "is_squinting": bool(_row_get(row, columns, "is_squinting")),
+                    "is_frowning": bool(_row_get(row, columns, "is_frowning")),
+                    "iris_ratio_trend": _safe_float(_row_get(row, columns, "iris_ratio_trend")),
                 }
                 entry["dl_bpm"] = 0.0
                 entry["dl_conf"] = 0.0

@@ -900,8 +900,28 @@
                         <div class="metric-item"><div class="metric-label">SDNN (ms)</div><div class="metric-value" id="sdnn-value">--</div></div>
                         <div class="metric-item"><div class="metric-label">LF/HF 比值 <span id="lf-hf-warn" style="display:none;color:#f59e0b;font-size:0.7rem;" title="IBI 窗口 < 120s，LF/HF 無生理意義">(&lt;120s)</span></div><div class="metric-value" id="lf-hf-value">--</div></div>
                         <div class="metric-item"><div class="metric-label">SQI 品質</div><div class="metric-value" id="sqi-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">rPPG 品質</div><div class="metric-value" id="rppg-quality-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">Fatigue 品質</div><div class="metric-value" id="fatigue-quality-value">--</div></div>
                         <div class="metric-item"><div class="metric-label">IBI 偽影</div><div class="metric-value" id="ibi-artifact-value">--</div></div>
                         <div class="metric-item"><div class="metric-label">峰值頻率 (Hz)</div><div class="metric-value" id="peak-freq-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">ROI 可用數</div><div class="metric-value" id="rppg-roi-valid-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">Blend 校準</div><div class="metric-value" id="fatigue-blend-calib-value">--</div></div>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <div class="card-title">
+                        <div class="icon-circle chart"><i class="fas fa-compass"></i></div>
+                        MediaPipe 診斷
+                    </div>
+                    <div class="metric-grid">
+                        <div class="metric-item"><div class="metric-label">rPPG Roll</div><div class="metric-value" id="rppg-roll-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">rPPG Yaw</div><div class="metric-value" id="rppg-yaw-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">rPPG Pitch</div><div class="metric-value" id="rppg-pitch-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">Forehead 權重</div><div class="metric-value" id="rppg-forehead-weight-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">L Cheek 權重</div><div class="metric-value" id="rppg-lcheek-weight-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">R Cheek 權重</div><div class="metric-value" id="rppg-rcheek-weight-value">--</div></div>
+                        <div class="metric-item"><div class="metric-label">Glabella 權重</div><div class="metric-value" id="rppg-glabella-weight-value">--</div></div>
                     </div>
                 </section>
 
@@ -1171,6 +1191,25 @@
                                 <div class="metric-item"><div class="metric-label">LF/HF 比值</div><div class="metric-value" id="pb-lfhf">--</div></div>
                                 <div class="metric-item"><div class="metric-label">SQI 品質</div><div class="metric-value" id="pb-sqi">--</div></div>
                                 <div class="metric-item"><div class="metric-label">壓力概率</div><div class="metric-value" id="pb-prob">--</div></div>
+                                <div class="metric-item"><div class="metric-label">rPPG 品質</div><div class="metric-value" id="pb-rppg-quality">--</div></div>
+                                <div class="metric-item"><div class="metric-label">Fatigue 品質</div><div class="metric-value" id="pb-fatigue-quality">--</div></div>
+                                <div class="metric-item"><div class="metric-label">ROI 可用數</div><div class="metric-value" id="pb-roi-valid">--</div></div>
+                                <div class="metric-item"><div class="metric-label">Blend 校準</div><div class="metric-value" id="pb-blend-calib">--</div></div>
+                            </div>
+                        </section>
+                        <section class="card">
+                            <div class="card-title">
+                                <div class="icon-circle chart"><i class="fas fa-compass"></i></div>
+                                MediaPipe 診斷
+                            </div>
+                            <div class="metric-grid">
+                                <div class="metric-item"><div class="metric-label">rPPG Roll</div><div class="metric-value" id="pb-rppg-roll">--</div></div>
+                                <div class="metric-item"><div class="metric-label">rPPG Yaw</div><div class="metric-value" id="pb-rppg-yaw">--</div></div>
+                                <div class="metric-item"><div class="metric-label">rPPG Pitch</div><div class="metric-value" id="pb-rppg-pitch">--</div></div>
+                                <div class="metric-item"><div class="metric-label">Forehead 權重</div><div class="metric-value" id="pb-rppg-fw">--</div></div>
+                                <div class="metric-item"><div class="metric-label">L Cheek 權重</div><div class="metric-value" id="pb-rppg-lw">--</div></div>
+                                <div class="metric-item"><div class="metric-label">R Cheek 權重</div><div class="metric-value" id="pb-rppg-rw">--</div></div>
+                                <div class="metric-item"><div class="metric-label">Glabella 權重</div><div class="metric-value" id="pb-rppg-gw">--</div></div>
                             </div>
                         </section>
                         <section class="card">

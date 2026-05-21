@@ -49,7 +49,7 @@ MediaPipe Face Landmarker 負責臉部 landmark 偵測。本專案使用 `face_l
 - `num_faces=1`：只取一張臉，降低計算量並避免多臉混合。
 - `running_mode=VIDEO`：逐幀處理影片串流，並傳入單調遞增 timestamp。
 - `output_face_blendshapes=True`：目前已啟用，供眼、眉、嘴的輔助判定。
-- `output_facial_transformation_matrixes=True`：目前已啟用，保留臉部姿態矩陣以便後續姿態補償與 ROI 對齊擴充。
+- `output_facial_transformation_matrixes=True`：目前已啟用，臉部姿態矩陣已用於 ROI roll 補償、姿態品質評分與 ROI 動態權重。
 - `min_face_detection_confidence=0.55`
 - `min_face_presence_confidence=0.55`
 - `min_tracking_confidence=0.60`
@@ -144,6 +144,15 @@ GUI 啟動攝影機後，資料流如下：
 - glabella：保留較低但穩定的輔助權重。
 
 這樣可以降低側頭、歪頭、局部遮擋時單一 ROI 拉偏訊號的風險。若沒有任何有效 ROI，該幀不會推入 rPPG buffer。
+
+系統也會對每個 ROI 做遮擋或異常色彩降權：
+
+- ROI 平均亮度過暗或過亮時，代表可能受陰影、曝光或反光影響。
+- 色度過低時，代表該區域可能缺乏有效皮膚顏色變化。
+- 色度過高時，代表可能有強反光、飽和色或非皮膚遮擋。
+- 遮擋分數會轉成 ROI 權重折扣，而不是直接讓整張臉失效。
+
+目前 transformation matrix 的幾何補償採保守策略：已落地 roll 補償與姿態導向權重，尚未導入完整 3D mesh warp。這樣做的原因是完整 warp 會改變 ROI 取樣分布與 rPPG 數值行為，仍需要固定資料集回放驗證後再擴充。
 
 ## 5. POS 脈搏波演算法
 
@@ -256,7 +265,7 @@ SQI 由 `compute_sqi` 計算：
 `quality_score` 的用途：
 
 - GUI 直接顯示目前可用性。
-- Web metrics 與 SQLite 錄製會保留。
+- Web metrics、Web dashboard live/playback 與 SQLite 錄製會保留。
 - 融合分數中，rPPG pillar 會再乘上這個品質權重，避免低品質影像把整體疲勞分數推高。
 
 ## 10. Peak Detection 與 IBI
@@ -467,6 +476,33 @@ rPPG metrics 會被轉成兩種輸出：
 - `peak_freq_hz`
 - `frame_brightness`
 - `warmup_progress`
+- `rppg_quality_score`
+- `rppg_pose_roll_deg`
+- `rppg_pose_yaw_deg`
+- `rppg_pose_pitch_deg`
+- `rppg_roi_valid_count`
+- `rppg_roi_weight_forehead`
+- `rppg_roi_weight_l_cheek`
+- `rppg_roi_weight_r_cheek`
+- `rppg_roi_weight_glabella`
+- `fatigue_quality_score`
+- `fatigue_blend_calib_progress`
+
+舊版錄製資料庫在新版程式開啟時會以 `ALTER TABLE` 自動補欄。Web playback API 也會偵測欄位是否存在，舊 DB 缺少新診斷欄位時會回傳預設值，避免回放失敗。
+
+### 18.3 回放校準摘要工具
+
+`scripts/replay_calibration_summary.py` 可讀取 `metrics_*.db` 並輸出：
+
+- 平均 rPPG quality score。
+- 平均 fatigue quality score。
+- 平均 SQI 與 BPM。
+- 低品質筆數、高 artifact 筆數與 ROI 可用數不足筆數。
+- forehead、左右 cheek、glabella 的平均 ROI 權重。
+
+使用方式：
+
+`.venv/bin/python scripts/replay_calibration_summary.py recordings/metrics_YYYYMMDD_HHMMSS.db`
 
 ## 19. Demo 模組
 
@@ -497,25 +533,31 @@ Demo 也支援：
 4. BPM 較可信時通常需要：臉部穩定、光照穩定、SQI 高、artifact ratio 低。
 5. `stress_prob` 是 heuristic，不是醫療診斷。
 6. `face_landmarker.task` 是臉部 landmark 模型，不是心率模型；心率由後續訊號處理演算法估算。
-7. blendshape 與 transformation matrix 雖已接入，但工程上仍以幾何 landmark 與訊號處理結果為主。
+7. blendshape 與 transformation matrix 已接入，但工程上仍以幾何 landmark 與訊號處理結果為主。
 
 ## 21. MediaPipe 可優化項目、缺口與參數調整
 
 目前 MediaPipe Face Landmarker 在本專案中的核心工作是：提供穩定 landmark、blendshape 與 transformation matrix，讓 rPPG 與疲勞引擎共用同一組臉部資訊。若要再提升準確度，優先順序如下。
 
-### 21.1 已完成但仍可再精修的部分
+### 21.1 已完成的優化
 
-1. `output_face_blendshapes=True` 已啟用，且已加入個人化 baseline 正規化，但仍可持續微調權重與時間平滑。
-2. `output_facial_transformation_matrixes=True` 已啟用，且已用於 ROI roll 補償；後續仍可再擴充到更完整的 3D 對齊。
-3. `num_faces=1` 已固定，對單人 rPPG 是合理設定，也讓 smoothing 生效。
-4. `quality_score` 已建立，並已接到 GUI、Web metrics、SQLite 與融合分數。
+1. `output_face_blendshapes=True` 已啟用，且已加入個人化 baseline 正規化。
+2. blendshape baseline 已支援跨 session 保存，儲存在 `config/mediapipe_calibration.json`。
+3. `output_facial_transformation_matrixes=True` 已啟用，且已用於 ROI roll 補償、姿態品質與 ROI 動態權重。
+4. 已加入 ROI 遮擋降權，降低反光、過暗、過曝或非皮膚色彩 ROI 的影響。
+5. MediaPipe 相關參數已外部化到 `config/mediapipe_tuning.json`。
+6. 已新增錄製回放品質摘要工具 `scripts/replay_calibration_summary.py`。
+7. Web dashboard live/playback 已顯示 quality、pose、ROI 權重與 blend calibration progress。
+8. SQLite schema 已新增診斷欄位，並支援舊資料庫 migration。
+9. `num_faces=1` 已固定，對單人 rPPG 是合理設定，也讓 smoothing 生效。
+10. `quality_score` 已建立，並已接到 GUI、Web metrics、SQLite 與融合分數。
 
-### 21.2 目前比較缺少的部分
+### 21.2 目前仍可精修的部分
 
-1. 目前 ROI 補償主要針對 roll，尚未把 transformation matrix 完整用到更細的 3D ROI warp。
-2. blendshape 已做 baseline 正規化，但尚未依不同場景自動重估或保存個人設定。
-3. 尚未加入更強的遮擋處理，例如眼鏡反光、口罩、手遮臉或側臉遮蔽時的專門降權。
-4. 尚未將更多 MediaPipe 能力拆成獨立偵測子模組，例如多臉追蹤流程。
+1. transformation matrix 已落地為 roll 補償與姿態權重，完整 3D ROI warp 仍待固定資料集驗證後再導入。
+2. blendshape baseline 已可保存，但可再加入依光照與使用者狀態自動重估的長期漂移修正。
+3. 遮擋降權已完成第一版，可再加入眼鏡反光、口罩、手遮臉或側臉遮蔽的專用分類。
+4. 尚未將多臉追蹤拆成獨立流程；目前單人 rPPG 場景維持 `num_faces=1`。
 
 ### 21.3 參數調整建議
 
@@ -538,12 +580,12 @@ Demo 也支援：
    - 單人 rPPG 與疲勞監測建議維持 `1`。
    - 多人場景雖可提高值，但會增加計算量，也會使 smoothing 效果下降。
 
-### 21.4 最值得優先補上的優化
+### 21.4 下一階段建議
 
-1. 將 transformation matrix 從 roll 補償再擴充到更完整的 ROI 幾何對齊。
-2. 對 blendshape 的個人化校準加入持續微調與跨 session 保存。
-3. 強化遮擋辨識，特別是眼鏡反光、口罩與手遮臉。
-4. 將極端姿態與局部遮蔽細分成 ROI 級別的降權，而不是只做整臉降權。
+1. 以固定資料集驗證完整 3D ROI warp 是否真的優於目前 roll 補償與姿態權重。
+2. 將遮擋偵測從色彩/亮度 heuristic 擴充為眼鏡、口罩、手遮臉等情境分類。
+3. 依錄製回放摘要建立場景化 tuning profile，例如低光、車內、辦公室或夜間。
+4. 若要支援多人，另建多臉追蹤與主體選擇策略，不直接改動單人 rPPG 主流程。
 
 ## 22. 官方文件參考
 

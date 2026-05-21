@@ -168,7 +168,18 @@ function updateMetricsDisplay(m) {
     const lfhfWarn = document.getElementById('lf-hf-warn');
     if (lfhfWarn) { lfhfWarn.style.display = m.stress_lf_hf_window_ok ? 'none' : 'inline'; }
     setVal('sqi-value', m.stress_sqi, v => v > 0 ? v.toFixed(2) : '--');
+    setVal('rppg-quality-value', m.stress_quality_score, v => v > 0 ? v.toFixed(2) : '--');
+    setVal('fatigue-quality-value', m.fatigue_quality_score, v => v > 0 ? v.toFixed(2) : '--');
     setVal('peak-freq-value', m.stress_peak_freq, v => v > 0 ? v.toFixed(3) : '--');
+    setVal('rppg-roi-valid-value', m.stress_roi_valid_count, v => v != null ? v : '--');
+    setVal('fatigue-blend-calib-value', m.fatigue_blend_calib_progress, v => (v * 100).toFixed(0) + '%');
+    setVal('rppg-roll-value', m.stress_pose_roll_deg, v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`);
+    setVal('rppg-yaw-value', m.stress_pose_yaw_deg, v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`);
+    setVal('rppg-pitch-value', m.stress_pose_pitch_deg, v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`);
+    setVal('rppg-forehead-weight-value', m.stress_roi_weight_forehead, v => v > 0 ? v.toFixed(2) : '--');
+    setVal('rppg-lcheek-weight-value', m.stress_roi_weight_l_cheek, v => v > 0 ? v.toFixed(2) : '--');
+    setVal('rppg-rcheek-weight-value', m.stress_roi_weight_r_cheek, v => v > 0 ? v.toFixed(2) : '--');
+    setVal('rppg-glabella-weight-value', m.stress_roi_weight_glabella, v => v > 0 ? v.toFixed(2) : '--');
     // v12: HRV 信心值 + IBI 偽影比例
     const confEl = document.getElementById('hrv-confidence-value');
     if (confEl && m.stress_hrv_confidence) {
@@ -361,6 +372,9 @@ function _cachePbDom() {
         'pb-squinting-status', 'pb-frowning-status', 'pb-iris-trend',
         'pb-gaze-stability', 'pb-gaze-mental',
         'pb-bpm', 'pb-rmssd', 'pb-sdnn', 'pb-lfhf', 'pb-sqi', 'pb-prob',
+        'pb-rppg-quality', 'pb-fatigue-quality', 'pb-roi-valid', 'pb-blend-calib',
+        'pb-rppg-roll', 'pb-rppg-yaw', 'pb-rppg-pitch',
+        'pb-rppg-fw', 'pb-rppg-lw', 'pb-rppg-rw', 'pb-rppg-gw',
         'pb-fstate', 'pb-fconf', 'pb-estatus', 'pb-timestamp',
         'pb-play-icon', 'pb-speed', 'pb-time-total', 'pb-total',
         'pb-controls', 'pb-data', 'pb-loading'
@@ -379,16 +393,26 @@ const _displayThresholds = {
     'pb-sdnn': 0.5,     // SDNN ±0.5ms 才更新
     'pb-lfhf': 0.02,    // LF/HF ±0.02 才更新
     'pb-sqi': 0.02,     // SQI ±0.02 才更新
+    'pb-rppg-quality': 0.02,
+    'pb-fatigue-quality': 0.02,
+    'pb-blend-calib': 1.0,
     'pb-prob': 1.5,     // 壓力概率 ±1.5% 才更新（顯示整數百分比）
     'pb-fconf': 1.5,    // 信心度 ±1.5% 才更新
     'pb-head-pitch': 0.2,
     'pb-head-yaw': 0.2,
     'pb-head-roll': 0.2,
+    'pb-rppg-roll': 0.2,
+    'pb-rppg-yaw': 0.2,
+    'pb-rppg-pitch': 0.2,
     'pb-blink-rate': 0.2,
     'pb-fixation-duration': 0.2,
     'pb-saccade-freq': 0.2,
     'pb-mar': 0.01,
     'pb-gaze-stability': 0.02,
+    'pb-rppg-fw': 0.02,
+    'pb-rppg-lw': 0.02,
+    'pb-rppg-rw': 0.02,
+    'pb-rppg-gw': 0.02,
 };
 
 /**
@@ -782,7 +806,18 @@ function seekTo(idx) {
     _stableSet('pb-sdnn', d.sdnn, v => v > 0 ? v.toFixed(1) : '--');
     _stableSet('pb-lfhf', d.lf_hf, v => v > 0 ? v.toFixed(2) : '--');
     _stableSet('pb-sqi', d.sqi, v => v > 0 ? v.toFixed(2) : '--');
+    _stableSet('pb-rppg-quality', d.rppg_quality_score, v => v > 0 ? v.toFixed(2) : '--');
+    _stableSet('pb-fatigue-quality', d.fatigue_quality_score, v => v > 0 ? v.toFixed(2) : '--');
+    _setElText(_pb['pb-roi-valid'], d.rppg_roi_valid_count, v => v != null ? v : '--');
+    _stableSet('pb-blend-calib', d.fatigue_blend_calib_progress * 100, v => v.toFixed(0) + '%');
     _stableSet('pb-prob', d.prob * 100, v => v > 0 ? v.toFixed(0) + '%' : '--');
+    _stableSet('pb-rppg-roll', d.rppg_pose_roll_deg, v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`);
+    _stableSet('pb-rppg-yaw', d.rppg_pose_yaw_deg, v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`);
+    _stableSet('pb-rppg-pitch', d.rppg_pose_pitch_deg, v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}°`);
+    _stableSet('pb-rppg-fw', d.rppg_roi_weight_forehead, v => v > 0 ? v.toFixed(2) : '--');
+    _stableSet('pb-rppg-lw', d.rppg_roi_weight_l_cheek, v => v > 0 ? v.toFixed(2) : '--');
+    _stableSet('pb-rppg-rw', d.rppg_roi_weight_r_cheek, v => v > 0 ? v.toFixed(2) : '--');
+    _stableSet('pb-rppg-gw', d.rppg_roi_weight_glabella, v => v > 0 ? v.toFixed(2) : '--');
 
     // 文字狀態 — 只在實際改變時更新
     const fsEl = _pb['pb-fstate'];

@@ -24,6 +24,7 @@ htmlcov/
 # App data
 recordings/
 settings.json
+config/mediapipe_calibration.json
 docs/
 !docs/
 !docs/rppg_technical_report.md
