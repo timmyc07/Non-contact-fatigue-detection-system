@@ -61,6 +61,7 @@ sudo usermod -aG video "$USER"
 - `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo
 - `gui/`: desktop GUI, fatigue analysis, recording, and web dashboard integration
 - `docs/rppg_technical_report.md`: rPPG 技術、演算法、模型與系統運作說明；可用 `scripts/build_rppg_pdf.py` 產生 PDF。
+- `docs/2026-05-21-mediapipe-landmark-expansion-log.md`: 本次新增 MediaPipe 部位與精準度提升的更新紀錄。
 
 ## Notes
 - Recordings are saved under the `recordings/` folder.
