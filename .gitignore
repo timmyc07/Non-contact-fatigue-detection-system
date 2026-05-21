@@ -25,6 +25,9 @@ htmlcov/
 recordings/
 settings.json
 docs/
+!docs/
+!docs/rppg_technical_report.md
+!docs/rppg_technical_report.pdf
 
 # OS/Editor
 .DS_Store
