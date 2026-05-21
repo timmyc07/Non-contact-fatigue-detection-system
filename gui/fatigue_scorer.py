@@ -179,6 +179,7 @@ class FatigueFuser:
 
         # Signal quality discount factor
         sqi_w = _clamp(r.sqi / cfg.sqi_min_reliable) if cfg.sqi_min_reliable > 0 else 1.0
+        quality_w = _clamp(getattr(r, "quality_score", 1.0) or 0.0)
 
         # Stress probability (0-1 direct)
         stress_s = _clamp(r.stress_prob)
@@ -206,7 +207,7 @@ class FatigueFuser:
         raw = (cfg.rppg_w_stress * stress_s
                + cfg.rppg_w_bpm   * bpm_s
                + cfg.rppg_w_lfhf  * lfhf_s)
-        pillar = _clamp(raw * sqi_w)
+        pillar = _clamp(raw * sqi_w * quality_w)
         return pillar, stress_s, bpm_s, sqi_w
 
     # ── Behaviour pillar ──────────────────────────────────────────────────────

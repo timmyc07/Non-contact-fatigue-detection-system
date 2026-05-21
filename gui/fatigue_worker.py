@@ -18,18 +18,12 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
+import cv2
+import mediapipe as mp
+from mediapipe.tasks import python as _mp_python
+from mediapipe.tasks.python import vision as _mp_vision
 
-try:
-    import mediapipe as mp
-    from mediapipe.tasks import python as _mp_python
-    from mediapipe.tasks.python import vision as _mp_vision
-    _HAS_MP = True
-except ImportError:
-    _HAS_MP = False
+_HAS_MP = True
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from rppg.rppg_worker import ensure_face_model, _MODELS_DIR
@@ -50,6 +44,10 @@ _IRIS_R_EDGES = [474, 475, 476, 477]
 # Inner brow anchor points
 _BROW_L_INNER = 55
 _BROW_R_INNER = 285
+
+# Nose anchor points (bridge + tip)
+_NOSE_TIP = 1
+_NOSE_BRIDGE = [6, 168]
 
 # Outer brow ridge (for drawing the full brow arc)
 _BROW_L = [336, 296, 334, 293, 300, 276, 283, 282, 295]
@@ -79,6 +77,11 @@ _STATUS_COLOR = {
 
 def _lm_px(lm, w: int, h: int, idx: int) -> tuple[int, int]:
     return int(lm[idx].x * w), int(lm[idx].y * h)
+
+
+def _lm_mean_px(lm, w: int, h: int, idxs: list[int]) -> tuple[int, int]:
+    pts = np.array([_lm_px(lm, w, h, i) for i in idxs], dtype=np.float64)
+    return int(np.mean(pts[:, 0])), int(np.mean(pts[:, 1]))
 
 
 def _draw_head_pose_axes(
@@ -138,6 +141,19 @@ def draw_fatigue_annotations(
     cv2.polylines(out, [oval_pts], isClosed=True,
                   color=(60, 60, 60), thickness=1, lineType=cv2.LINE_AA)
 
+    # ── 1b. Nose anchor (tip + bridge) ───────────────────────────────────────
+    nose_tip = _lm_px(lm, w, h, _NOSE_TIP)
+    nose_bridge = _lm_mean_px(lm, w, h, _NOSE_BRIDGE)
+    nose_col = (0, 200, 255) if metrics.nose_speed < 120 else (0, 120, 255)
+    cv2.line(out, nose_bridge, nose_tip, nose_col, 1, lineType=cv2.LINE_AA)
+    cv2.circle(out, nose_tip, 2, nose_col, -1, lineType=cv2.LINE_AA)
+    cv2.putText(
+        out,
+        f"鼻動:{metrics.nose_speed:.0f}",
+        (nose_tip[0] + 4, nose_tip[1] - 4),
+        font, 0.34, nose_col, 1, cv2.LINE_AA,
+    )
+
     # ── 2. Brow arcs + inner-brow furrowing indicator ─────────────────────────
     for brow_idxs, inner_idx in [(_BROW_L, _BROW_L_INNER), (_BROW_R, _BROW_R_INNER)]:
         pts = np.array([_lm_px(lm, w, h, i) for i in brow_idxs], np.int32)
@@ -177,6 +193,10 @@ def draw_fatigue_annotations(
     cv2.putText(out, f"{metrics.ear_smooth:.2f}",
                 (r_outer[0] - 30, r_outer[1] - 4),
                 font, 0.35, eye_col, 1, cv2.LINE_AA)
+    cv2.putText(out, f"L:{metrics.lid_open_left:.2f}", (l_outer[0] + 4, l_outer[1] + 10),
+                font, 0.30, (120, 220, 120), 1, cv2.LINE_AA)
+    cv2.putText(out, f"R:{metrics.lid_open_right:.2f}", (r_outer[0] - 30, r_outer[1] + 10),
+                font, 0.30, (120, 220, 120), 1, cv2.LINE_AA)
 
     # ── 4. Iris circles + crosshair ───────────────────────────────────────────
     if metrics.has_iris:
@@ -219,11 +239,13 @@ def draw_fatigue_annotations(
                          axis_scale)
 
     # ── 7. Mouth / MAR contour (visible when yawning or MAR > 0.3) ────────────
-    if metrics.mar > 0.30:
+    if metrics.mar > 0.30 or metrics.mouth_open_ratio > 0.18:
         mouth_pts = np.array([_lm_px(lm, w, h, i) for i in _MOUTH_OUTER], np.int32)
         mouth_col = (0, 50, 255) if metrics.yawn_count > 0 or metrics.mar > 0.55 else (80, 80, 200)
         cv2.polylines(out, [mouth_pts], isClosed=True,
                       color=mouth_col, thickness=1, lineType=cv2.LINE_AA)
+        cv2.putText(out, f"口:{metrics.mouth_open_ratio:.2f}", (mouth_pts[0][0] - 8, mouth_pts[0][1] - 8),
+                    font, 0.34, mouth_col, 1, cv2.LINE_AA)
         if metrics.mar > 0.55:
             mc = _lm_px(lm, w, h, 13)
             cv2.putText(out, "哈欠", (mc[0] - 12, mc[1] - 6),
@@ -277,6 +299,12 @@ def draw_fatigue_annotations(
         alerts.append((f"瞇眼 {metrics.squint_duration:.0f}s", (0, 190, 255)))
     if metrics.is_frowning:
         alerts.append(("皺眉", (0, 100, 255)))
+    if metrics.lid_balance > 0.35:
+        alerts.append((f"眼瞼差 {metrics.lid_balance:.2f}", (0, 180, 255)))
+    if metrics.mouth_open_ratio > 0.30:
+        alerts.append((f"嘴部 {metrics.mouth_open_ratio:.2f}", (0, 140, 255)))
+    if metrics.nose_speed > 120.0:
+        alerts.append((f"鼻動 {metrics.nose_speed:.0f}", (0, 200, 255)))
 
     y_off = 4
     for badge_txt, badge_col in alerts:
@@ -365,8 +393,11 @@ class FatigueWorker(QObject):
         base_opts  = _mp_python.BaseOptions(model_asset_path=str(model_path))
         lm_options = _mp_vision.FaceLandmarkerOptions(
             base_options=base_opts,
-            output_face_blendshapes=False,
-            output_facial_transformation_matrixes=False,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
+            min_face_detection_confidence=0.55,
+            min_face_presence_confidence=0.55,
+            min_tracking_confidence=0.60,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
@@ -408,12 +439,14 @@ class FatigueWorker(QObject):
                     self.face_detected.emit(has_face)
                     last_face = has_face
 
+                blendshapes = result.face_blendshapes[0] if result.face_blendshapes else None
+
                 annotated = bgr.copy()
 
                 if has_face:
                     lm      = result.face_landmarks[0]
                     h_px, w_px = bgr.shape[:2]
-                    metrics = engine.step(lm, w_px, h_px, ts)
+                    metrics = engine.step(lm, w_px, h_px, ts, blendshapes=blendshapes)
                     metrics.face_detected = True
 
                     annotated = draw_fatigue_annotations(annotated, lm, metrics)

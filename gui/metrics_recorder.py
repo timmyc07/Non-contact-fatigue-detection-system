@@ -23,6 +23,15 @@ class MetricsRecorder:
         "sdnn",
         "lf_hf",
         "sqi",
+        "rppg_quality_score",
+        "rppg_pose_roll_deg",
+        "rppg_pose_yaw_deg",
+        "rppg_pose_pitch_deg",
+        "rppg_roi_valid_count",
+        "rppg_roi_weight_forehead",
+        "rppg_roi_weight_l_cheek",
+        "rppg_roi_weight_r_cheek",
+        "rppg_roi_weight_glabella",
         "stress_prob",
         "stress_status",
         "hrv_confidence",
@@ -57,6 +66,8 @@ class MetricsRecorder:
         "head_pitch",
         "head_yaw",
         "head_roll",
+        "fatigue_quality_score",
+        "fatigue_blend_calib_progress",
         "microsleep_alert",
         "microsleep_count",
         "mar",
@@ -100,6 +111,15 @@ class MetricsRecorder:
         sdnn REAL,
         lf_hf REAL,
         sqi REAL,
+        rppg_quality_score REAL,
+        rppg_pose_roll_deg REAL,
+        rppg_pose_yaw_deg REAL,
+        rppg_pose_pitch_deg REAL,
+        rppg_roi_valid_count INTEGER,
+        rppg_roi_weight_forehead REAL,
+        rppg_roi_weight_l_cheek REAL,
+        rppg_roi_weight_r_cheek REAL,
+        rppg_roi_weight_glabella REAL,
         stress_prob REAL,
         stress_status TEXT,
         hrv_confidence TEXT,
@@ -134,6 +154,8 @@ class MetricsRecorder:
         head_pitch REAL,
         head_yaw REAL,
         head_roll REAL,
+        fatigue_quality_score REAL,
+        fatigue_blend_calib_progress REAL,
         microsleep_alert BOOLEAN,
         microsleep_count INTEGER,
         mar REAL,
@@ -186,6 +208,7 @@ class MetricsRecorder:
             self.conn.execute("PRAGMA cache_size = -8000")
             self.conn.execute(self.CREATE_TABLE_SQL)
             self.conn.execute(self.CREATE_INDEX_SQL)
+            self._migrate_schema()
             self.conn.commit()
             self._start_time = time.time()
             self._last_flush_time = time.time()
@@ -200,6 +223,30 @@ class MetricsRecorder:
     @staticmethod
     def _b(value: Any) -> int:
         return 1 if bool(value) else 0
+
+    def _migrate_schema(self) -> None:
+        if self.conn is None:
+            return
+        cols = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(metrics)").fetchall()
+        }
+        migrations = {
+            "rppg_quality_score": "REAL",
+            "rppg_pose_roll_deg": "REAL",
+            "rppg_pose_yaw_deg": "REAL",
+            "rppg_pose_pitch_deg": "REAL",
+            "rppg_roi_valid_count": "INTEGER",
+            "rppg_roi_weight_forehead": "REAL",
+            "rppg_roi_weight_l_cheek": "REAL",
+            "rppg_roi_weight_r_cheek": "REAL",
+            "rppg_roi_weight_glabella": "REAL",
+            "fatigue_quality_score": "REAL",
+            "fatigue_blend_calib_progress": "REAL",
+        }
+        for name, col_type in migrations.items():
+            if name not in cols:
+                self.conn.execute(f"ALTER TABLE metrics ADD COLUMN {name} {col_type}")
 
     def record(self, data: dict) -> None:
         if self.conn is None:

@@ -11,12 +11,24 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 
 ## Requirements
 - Python 3.10+ recommended
-- Windows supported (camera backend)
+- Windows and Ubuntu Linux supported
+- Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
 
 ## Setup
-```bash
-python -m venv .venv
+Windows:
+```powershell
+py -3 -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
+```
+
+Ubuntu:
+```bash
+bash scripts/setup_ubuntu.sh
+```
+
+If the virtual environment already exists, reinstall/update Python dependencies with:
+```bash
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## Run
@@ -24,15 +36,34 @@ python -m venv .venv
 python main.py
 ```
 
+Ubuntu:
+```bash
+.venv/bin/python main.py
+```
+
 Optional demo:
 ```bash
 python -m rppg.demo_rppg_live
 ```
 
+On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
+```bash
+ls -l /dev/video*
+groups
+```
+
+Add your user to the `video` group if needed, then log out and back in:
+```bash
+sudo usermod -aG video "$USER"
+```
+
 ## Project layout
 - `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo
 - `gui/`: desktop GUI, fatigue analysis, recording, and web dashboard integration
+- `docs/rppg_technical_report.md`: rPPG 技術、演算法、模型與系統運作說明；可用 `scripts/build_rppg_pdf.py` 產生 PDF。
+- `docs/2026-05-21-mediapipe-landmark-expansion-log.md`: 本次新增 MediaPipe 部位與精準度提升的更新紀錄。
 
 ## Notes
 - Recordings are saved under the `recordings/` folder.
 - If playback video is needed in the web dashboard, make sure ffmpeg is available (imageio-ffmpeg is supported via requirements).
+- `pygrabber` is a Windows-only optional dependency for DirectShow camera names. On Ubuntu/Linux, camera access uses V4L2 and the guarded `pygrabber` imports are not executed.

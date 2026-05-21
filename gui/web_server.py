@@ -9,7 +9,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Callable
+from typing import Any, Optional, Callable, cast
 
 from flask import Flask, render_template, jsonify, request, Response, send_file, abort
 from flask_socketio import SocketIO, emit
@@ -135,11 +135,15 @@ class PlaybackManager:
                 cursor.execute("SELECT COUNT(*) FROM metrics")
                 count = cursor.fetchone()[0]
                 cursor.execute("SELECT MIN(timestamp), MAX(timestamp) FROM metrics")
-                min_ts, max_ts = cursor.fetchone()
+                ts_row = cursor.fetchone()
+                if ts_row is None:
+                    min_ts_raw, max_ts_raw = None, None
+                else:
+                    min_ts_raw, max_ts_raw = ts_row
                 conn.close()
 
                 if count > 0:
-                    duration = (max_ts - min_ts) if (min_ts and max_ts) else 0
+                    duration = max(_safe_float(max_ts_raw) - _safe_float(min_ts_raw), 0.0)
                     dt = self._parse_filename_datetime(db_file.name)
                     if dt is None:
                         dt = datetime.fromtimestamp(db_file.stat().st_ctime)
@@ -225,7 +229,7 @@ def _safe_float(value: object) -> float:
     if value is None:
         return 0.0
     try:
-        number = float(value)
+        number = float(cast(Any, value))
         return number if number == number else 0.0
     except (TypeError, ValueError):
         return 0.0
@@ -297,6 +301,7 @@ def create_app(
         pagination, pagination_error = _parse_pagination_args()
         if pagination_error is not None:
             return pagination_error
+        assert pagination is not None
         offset, limit = pagination
 
         if not db_path:
@@ -630,12 +635,16 @@ def create_app(
 
     @socketio.on("connect")
     def handle_connect():
-        _ws_connected_clients.add(request.sid)
+        sid = getattr(request, "sid", None)
+        if sid is not None:
+            _ws_connected_clients.add(sid)
         emit("connect_response", {"data": "連接成功"})
 
     @socketio.on("disconnect")
     def handle_disconnect():
-        _ws_connected_clients.discard(request.sid)
+        sid = getattr(request, "sid", None)
+        if sid is not None:
+            _ws_connected_clients.discard(sid)
 
     @socketio.on("request_metrics")
     def handle_metrics_request():

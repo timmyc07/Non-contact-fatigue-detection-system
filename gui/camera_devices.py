@@ -1,18 +1,16 @@
-"""Enumerate cameras — aligned with mediapipe_rppg_system V1 ``camera_utils.list_cameras``.
+"""Enumerate cameras across Windows and Linux backends.
 
 Windows: if pygrabber returns DirectShow device names, we **do not** open VideoCapture per
 index (instant list, same as V1). Only fall back to OpenCV probing when names are unavailable.
+Linux: prefer V4L2 and expose stable `/dev/v4l/by-id` labels when available.
 """
 
 from __future__ import annotations
 
 import sys
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None  # type: ignore
+import cv2
 
 try:
     _CAP_DEVICE_DESC = cv2.CAP_PROP_DEVICE_DESCRIPTION  # type: ignore[union-attr]
@@ -32,7 +30,7 @@ def _list_windows_dshow_device_names() -> list[str]:
     if not _IS_WIN:
         return []
     try:
-        from pygrabber.dshow_graph import FilterGraph
+        from pygrabber.dshow_graph import FilterGraph  # pyright: ignore[reportMissingModuleSource]
 
         graph = FilterGraph()
         names = graph.get_input_devices()
@@ -66,8 +64,6 @@ def _list_linux_v4l2_device_names() -> dict[int, str]:
 
 
 def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
-    if cv2 is None:
-        return [0]
     if api_preferences is not None:
         return [int(api) for api in api_preferences]
 
@@ -87,10 +83,8 @@ def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
 
 
 def _probe_camera_index(index: int, warmup_read: bool, api_preferences: Sequence[int]) -> bool:
-    if cv2 is None:
-        return False
     for api in api_preferences:
-        cap: Optional[cv2.VideoCapture] = None
+        cap: Optional[Any] = None
         try:
             cap = cv2.VideoCapture(index, int(api))
             if not cap.isOpened():
@@ -142,24 +136,25 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
     return found
 
 
-def open_camera_capture(index: int, backend: str = "ffmpeg"):  # -> Optional[cv2.VideoCapture]
+def open_camera_capture(index: int, backend: str = "auto"):
     """Open the first working VideoCapture for ``index``.
 
     ``backend``:
+        ``"auto"``   — Platform-preferred order without explicit backend.
+        ``"v4l2"``   — Linux Video4Linux2 directly.
         ``"ffmpeg"`` — Try CAP_FFMPEG first (file/stream path on Windows);
                        if that fails (common for integer camera indices),
-                       fall back through CAP_MSMF → CAP_ANY.
+                       fall back through platform-preferred APIs.
                        cap.set() works without pipeline rebuild.
         ``"msmf"``   — Windows Media Foundation directly; preserves native MJPG.
                        cap.set() causes pipeline rebuild (~1 s each).
-        ``"auto"``   — Platform-preferred order without explicit backend.
     """
     if cv2 is None:
         return None
 
     b = backend.lower().strip()
 
-    def _try(api: int) -> "Optional[cv2.VideoCapture]":
+    def _try(api: int) -> Optional[Any]:
         try:
             cap = cv2.VideoCapture(index, api)
             if cap.isOpened():
@@ -175,10 +170,19 @@ def open_camera_capture(index: int, backend: str = "ffmpeg"):  # -> Optional[cv2
             return _try(int(msmf))
         return None
 
+    if b == "v4l2":
+        v4l2 = getattr(cv2, "CAP_V4L2", None)
+        if v4l2 is not None:
+            return _try(int(v4l2))
+        return None
+
     if b == "ffmpeg":
         # CAP_FFMPEG only accepts integer indices on some builds/platforms;
         # cascade through workable alternatives if it fails.
-        for attr in ("CAP_FFMPEG", "CAP_MSMF", "CAP_ANY"):
+        attrs = ["CAP_FFMPEG"]
+        attrs.extend(["CAP_MSMF"] if _IS_WIN else ["CAP_V4L2"])
+        attrs.append("CAP_ANY")
+        for attr in attrs:
             api_val = getattr(cv2, attr, None)
             if api_val is None:
                 continue

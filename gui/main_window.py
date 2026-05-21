@@ -6,6 +6,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 import ctypes
 from ctypes import wintypes
@@ -390,12 +391,18 @@ class MainWindow(QMainWindow):
 
         row3 = QHBoxLayout()
         self._cmb_backend = QComboBox()
-        self._cmb_backend.addItem("FFMPEG（預設）", "ffmpeg")
-        self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
+        self._cmb_backend.addItem("自動（平台預設）", "auto")
+        if sys.platform.startswith("linux"):
+            self._cmb_backend.addItem("V4L2（Linux）", "v4l2")
+        self._cmb_backend.addItem("FFMPEG", "ffmpeg")
+        if sys.platform.startswith("win"):
+            self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
         self._cmb_backend.setCurrentIndex(0)
         self._cmb_backend.setToolTip(
-            "FFMPEG — 自動嘗試多種後端，支援 cap.set() 不重建管線\n"
-            "MSMF   — 直接使用 Windows Media Foundation，可保留原生 MJPG"
+            "自動 — 依平台優先選擇可用後端\n"
+            "V4L2 — Linux 原生攝影機後端\n"
+            "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端\n"
+            "MSMF — Windows Media Foundation，可保留原生 MJPG"
         )
         lbl_backend = QLabel("後端：")
         lbl_backend.setObjectName("hintLabel")
@@ -549,7 +556,7 @@ class MainWindow(QMainWindow):
         seq = QKeySequence(seq_text)
         if seq.isEmpty():
             return None
-        first = seq[0]
+        first = cast(Any, seq)[0]
         if hasattr(first, "toCombined"):
             combined = int(first.toCombined())
         else:
@@ -560,7 +567,7 @@ class MainWindow(QMainWindow):
             | Qt.KeyboardModifier.AltModifier
             | Qt.KeyboardModifier.MetaModifier
         )
-        mod_mask = int(mod_mask_flag.value) if hasattr(mod_mask_flag, "value") else int(mod_mask_flag)
+        mod_mask = self._qt_enum_int(mod_mask_flag)
         modifiers = combined & mod_mask
         qt_key = combined & ~mod_mask
 
@@ -569,10 +576,10 @@ class MainWindow(QMainWindow):
         alt_flag = Qt.KeyboardModifier.AltModifier
         shift_flag = Qt.KeyboardModifier.ShiftModifier
         meta_flag = Qt.KeyboardModifier.MetaModifier
-        ctrl_mask = int(ctrl_flag.value) if hasattr(ctrl_flag, "value") else int(ctrl_flag)
-        alt_mask = int(alt_flag.value) if hasattr(alt_flag, "value") else int(alt_flag)
-        shift_mask = int(shift_flag.value) if hasattr(shift_flag, "value") else int(shift_flag)
-        meta_mask = int(meta_flag.value) if hasattr(meta_flag, "value") else int(meta_flag)
+        ctrl_mask = self._qt_enum_int(ctrl_flag)
+        alt_mask = self._qt_enum_int(alt_flag)
+        shift_mask = self._qt_enum_int(shift_flag)
+        meta_mask = self._qt_enum_int(meta_flag)
 
         if modifiers & ctrl_mask:
             mod_flags |= 0x0002
@@ -587,6 +594,10 @@ class MainWindow(QMainWindow):
         if vk is None:
             return None
         return mod_flags, vk
+
+    @staticmethod
+    def _qt_enum_int(value: object) -> int:
+        return int(cast(Any, getattr(value, "value", value)))
 
     def _register_global_hotkeys(self) -> None:
         if not self._global_hotkey_enabled:
@@ -635,7 +646,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _encode_bytes(data: QByteArray) -> str:
-        return bytes(data.toBase64()).decode("ascii")
+        return bytes(cast(Any, data.toBase64())).decode("ascii")
 
     @staticmethod
     def _decode_bytes(text: str) -> QByteArray:
@@ -933,6 +944,7 @@ class MainWindow(QMainWindow):
             "stress_sdnn": float(getattr(r, "sdnn", 0.0) or 0.0),
             "stress_lf_hf": float(getattr(r, "lf_hf", 0.0) or 0.0),
             "stress_sqi": float(getattr(r, "sqi", 0.0) or 0.0),
+            "stress_quality_score": float(getattr(r, "quality_score", 0.0) or 0.0),
             "stress_peak_freq": float(getattr(r, "peak_freq_hz", 0.0) or 0.0),
             "stress_hrv_confidence": str(getattr(r, "hrv_confidence", "") or ""),
             "stress_ibi_artifact_ratio": float(getattr(r, "ibi_artifact_ratio", 0.0) or 0.0),
@@ -949,6 +961,8 @@ class MainWindow(QMainWindow):
             "head_pitch": float(getattr(f, "head_pitch", 0.0) or 0.0),
             "head_yaw": float(getattr(f, "head_yaw", 0.0) or 0.0),
             "head_roll": float(getattr(f, "head_roll", 0.0) or 0.0),
+            "fatigue_quality_score": float(getattr(f, "quality_score", 0.0) or 0.0),
+            "fatigue_blend_calib_progress": float(getattr(f, "blend_calib_progress", 0.0) or 0.0),
             "early_warning": bool(getattr(f, "early_warning", False)) if f else False,
             "blink_rate_pm": float(getattr(f, "blink_rate_pm", 0.0) or 0.0),
             "is_squinting": bool(getattr(f, "is_squinting", False)) if f else False,
@@ -989,11 +1003,11 @@ class MainWindow(QMainWindow):
         buffer = QByteArray()
         qbuffer = QBuffer(buffer)
         qbuffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        ok = image.save(qbuffer, "JPEG", quality)
+        ok = image.save(qbuffer, b"JPEG", quality)
         qbuffer.close()
         if not ok:
             return None
-        return bytes(buffer.toBase64()).decode("ascii")
+        return bytes(cast(Any, buffer.toBase64())).decode("ascii")
 
     def _emit_web_frame(self, image: QImage) -> None:
         if self._web_server is None:
@@ -1082,6 +1096,15 @@ class MainWindow(QMainWindow):
             "sdnn": float(getattr(r, "sdnn", 0.0) or 0.0),
             "lf_hf": float(getattr(r, "lf_hf", 0.0) or 0.0),
             "sqi": float(getattr(r, "sqi", 0.0) or 0.0),
+            "rppg_quality_score": float(getattr(r, "quality_score", 0.0) or 0.0),
+            "rppg_pose_roll_deg": float(getattr(r, "pose_roll_deg", 0.0) or 0.0),
+            "rppg_pose_yaw_deg": float(getattr(r, "pose_yaw_deg", 0.0) or 0.0),
+            "rppg_pose_pitch_deg": float(getattr(r, "pose_pitch_deg", 0.0) or 0.0),
+            "rppg_roi_valid_count": int(getattr(r, "roi_valid_count", 0) or 0),
+            "rppg_roi_weight_forehead": float(getattr(r, "roi_weight_forehead", 0.0) or 0.0),
+            "rppg_roi_weight_l_cheek": float(getattr(r, "roi_weight_l_cheek", 0.0) or 0.0),
+            "rppg_roi_weight_r_cheek": float(getattr(r, "roi_weight_r_cheek", 0.0) or 0.0),
+            "rppg_roi_weight_glabella": float(getattr(r, "roi_weight_glabella", 0.0) or 0.0),
             "stress_prob": float(getattr(r, "stress_prob", 0.0) or 0.0),
             "stress_status": str(getattr(r, "stress_status", "") or ""),
             "hrv_confidence": str(getattr(r, "hrv_confidence", "") or ""),
@@ -1093,6 +1116,8 @@ class MainWindow(QMainWindow):
             "calibrated": 1 if getattr(f, "calibrated", False) else 0,
             "status": str(getattr(f, "status", "") or ""),
             "fatigue_level": float(getattr(f, "fatigue_level", 0.0) or 0.0),
+            "fatigue_quality_score": float(getattr(f, "quality_score", 0.0) or 0.0),
+            "fatigue_blend_calib_progress": float(getattr(f, "blend_calib_progress", 0.0) or 0.0),
             "early_warning": 1 if getattr(f, "early_warning", False) else 0,
             "ear": float(getattr(f, "ear", 0.0) or 0.0),
             "ear_smooth": float(getattr(f, "ear_smooth", 0.0) or 0.0),
@@ -1230,7 +1255,7 @@ class MainWindow(QMainWindow):
         except (ValueError, AttributeError):
             target_fps = 30
 
-        backend = self._cmb_backend.currentData() or "ffmpeg"
+        backend = self._cmb_backend.currentData() or "auto"
         backend_label = self._cmb_backend.currentText().split("（")[0].strip()
 
         thread = QThread(self)
@@ -1818,4 +1843,4 @@ class MainWindow(QMainWindow):
             if msg.message == 0x0312:
                 self._on_global_hotkey(int(msg.wParam))
                 return True, 0
-        return super().nativeEvent(event_type, message)
+        return super().nativeEvent(cast(Any, event_type), message)

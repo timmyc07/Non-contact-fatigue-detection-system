@@ -307,8 +307,10 @@ class PreviewOverlayWindow(QWidget):
         stress_row.setSpacing(20)
         self._lbl_stress   = self._metric_label("壓力指數", "— (—)")
         self._lbl_hrv_conf = self._metric_label("HRV 信心", "LOW")
+        self._lbl_rppg_q   = self._metric_label("品質", "—")
         stress_row.addWidget(self._lbl_stress)
         stress_row.addWidget(self._lbl_hrv_conf)
+        stress_row.addWidget(self._lbl_rppg_q)
         stress_row.addStretch(1)
         rp.addLayout(stress_row)
 
@@ -368,7 +370,8 @@ class PreviewOverlayWindow(QWidget):
         self._lbl_blinks   = self._metric_label("眨眼/分",  "—")
         self._lbl_perclos  = self._metric_label("PERCLOS", "—")
         self._lbl_fat_lvl  = self._metric_label("疲勞指數", "—")
-        for w in (self._lbl_ear, self._lbl_blinks, self._lbl_perclos, self._lbl_fat_lvl):
+        self._lbl_fat_q    = self._metric_label("品質", "—")
+        for w in (self._lbl_ear, self._lbl_blinks, self._lbl_perclos, self._lbl_fat_lvl, self._lbl_fat_q):
             ear_row.addWidget(w)
         ear_row.addStretch(1)
         fp.addLayout(ear_row)
@@ -386,10 +389,19 @@ class PreviewOverlayWindow(QWidget):
         self._lbl_frown.setStyleSheet("color: #dee2e6; font-size: 11px;")
         self._lbl_iris   = QLabel("虹膜比: —")
         self._lbl_iris.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_nose   = QLabel("鼻動: —")
+        self._lbl_nose.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_mouth  = QLabel("嘴開: —")
+        self._lbl_mouth.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_lidbal = QLabel("眼瞼差: —")
+        self._lbl_lidbal.setStyleSheet("color: #dee2e6; font-size: 11px;")
         micro_row.addWidget(lbl_micro_cap)
         micro_row.addWidget(self._lbl_squint)
         micro_row.addWidget(self._lbl_frown)
         micro_row.addWidget(self._lbl_iris)
+        micro_row.addWidget(self._lbl_nose)
+        micro_row.addWidget(self._lbl_mouth)
+        micro_row.addWidget(self._lbl_lidbal)
         micro_row.addStretch(1)
         fp.addLayout(micro_row)
 
@@ -601,6 +613,8 @@ class PreviewOverlayWindow(QWidget):
         prob_str = f"{metrics.stress_prob:.0%}" if metrics.stress_prob > 0 else "—"
         self._set_metric(self._lbl_stress, "壓力指數",
                          f"{prob_str}  ({metrics.stress_status})")
+        q_str = f"{metrics.quality_score:.2f}" if metrics.quality_score > 0 else "—"
+        self._set_metric(self._lbl_rppg_q, "品質", q_str)
 
         # HRV confidence
         conf_color = {"HIGH": "#40c057", "MEDIUM": "#ffd43b", "LOW": "#ff6b6b"}.get(
@@ -721,6 +735,8 @@ class PreviewOverlayWindow(QWidget):
         self._set_metric(self._lbl_perclos, "PERCLOS", perclos_str)
         fat_str = f"{metrics.fatigue_level*100:.0f}%" if metrics.face_detected else "—"
         self._set_metric(self._lbl_fat_lvl, "疲勞指數", fat_str)
+        q_str = f"{metrics.quality_score:.2f}" if metrics.face_detected else "—"
+        self._set_metric(self._lbl_fat_q, "品質", q_str)
 
         # Micro-expressions
         if metrics.is_squinting:
@@ -748,6 +764,26 @@ class PreviewOverlayWindow(QWidget):
         else:
             self._lbl_iris.setText("虹膜比: —")
             self._lbl_iris.setStyleSheet("color: #495057; font-size: 11px;")
+
+        if metrics.face_detected:
+            nose_col = "#40c057" if metrics.nose_speed < 120.0 else "#ff6b6b"
+            self._lbl_nose.setText(f"鼻動: {metrics.nose_speed:.0f}")
+            self._lbl_nose.setStyleSheet(f"color: {nose_col}; font-size: 11px;")
+
+            mouth_col = "#ffa94d" if metrics.mouth_open_ratio > 0.30 else "#dee2e6"
+            self._lbl_mouth.setText(f"嘴開: {metrics.mouth_open_ratio:.2f}")
+            self._lbl_mouth.setStyleSheet(f"color: {mouth_col}; font-size: 11px;")
+
+            lid_col = "#ffa94d" if metrics.lid_balance > 0.35 else "#dee2e6"
+            self._lbl_lidbal.setText(f"眼瞼差: {metrics.lid_balance:.2f}")
+            self._lbl_lidbal.setStyleSheet(f"color: {lid_col}; font-size: 11px;")
+        else:
+            self._lbl_nose.setText("鼻動: —")
+            self._lbl_nose.setStyleSheet("color: #495057; font-size: 11px;")
+            self._lbl_mouth.setText("嘴開: —")
+            self._lbl_mouth.setStyleSheet("color: #495057; font-size: 11px;")
+            self._lbl_lidbal.setText("眼瞼差: —")
+            self._lbl_lidbal.setStyleSheet("color: #495057; font-size: 11px;")
 
         # Gaze dynamics
         stab = metrics.gaze_stability_index
