@@ -307,8 +307,10 @@ class PreviewOverlayWindow(QWidget):
         stress_row.setSpacing(20)
         self._lbl_stress   = self._metric_label("壓力指數", "— (—)")
         self._lbl_hrv_conf = self._metric_label("HRV 信心", "LOW")
+        self._lbl_rppg_q   = self._metric_label("品質", "—")
         stress_row.addWidget(self._lbl_stress)
         stress_row.addWidget(self._lbl_hrv_conf)
+        stress_row.addWidget(self._lbl_rppg_q)
         stress_row.addStretch(1)
         rp.addLayout(stress_row)
 
@@ -368,7 +370,8 @@ class PreviewOverlayWindow(QWidget):
         self._lbl_blinks   = self._metric_label("眨眼/分",  "—")
         self._lbl_perclos  = self._metric_label("PERCLOS", "—")
         self._lbl_fat_lvl  = self._metric_label("疲勞指數", "—")
-        for w in (self._lbl_ear, self._lbl_blinks, self._lbl_perclos, self._lbl_fat_lvl):
+        self._lbl_fat_q    = self._metric_label("品質", "—")
+        for w in (self._lbl_ear, self._lbl_blinks, self._lbl_perclos, self._lbl_fat_lvl, self._lbl_fat_q):
             ear_row.addWidget(w)
         ear_row.addStretch(1)
         fp.addLayout(ear_row)
@@ -610,6 +613,8 @@ class PreviewOverlayWindow(QWidget):
         prob_str = f"{metrics.stress_prob:.0%}" if metrics.stress_prob > 0 else "—"
         self._set_metric(self._lbl_stress, "壓力指數",
                          f"{prob_str}  ({metrics.stress_status})")
+        q_str = f"{metrics.quality_score:.2f}" if metrics.quality_score > 0 else "—"
+        self._set_metric(self._lbl_rppg_q, "品質", q_str)
 
         # HRV confidence
         conf_color = {"HIGH": "#40c057", "MEDIUM": "#ffd43b", "LOW": "#ff6b6b"}.get(
@@ -730,6 +735,8 @@ class PreviewOverlayWindow(QWidget):
         self._set_metric(self._lbl_perclos, "PERCLOS", perclos_str)
         fat_str = f"{metrics.fatigue_level*100:.0f}%" if metrics.face_detected else "—"
         self._set_metric(self._lbl_fat_lvl, "疲勞指數", fat_str)
+        q_str = f"{metrics.quality_score:.2f}" if metrics.face_detected else "—"
+        self._set_metric(self._lbl_fat_q, "品質", q_str)
 
         # Micro-expressions
         if metrics.is_squinting:

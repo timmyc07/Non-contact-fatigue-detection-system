@@ -153,6 +153,13 @@ def _bs(bs: dict[str, float], *names: str) -> float:
     return max((float(bs.get(name.lower(), 0.0)) for name in names), default=0.0)
 
 
+def _norm_blend(raw: float, base: float) -> float:
+    if raw <= 0.0:
+        return 0.0
+    denom = max(1e-6, 1.0 - base)
+    return _clamp((raw - base) / denom, 0.0, 1.0)
+
+
 def _clamp(x: float, a: float, b: float) -> float:
     return max(a, min(b, x))
 
@@ -277,6 +284,15 @@ class FatigueParams:
     # V2 — Pupillometry
     iris_ratio_ema_alpha: float = 0.10   # EMA for iris_ratio trend
 
+    # V2 — Blendshape calibration / thresholds
+    blend_calib_sec: float = 4.0
+    blend_min_samples: int = 24
+    blend_ema_alpha: float = 0.22
+    blend_blink_gate: float = 0.20
+    blend_squint_gate: float = 0.18
+    blend_brow_gate: float = 0.18
+    blend_jaw_gate: float = 0.20
+
 
 # ── Output metrics dataclass ─────────────────────────────────────────────────
 
@@ -339,6 +355,8 @@ class FatigueMetrics:
     yawn_count:   int   = 0
     mouth_open_ratio: float = 0.0
     mouth_blend_stretch: float = 0.0
+    quality_score: float = 0.0
+    blend_calib_progress: float = 0.0
 
     # Debug / display
     has_iris:     bool  = False
@@ -404,6 +422,18 @@ class EyeCognitiveModule:
         self.blend_eye_blink    = 0.0
         self.blend_eye_squint   = 0.0
         self.blend_brow_down    = 0.0
+        self.blend_calib_progress = 0.0
+        self._blend_calibrated = False
+        self._blend_samples: dict[str, list[float]] = {
+            "blink": [],
+            "squint": [],
+            "brow": [],
+        }
+        self._blend_baseline: dict[str, float] = {
+            "blink": 0.0,
+            "squint": 0.0,
+            "brow": 0.0,
+        }
 
         # Nose speed (quality gate)
         self._prev_nose: Optional[tuple] = None
@@ -449,9 +479,35 @@ class EyeCognitiveModule:
     ) -> None:
         p = self.p
         bs = _blendshape_map(blendshapes)
-        self.blend_eye_blink = _bs(bs, "eye_blink_left", "eye_blink_right")
-        self.blend_eye_squint = _bs(bs, "eye_squint_left", "eye_squint_right")
-        self.blend_brow_down = _bs(bs, "brow_down_left", "brow_down_right", "brow_inner_up")
+        raw_eye_blink = _bs(bs, "eye_blink_left", "eye_blink_right")
+        raw_eye_squint = _bs(bs, "eye_squint_left", "eye_squint_right")
+        raw_brow_down = _bs(bs, "brow_down_left", "brow_down_right", "brow_inner_up")
+        self.blend_calib_progress = _clamp(
+            (t_now - self._calib_start) / max(p.blend_calib_sec, 1e-6), 0.0, 1.0
+        )
+        if not self._blend_calibrated:
+            if fatigue_quality > 0.55 and blink_ok:
+                self._blend_samples["blink"].append(raw_eye_blink)
+                self._blend_samples["squint"].append(raw_eye_squint)
+                self._blend_samples["brow"].append(raw_brow_down)
+            if (
+                self.blend_calib_progress >= 1.0
+                and min(len(v) for v in self._blend_samples.values()) >= p.blend_min_samples
+            ):
+                self._blend_baseline = {
+                    key: float(np.median(vals)) if vals else 0.0
+                    for key, vals in self._blend_samples.items()
+                }
+                self._blend_calibrated = True
+                log.info(
+                    "Blendshape 校準完成：blink=%.3f squint=%.3f brow=%.3f",
+                    self._blend_baseline["blink"],
+                    self._blend_baseline["squint"],
+                    self._blend_baseline["brow"],
+                )
+        self.blend_eye_blink = _norm_blend(raw_eye_blink, self._blend_baseline["blink"])
+        self.blend_eye_squint = _norm_blend(raw_eye_squint, self._blend_baseline["squint"])
+        self.blend_brow_down = _norm_blend(raw_brow_down, self._blend_baseline["brow"])
 
         # ── EAR ─────────────────────────────────────────────────────────────
         l_pts = [_p(lm, w, h, i) for i in LEFT_EYE_IDX]
@@ -570,7 +626,7 @@ class EyeCognitiveModule:
                 close_blink < ear_s < squint_th
                 and not self._blink_closed
                 and self.lid_balance < p.lid_balance_gate_th
-                and self.blend_eye_blink < 0.75
+                and self.blend_eye_blink < p.blend_blink_gate
             ):
                 if self._squint_enter_t is None:
                     self._squint_enter_t = t_now
@@ -616,7 +672,7 @@ class EyeCognitiveModule:
                 )
                 self.is_frowning = (
                     self.brow_dist_norm < p.brow_furrow_ratio
-                    or self.blend_brow_down > 0.35
+                    or self.blend_brow_down > p.blend_brow_gate
                 )
 
         # ── V2: Pupillometry ─────────────────────────────────────────────────
@@ -792,12 +848,18 @@ class HeadMouthModule:
         self._yawn_fired                = False
         self.yawn_count = 0 if full else getattr(self, "yawn_count", 0)
         self.mouth_open_ratio = 0.0
+        self.mouth_blend_stretch = 0.0
+        self._mouth_blend_calibrated = False
+        self._mouth_blend_samples: list[float] = []
+        self._mouth_blend_baseline = 0.0
 
     def step(
         self,
         lm: Any, w: int, h: int,
         t_now: float,
         blendshapes: Any | None = None,
+        fatigue_quality: float = 1.0,
+        blend_calib_progress: float = 0.0,
         run_pose: bool = True,
     ) -> tuple[bool, bool]:
         """Returns (microsleep_alert, yawn_detected)."""
@@ -850,13 +912,26 @@ class HeadMouthModule:
         mouth_w = _dist(_p(lm, w, h, 61), _p(lm, w, h, 291)) + 1e-6
         mouth_gap = _dist(_p(lm, w, h, 13), _p(lm, w, h, 14))
         self.mouth_open_ratio = mouth_gap / mouth_w
-        mouth_blend_stretch = _bs(bs, "mouth_stretch_left", "mouth_stretch_right", "jaw_open")
-        self.mouth_blend_stretch = mouth_blend_stretch
+        mouth_blend_raw = _bs(bs, "mouth_stretch_left", "mouth_stretch_right", "jaw_open")
+        if not self._mouth_blend_calibrated:
+            if self.mouth_open_ratio < p.mouth_open_noise_th and fatigue_quality > 0.55:
+                self._mouth_blend_samples.append(mouth_blend_raw)
+            if (
+                blend_calib_progress >= 1.0
+                and len(self._mouth_blend_samples) >= p.blend_min_samples
+            ):
+                self._mouth_blend_baseline = float(np.median(self._mouth_blend_samples))
+                self._mouth_blend_calibrated = True
+                log.info(
+                    "嘴部 blendshape 校準完成：baseline=%.3f",
+                    self._mouth_blend_baseline,
+                )
+        self.mouth_blend_stretch = _norm_blend(mouth_blend_raw, self._mouth_blend_baseline)
         yawn_detected = False
         if (
             self.mar > p.mar_yawn_th
             and self.mouth_open_ratio > p.mouth_open_yawn_th
-            and mouth_blend_stretch > 0.25
+            and self.mouth_blend_stretch > p.blend_jaw_gate
         ):
             if self._yawn_open_start is None:
                 self._yawn_open_start = t_now
@@ -1006,7 +1081,14 @@ class FatigueEngine:
         self.gaze.step(lm, t_now, has_iris)
 
         microsleep_alert, yawn_detected = self.head.step(
-            lm, w, h, t_now, blendshapes=blendshapes, run_pose=run_pose
+            lm,
+            w,
+            h,
+            t_now,
+            blendshapes=blendshapes,
+            fatigue_quality=fatigue_q,
+            blend_calib_progress=self.eye.blend_calib_progress,
+            run_pose=run_pose,
         )
 
         # ── Status & composite fatigue level ─────────────────────────────────
@@ -1016,8 +1098,8 @@ class FatigueEngine:
             or self.eye.is_frowning
             or self.gaze.gaze_mental_fatigue
             or (self.gaze.fixation_duration > 15.0)
-            or self.eye.blend_eye_squint > 0.35
-            or self.eye.blend_brow_down > 0.35
+            or self.eye.blend_eye_squint > p.blend_squint_gate
+            or self.eye.blend_brow_down > p.blend_brow_gate
             or (
                 self.eye.lid_balance > p.lid_balance_gate_th
                 and self.eye.ear_smooth < self.eye.base_ear_th * 1.25
@@ -1046,11 +1128,12 @@ class FatigueEngine:
             + (self.eye.squint_duration / 30.0 if self.eye.is_squinting else 0.0) * 0.15
             + (0.15 if self.eye.is_frowning else 0.0)
             + (0.10 if self.gaze.gaze_mental_fatigue else 0.0)
-            + (0.05 if self.eye.blend_eye_squint > 0.35 else 0.0)
-            + (0.05 if self.eye.blend_brow_down > 0.35 else 0.0)
+            + (0.05 if self.eye.blend_eye_squint > p.blend_squint_gate else 0.0)
+            + (0.05 if self.eye.blend_brow_down > p.blend_brow_gate else 0.0)
             + (self.head.yawn_count / 10.0) * 0.05,
             0.0, 1.0,
         )
+        quality_score = _clamp(fatigue_q)
 
         return FatigueMetrics(
             face_detected   = True,
@@ -1101,6 +1184,8 @@ class FatigueEngine:
             mouth_open_ratio = self.head.mouth_open_ratio,
             blend_jaw_open  = self.head.mouth_blend_stretch,
             mouth_blend_stretch = self.head.mouth_blend_stretch,
+            quality_score   = quality_score,
+            blend_calib_progress = self.eye.blend_calib_progress,
             # Meta
             has_iris        = has_iris,
             calib_progress  = self.eye.calib_progress,

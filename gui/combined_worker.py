@@ -41,6 +41,7 @@ from .fatigue_worker import draw_fatigue_annotations
 from rppg.rppg_worker import (
     RppgEngine, RppgMetrics,
     draw_rois, roi_mean_bgr, ROI_SPECS,
+    _pose_from_matrix, _roi_weights_from_pose,
     ensure_face_model, _MODELS_DIR,
 )
 
@@ -132,6 +133,9 @@ class CombinedWorker(QObject):
             base_options=base_opts,
             output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
+            min_face_detection_confidence=0.55,
+            min_face_presence_confidence=0.55,
+            min_tracking_confidence=0.60,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
@@ -189,6 +193,10 @@ class CombinedWorker(QObject):
                 if has_face:
                     lm       = result.face_landmarks[0]
                     h_px, w_px = bgr.shape[:2]
+                    transform_matrix = (
+                        result.facial_transformation_matrixes[0]
+                        if result.facial_transformation_matrixes else None
+                    )
 
                     # ── Step 1: Fatigue annotations (drawn first, underneath rPPG ROI)
                     if fatigue_engine is not None:
@@ -199,18 +207,37 @@ class CombinedWorker(QObject):
 
                     # ── Step 2: rPPG ROI extraction + engine (draws on top)
                     if rppg_engine is not None:
-                        draw_rois(annotated, lm)   # yellow ROI outlines on top
+                        draw_rois(annotated, lm, transform_matrix)   # yellow ROI outlines on top
+                        roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(
+                            transform_matrix, lm, w_px, h_px
+                        )
+                        roi_weights = _roi_weights_from_pose(
+                            roll_deg, yaw_deg, pitch_deg, lm, w_px, h_px
+                        )
                         rgbs: list[tuple[float, float, float]] = []
-                        for _, indices in ROI_SPECS:
-                            val = roi_mean_bgr(bgr, lm, indices)   # use clean bgr for signal
-                            if val:
+                        weights: list[float] = []
+                        for name, indices in ROI_SPECS:
+                            val = roi_mean_bgr(
+                                bgr, lm, indices, transform_matrix=transform_matrix
+                            )
+                            weight = roi_weights.get(name, 0.0)
+                            if val and weight > 0.0:
                                 rgbs.append(val)
+                                weights.append(weight)
                         if rgbs:
-                            r_avg = sum(x[0] for x in rgbs) / len(rgbs)
-                            g_avg = sum(x[1] for x in rgbs) / len(rgbs)
-                            b_avg = sum(x[2] for x in rgbs) / len(rgbs)
+                            total_w = sum(weights) or float(len(rgbs))
+                            r_avg = sum(x[0] * w for x, w in zip(rgbs, weights)) / total_w
+                            g_avg = sum(x[1] * w for x, w in zip(rgbs, weights)) / total_w
+                            b_avg = sum(x[2] * w for x, w in zip(rgbs, weights)) / total_w
                             rppg_engine.push(ts, r_avg, g_avg, b_avg)
-                        r_metrics = rppg_engine.compute(ts, bgr, lm)
+                        r_metrics = rppg_engine.compute(
+                            ts,
+                            bgr,
+                            lm,
+                            transform_matrix=transform_matrix,
+                            roi_valid_count=len(rgbs),
+                        )
+                        r_metrics.roi_valid_count = len(rgbs)
                         r_metrics.face_detected = True
                         self.rppg_metrics_ready.emit(r_metrics)
 

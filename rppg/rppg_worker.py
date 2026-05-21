@@ -51,6 +51,24 @@ ROI_SPECS: list[tuple[str, list[int]]] = [
     ("glabella", GLABELLA_ROI_IDX),
 ]
 
+ROI_BASE_WEIGHTS = {
+    "forehead": 0.34,
+    "L_cheek": 0.25,
+    "R_cheek": 0.25,
+    "glabella": 0.16,
+}
+
+FOREHEAD_IDX = 10
+CHIN_IDX = 152
+NOSE_TIP_IDX = 1
+LEFT_CHEEK_IDX = 234
+RIGHT_CHEEK_IDX = 454
+FACE_OVAL_IDXS = [
+    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+    397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+    172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
+]
+
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"
@@ -74,6 +92,15 @@ class RppgMetrics:
     peak_freq_hz:      float = 0.0
     frame_brightness:  float = 0.0
     warmup_progress:   float = 0.0
+    quality_score:     float = 0.0
+    pose_roll_deg:     float = 0.0
+    pose_yaw_deg:      float = 0.0
+    pose_pitch_deg:    float = 0.0
+    roi_valid_count:   int   = 0
+    roi_weight_forehead: float = 0.0
+    roi_weight_l_cheek:   float = 0.0
+    roi_weight_r_cheek:    float = 0.0
+    roi_weight_glabella:   float = 0.0
     face_detected:     bool  = False
     waveform:  list[float] = field(default_factory=list)
     psd_freqs: list[float] = field(default_factory=list)
@@ -82,9 +109,141 @@ class RppgMetrics:
 
 # ── Signal processing helpers ────────────────────────────────────────────────
 
+def _clamp(x: float, a: float = 0.0, b: float = 1.0) -> float:
+    return max(a, min(b, x))
+
+
 def _lm_xy(lm: Any, idx: int, w: int, h: int) -> tuple[int, int]:
     p = lm[idx]
     return int(float(p.x) * w), int(float(p.y) * h)
+
+
+def _dist(p1: tuple[float, float], p2: tuple[float, float]) -> float:
+    return float(np.hypot(p1[0] - p2[0], p1[1] - p2[1]))
+
+
+def _lm_xyf(lm: Any, idx: int, w: int, h: int) -> tuple[float, float]:
+    x, y = _lm_xy(lm, idx, w, h)
+    return float(x), float(y)
+
+
+def _face_center_px(lm: Any, w: int, h: int) -> tuple[float, float]:
+    pts = np.array([_lm_xy(lm, idx, w, h) for idx in FACE_OVAL_IDXS], dtype=np.float64)
+    if pts.size == 0:
+        return 0.0, 0.0
+    return float(np.mean(pts[:, 0])), float(np.mean(pts[:, 1]))
+
+
+def _rotate_points(
+    pts: np.ndarray,
+    center: tuple[float, float],
+    angle_deg: float,
+) -> np.ndarray:
+    if pts.size == 0 or abs(angle_deg) < 1e-6:
+        return pts
+    ang = np.deg2rad(angle_deg)
+    c = float(np.cos(ang))
+    s = float(np.sin(ang))
+    rot = np.array([[c, -s], [s, c]], dtype=np.float64)
+    ctr = np.array(center, dtype=np.float64)
+    return ((pts.astype(np.float64) - ctr) @ rot.T) + ctr
+
+
+def _pose_from_matrix(
+    transform_matrix: Any | None,
+    lm: Any,
+    w: int,
+    h: int,
+) -> tuple[float, float, float, float]:
+    """Return (roll_deg, yaw_deg, pitch_deg, scale)."""
+    if transform_matrix is not None:
+        try:
+            mat = np.asarray(transform_matrix, dtype=np.float64)
+            if mat.shape[0] >= 3 and mat.shape[1] >= 3:
+                rot = mat[:3, :3].copy()
+                scale = float(np.mean([np.linalg.norm(rot[:, i]) for i in range(3)]))
+                if scale > 1e-8:
+                    rot /= scale
+                roll = float(np.degrees(np.arctan2(rot[1, 0], rot[0, 0])))
+                yaw = float(
+                    np.degrees(
+                        np.arctan2(-rot[2, 0], np.hypot(rot[0, 0], rot[1, 0]))
+                    )
+                )
+                pitch = float(np.degrees(np.arctan2(rot[2, 1], rot[2, 2])))
+                return roll, yaw, pitch, max(scale, 1e-6)
+        except Exception:
+            pass
+
+    try:
+        le = _lm_xyf(lm, 33, w, h)
+        re = _lm_xyf(lm, 263, w, h)
+        roll = float(np.degrees(np.arctan2(re[1] - le[1], re[0] - le[0])))
+        n_pt = _lm_xyf(lm, NOSE_TIP_IDX, w, h)
+        l_pt = _lm_xyf(lm, LEFT_CHEEK_IDX, w, h)
+        r_pt = _lm_xyf(lm, RIGHT_CHEEK_IDX, w, h)
+        d_l = _dist(n_pt, l_pt)
+        d_r = _dist(n_pt, r_pt)
+        yaw = float(np.degrees(np.arctan2(d_r - d_l, d_r + d_l + 1e-6)) * 2.0)
+        forehead = _lm_xyf(lm, FOREHEAD_IDX, w, h)
+        chin = _lm_xyf(lm, CHIN_IDX, w, h)
+        pitch = float(
+            np.degrees(np.arctan2(chin[1] - forehead[1], abs(chin[0] - forehead[0]) + 1e-6))
+        )
+        return roll, yaw, pitch, 1.0
+    except Exception:
+        return 0.0, 0.0, 0.0, 1.0
+
+
+def _roi_weights_from_pose(
+    roll_deg: float,
+    yaw_deg: float,
+    pitch_deg: float,
+    lm: Any,
+    w: int,
+    h: int,
+) -> dict[str, float]:
+    roll_q = _clamp(1.0 - abs(roll_deg) / 42.0, 0.35, 1.0)
+    yaw_q = _clamp(1.0 - abs(yaw_deg) / 42.0, 0.35, 1.0)
+    pitch_q = _clamp(1.0 - max(0.0, abs(pitch_deg) - 8.0) / 34.0, 0.35, 1.0)
+
+    n_pt = _lm_xyf(lm, NOSE_TIP_IDX, w, h)
+    l_pt = _lm_xyf(lm, LEFT_CHEEK_IDX, w, h)
+    r_pt = _lm_xyf(lm, RIGHT_CHEEK_IDX, w, h)
+    d_l = _dist(n_pt, l_pt)
+    d_r = _dist(n_pt, r_pt)
+    total = d_l + d_r + 1e-6
+    left_bias = _clamp(d_r / total, 0.35, 1.15)
+    right_bias = _clamp(d_l / total, 0.35, 1.15)
+
+    weights = {
+        "forehead": ROI_BASE_WEIGHTS["forehead"] * roll_q * pitch_q,
+        "L_cheek": ROI_BASE_WEIGHTS["L_cheek"] * roll_q * yaw_q * left_bias,
+        "R_cheek": ROI_BASE_WEIGHTS["R_cheek"] * roll_q * yaw_q * right_bias,
+        "glabella": ROI_BASE_WEIGHTS["glabella"] * (0.70 * roll_q + 0.30 * pitch_q),
+    }
+    total_w = sum(weights.values()) or 1.0
+    return {k: float(v / total_w) for k, v in weights.items()}
+
+
+def _face_quality_from_pose(
+    roll_deg: float,
+    yaw_deg: float,
+    pitch_deg: float,
+    face_area_ratio: float,
+    face_motion_norm: float,
+    roi_valid_ratio: float,
+) -> float:
+    pose_q = _clamp(
+        0.40 * (1.0 - abs(roll_deg) / 48.0)
+        + 0.35 * (1.0 - abs(yaw_deg) / 48.0)
+        + 0.25 * (1.0 - max(0.0, abs(pitch_deg) - 6.0) / 38.0),
+        0.0, 1.0,
+    )
+    motion_q = _clamp(1.0 - face_motion_norm / 0.85, 0.0, 1.0)
+    coverage_q = _clamp(face_area_ratio / 0.08, 0.0, 1.0)
+    roi_q = _clamp(roi_valid_ratio, 0.0, 1.0)
+    return float(_clamp(0.30 * pose_q + 0.25 * motion_q + 0.25 * coverage_q + 0.20 * roi_q))
 
 
 def roi_mean_bgr(
@@ -92,11 +251,17 @@ def roi_mean_bgr(
     lm: Any,
     indices: list[int],
     blur_ksize: int = 5,
+    transform_matrix: Any | None = None,
 ) -> Optional[tuple[float, float, float]]:
     h, w = frame_bgr.shape[:2]
-    pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.int32)
+    pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.float64)
     if pts.shape[0] < 3:
         return None
+    if transform_matrix is not None:
+        roll_deg, _, _, _ = _pose_from_matrix(transform_matrix, lm, w, h)
+        center = _face_center_px(lm, w, h)
+        pts = _rotate_points(pts, center, -roll_deg)
+    pts = np.round(pts).astype(np.int32)
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillConvexPoly(mask, pts, 255)
     if cv2.countNonZero(mask) < 30:
@@ -106,10 +271,15 @@ def roi_mean_bgr(
     return float(mean[2]), float(mean[1]), float(mean[0])  # R, G, B
 
 
-def draw_rois(frame_bgr: np.ndarray, lm: Any) -> None:
+def draw_rois(frame_bgr: np.ndarray, lm: Any, transform_matrix: Any | None = None) -> None:
     h, w = frame_bgr.shape[:2]
+    center = _face_center_px(lm, w, h)
+    roll_deg, _, _, _ = _pose_from_matrix(transform_matrix, lm, w, h)
     for _, indices in ROI_SPECS:
-        pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.int32)
+        pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.float64)
+        if transform_matrix is not None:
+            pts = _rotate_points(pts, center, -roll_deg)
+        pts = np.round(pts).astype(np.int32)
         if pts.shape[0] >= 3:
             cv2.polylines(frame_bgr, [pts], True, (0, 200, 255), 1, cv2.LINE_AA)
 
@@ -332,10 +502,16 @@ class RppgEngine:
         self._b: deque[float] = deque(maxlen=100_000)
         self._t: deque[float] = deque(maxlen=100_000)
         self._last_fs: float = target_fps
+        self._prev_face_center: Optional[tuple[float, float]] = None
+        self._prev_face_center_t: Optional[float] = None
+        self._face_motion_speed: float = 0.0
 
     def reset(self) -> None:
         self._r.clear(); self._g.clear()
         self._b.clear(); self._t.clear()
+        self._prev_face_center = None
+        self._prev_face_center_t = None
+        self._face_motion_speed = 0.0
 
     def push(self, t: float, r: float, g: float, b: float) -> None:
         self._r.append(r); self._g.append(g)
@@ -356,20 +532,56 @@ class RppgEngine:
         self._last_fs = float(np.clip(1.0 / dt, 8.0, 90.0))
         return self._last_fs
 
-    def compute(self, t_now: float, frame_bgr: np.ndarray, lm: Any) -> RppgMetrics:
+    def compute(
+        self,
+        t_now: float,
+        frame_bgr: np.ndarray,
+        lm: Any,
+        transform_matrix: Any | None = None,
+        roi_valid_count: int | None = None,
+    ) -> RppgMetrics:
         self._trim(t_now)
         fs = self._fs()
         n = len(self._t)
         need = int(fs * max(6.0, self.buffer_sec * 0.5))
         warm = float(min(1.0, n / max(need, 1)))
+        roi_valid_ratio = (
+            (roi_valid_count if roi_valid_count is not None else len(ROI_SPECS))
+            / max(len(ROI_SPECS), 1)
+        )
 
-        br = roi_mean_bgr(frame_bgr, lm, FOREHEAD_ROI_IDX)
+        roll_deg, yaw_deg, pitch_deg, _scale = _pose_from_matrix(transform_matrix, lm, *frame_bgr.shape[:2][::-1])
+        face_center = _face_center_px(lm, frame_bgr.shape[1], frame_bgr.shape[0])
+        face_w = float(np.ptp(np.array([_lm_xy(lm, i, frame_bgr.shape[1], frame_bgr.shape[0])[0] for i in FACE_OVAL_IDXS], dtype=np.float64))) + 1e-6
+        face_h = float(np.ptp(np.array([_lm_xy(lm, i, frame_bgr.shape[1], frame_bgr.shape[0])[1] for i in FACE_OVAL_IDXS], dtype=np.float64))) + 1e-6
+        face_area_ratio = (face_w * face_h) / max(1.0, frame_bgr.shape[0] * frame_bgr.shape[1])
+
+        if self._prev_face_center is not None and self._prev_face_center_t is not None:
+            dt_center = t_now - self._prev_face_center_t
+            if dt_center > 1e-4:
+                self._face_motion_speed = _dist(face_center, self._prev_face_center) / dt_center
+        self._prev_face_center = face_center
+        self._prev_face_center_t = t_now
+
+        br = roi_mean_bgr(frame_bgr, lm, FOREHEAD_ROI_IDX, transform_matrix=transform_matrix)
         brightness = float(br[1]) if br else -1.0
 
         if n < int(fs * 4):
+            pose_quality = _face_quality_from_pose(
+                roll_deg,
+                yaw_deg,
+                pitch_deg,
+                face_area_ratio,
+                self._face_motion_speed / max(face_h, 1e-6),
+                roi_valid_ratio,
+            )
             return RppgMetrics(
                 warmup_progress=warm,
                 frame_brightness=brightness,
+                quality_score=pose_quality,
+                pose_roll_deg=roll_deg,
+                pose_yaw_deg=yaw_deg,
+                pose_pitch_deg=pitch_deg,
                 hrv_confidence="LOW",
                 face_detected=True,
             )
@@ -391,6 +603,17 @@ class RppgEngine:
         lf_hf = lf_hf_from_tachogram(ibis_clean)
         prob, st = stress_heuristic(lf_hf, rmssd)
         conf = hrv_confidence(ibis_clean.size, sqi, art)
+        signal_quality = _clamp(0.60 * sqi + 0.40 * (1.0 - art))
+        roi_valid_count = len(ROI_SPECS) if roi_valid_count is None else int(max(0, roi_valid_count))
+        quality_score = _face_quality_from_pose(
+            roll_deg,
+            yaw_deg,
+            pitch_deg,
+            face_area_ratio,
+            self._face_motion_speed / max(face_h, 1e-6),
+            roi_valid_count / max(len(ROI_SPECS), 1),
+        )
+        quality_score = _clamp(0.55 * quality_score + 0.45 * signal_quality)
 
         wf_n = min(160, filt.size)
         wave = filt[-wf_n:].copy()
@@ -412,6 +635,15 @@ class RppgEngine:
             peak_freq_hz=float(peak_f),
             frame_brightness=brightness,
             warmup_progress=warm,
+            quality_score=float(quality_score),
+            pose_roll_deg=float(roll_deg),
+            pose_yaw_deg=float(yaw_deg),
+            pose_pitch_deg=float(pitch_deg),
+            roi_valid_count=int(roi_valid_count),
+            roi_weight_forehead=float(roi_weights.get("forehead", 0.0)),
+            roi_weight_l_cheek=float(roi_weights.get("L_cheek", 0.0)),
+            roi_weight_r_cheek=float(roi_weights.get("R_cheek", 0.0)),
+            roi_weight_glabella=float(roi_weights.get("glabella", 0.0)),
             face_detected=True,
             waveform=[float(x) for x in wave],
             psd_freqs=[float(x) for x in pf],
@@ -487,6 +719,9 @@ class RppgWorker(QObject):
             base_options=base_opts,
             output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
+            min_face_detection_confidence=0.55,
+            min_face_presence_confidence=0.55,
+            min_tracking_confidence=0.60,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
@@ -534,21 +769,43 @@ class RppgWorker(QObject):
 
                 if has_face:
                     lm = result.face_landmarks[0]
-                    draw_rois(annotated, lm)
+                    transform_matrix = (
+                        result.facial_transformation_matrixes[0]
+                        if result.facial_transformation_matrixes else None
+                    )
+                    roll_deg, yaw_deg, pitch_deg, _scale = _pose_from_matrix(
+                        transform_matrix, lm, bgr.shape[1], bgr.shape[0]
+                    )
+                    draw_rois(annotated, lm, transform_matrix)
 
+                    roi_weights = _roi_weights_from_pose(
+                        roll_deg, yaw_deg, pitch_deg, lm, bgr.shape[1], bgr.shape[0]
+                    )
                     rgbs: list[tuple[float, float, float]] = []
-                    for _, indices in ROI_SPECS:
-                        val = roi_mean_bgr(bgr, lm, indices)
-                        if val:
+                    weights: list[float] = []
+                    for name, indices in ROI_SPECS:
+                        val = roi_mean_bgr(bgr, lm, indices, transform_matrix=transform_matrix)
+                        weight = roi_weights.get(name, 0.0)
+                        if val is not None and weight > 0.0:
                             rgbs.append(val)
+                            weights.append(weight)
 
                     if rgbs:
-                        r_avg = sum(x[0] for x in rgbs) / len(rgbs)
-                        g_avg = sum(x[1] for x in rgbs) / len(rgbs)
-                        b_avg = sum(x[2] for x in rgbs) / len(rgbs)
+                        total_w = sum(weights) or float(len(rgbs))
+                        r_avg = sum(x[0] * w for x, w in zip(rgbs, weights)) / total_w
+                        g_avg = sum(x[1] * w for x, w in zip(rgbs, weights)) / total_w
+                        b_avg = sum(x[2] * w for x, w in zip(rgbs, weights)) / total_w
                         engine.push(ts, r_avg, g_avg, b_avg)
 
-                    metrics = engine.compute(ts, bgr, lm)
+                    roi_valid_count = len(rgbs)
+                    metrics = engine.compute(
+                        ts,
+                        bgr,
+                        lm,
+                        transform_matrix=transform_matrix,
+                        roi_valid_count=roi_valid_count,
+                    )
+                    metrics.roi_valid_count = roi_valid_count
                     metrics.face_detected = True
 
                     # Emit status

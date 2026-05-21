@@ -50,6 +50,9 @@ MediaPipe Face Landmarker 負責臉部 landmark 偵測。本專案使用 `face_l
 - `running_mode=VIDEO`：逐幀處理影片串流，並傳入單調遞增 timestamp。
 - `output_face_blendshapes=True`：目前已啟用，供眼、眉、嘴的輔助判定。
 - `output_facial_transformation_matrixes=True`：目前已啟用，保留臉部姿態矩陣以便後續姿態補償與 ROI 對齊擴充。
+- `min_face_detection_confidence=0.55`
+- `min_face_presence_confidence=0.55`
+- `min_tracking_confidence=0.60`
 
 VIDEO mode 要求每次呼叫 `detect_for_video(mp_img, ts_ms)` 時 timestamp 必須單調遞增。程式以第一幀時間作原點，並用 `max(ts_ms_prev + 1, int((ts - t_origin) * 1000))` 保證 timestamp 不倒退。
 
@@ -105,7 +108,7 @@ GUI 啟動攝影機後，資料流如下：
 5. worker 將 BGR 轉 RGB，建立 `mp.Image`。
 6. Face Landmarker 回傳 478 點臉部 landmark。
 7. 程式依 landmark 定義四個 ROI：額頭、左臉頰、右臉頰、眉間。
-8. 每個 ROI 計算 RGB 平均值；多個 ROI 再平均成單筆 `(R, G, B)` 時間序列樣本。
+8. 每個 ROI 計算 RGB 平均值；多個 ROI 依姿態動態權重加權成單筆 `(R, G, B)` 時間序列樣本。
 9. `RppgEngine` 保存最近約 12 秒樣本，估算取樣頻率。
 10. POS 演算法產生原始 pulse。
 11. Butterworth band-pass 過濾保留心率頻段。
@@ -127,13 +130,20 @@ GUI 啟動攝影機後，資料流如下：
 每個 ROI 的處理方式：
 
 1. 將 landmark 正規化座標轉成影像 pixel 座標。
-2. 用 ROI 點建立凸多邊形 mask。
-3. mask 面積小於 30 pixel 時視為無效。
-4. 對整張 BGR 影像做 5x5 Gaussian blur。
-5. 用 mask 取平均色彩。
-6. 回傳 `(R, G, B)`，注意 OpenCV 原影像是 BGR，因此程式會把 `cv2.mean` 的結果轉成 RGB 順序。
+2. 若有 facial transformation matrix，先以該幀估計的 roll 對 ROI polygon 做旋轉補償。
+3. 用 ROI 點建立凸多邊形 mask。
+4. mask 面積小於 30 pixel 時視為無效。
+5. 對整張 BGR 影像做 5x5 Gaussian blur。
+6. 用 mask 取平均色彩。
+7. 回傳 `(R, G, B)`，注意 OpenCV 原影像是 BGR，因此程式會把 `cv2.mean` 的結果轉成 RGB 順序。
 
-多個 ROI 會取平均，降低單一區域受頭髮、陰影、局部表情或遮擋影響的風險。若沒有任何有效 ROI，該幀不會推入 rPPG buffer。
+多個 ROI 不再固定平均，而是依頭部姿態動態分配權重：
+
+- forehead：基礎權重最高，正面視角時優先。
+- 左右 cheek：依 yaw 偏向自動重新分配，較朝向鏡頭的一側權重會提高。
+- glabella：保留較低但穩定的輔助權重。
+
+這樣可以降低側頭、歪頭、局部遮擋時單一 ROI 拉偏訊號的風險。若沒有任何有效 ROI，該幀不會推入 rPPG buffer。
 
 ## 5. POS 脈搏波演算法
 
@@ -232,6 +242,22 @@ SQI 由 `compute_sqi` 計算：
 - SQI 越高，代表波形能量越集中在合理心率頻段。
 - SQI 低通常表示光照變化、臉部移動、ROI 受遮擋或影像品質不足。
 - 融合分數中，若 SQI 低於可靠門檻，rPPG 子分數會被折扣。
+
+## 9.1 統一品質分數
+
+目前系統另外建立 `quality_score`，把以下因素整合成 0 到 1 的工程品質分數：
+
+1. 臉部姿態品質：roll、yaw、pitch 是否偏離穩定視角。
+2. 臉部覆蓋品質：face area 是否足夠大。
+3. 臉部動作品質：face center 的 motion proxy 是否過大。
+4. ROI 可用率：四個 ROI 中有幾個有效。
+5. 訊號品質：`SQI` 與 `1 - ibi_artifact_ratio`。
+
+`quality_score` 的用途：
+
+- GUI 直接顯示目前可用性。
+- Web metrics 與 SQLite 錄製會保留。
+- 融合分數中，rPPG pillar 會再乘上這個品質權重，避免低品質影像把整體疲勞分數推高。
 
 ## 10. Peak Detection 與 IBI
 
@@ -390,7 +416,7 @@ rPPG pillar 最終會乘上 SQI 權重。也就是說，波形品質不足時，
 - 降低 CPU/GPU 負載。
 - rPPG ROI 與疲勞標註使用同一幀 landmark，時間一致。
 
-目前此模式也會讀取 Face Landmarker 的 blendshape 與 transformation matrix 輸出，將表情訊號併入疲勞判定。
+目前此模式也會讀取 Face Landmarker 的 blendshape 與 transformation matrix 輸出，將表情訊號併入疲勞判定，並把同一幀的姿態補償 ROI 供 rPPG 使用。
 
 ### 17.3 CameraStreamWorker
 
@@ -471,7 +497,7 @@ Demo 也支援：
 4. BPM 較可信時通常需要：臉部穩定、光照穩定、SQI 高、artifact ratio 低。
 5. `stress_prob` 是 heuristic，不是醫療診斷。
 6. `face_landmarker.task` 是臉部 landmark 模型，不是心率模型；心率由後續訊號處理演算法估算。
-7. blendshape 與 transformation matrix 目前是輔助特徵，數值仍以幾何 landmark 為主。
+7. blendshape 與 transformation matrix 雖已接入，但工程上仍以幾何 landmark 與訊號處理結果為主。
 
 ## 21. MediaPipe 可優化項目、缺口與參數調整
 
@@ -479,17 +505,17 @@ Demo 也支援：
 
 ### 21.1 已完成但仍可再精修的部分
 
-1. `output_face_blendshapes=True` 已啟用，但目前只拿來做輔助閘門，仍可再加入時間平滑與個人化基線。
-2. `output_facial_transformation_matrixes=True` 已啟用，但目前尚未真的拿來做 ROI 姿態補償或臉部旋轉對齊。
+1. `output_face_blendshapes=True` 已啟用，且已加入個人化 baseline 正規化，但仍可持續微調權重與時間平滑。
+2. `output_facial_transformation_matrixes=True` 已啟用，且已用於 ROI roll 補償；後續仍可再擴充到更完整的 3D 對齊。
 3. `num_faces=1` 已固定，對單人 rPPG 是合理設定，也讓 smoothing 生效。
+4. `quality_score` 已建立，並已接到 GUI、Web metrics、SQLite 與融合分數。
 
 ### 21.2 目前比較缺少的部分
 
-1. 尚未把 transformation matrix 用於 ROI 幾何補償，所以大角度轉頭時，ROI 仍可能偏移。
-2. 尚未做 blendshape 的個人化校準，不同人臉的 blink、squint、jaw open 門檻仍可能有差異。
-3. 尚未建立 landmark / blendshape / pose confidence 的統一品質分數，現在主要靠幾何與疲勞引擎內部閘門。
-4. 尚未加入更強的遮擋處理，例如眼鏡反光、口罩、手遮臉或側臉遮蔽時的自動降權。
-5. 尚未將更多 MediaPipe 能力拆成獨立偵測子模組，例如更完整的姿態補償或多臉追蹤流程。
+1. 目前 ROI 補償主要針對 roll，尚未把 transformation matrix 完整用到更細的 3D ROI warp。
+2. blendshape 已做 baseline 正規化，但尚未依不同場景自動重估或保存個人設定。
+3. 尚未加入更強的遮擋處理，例如眼鏡反光、口罩、手遮臉或側臉遮蔽時的專門降權。
+4. 尚未將更多 MediaPipe 能力拆成獨立偵測子模組，例如多臉追蹤流程。
 
 ### 21.3 參數調整建議
 
@@ -514,10 +540,10 @@ Demo 也支援：
 
 ### 21.4 最值得優先補上的優化
 
-1. 用 transformation matrix 做 ROI 旋轉補償，減少側頭時 forehead / cheek 取樣漂移。
-2. 對 blendshape 做個人化門檻與 EMA 平滑，降低不同臉型、不同表情習慣造成的誤判。
-3. 加入更完整的品質分數，把臉部存在感、追蹤信心、ROI 面積與 motion proxy 一起納入。
-4. 將遮擋與極端姿態視為降權條件，而不是單純維持上一幀結果。
+1. 將 transformation matrix 從 roll 補償再擴充到更完整的 ROI 幾何對齊。
+2. 對 blendshape 的個人化校準加入持續微調與跨 session 保存。
+3. 強化遮擋辨識，特別是眼鏡反光、口罩與手遮臉。
+4. 將極端姿態與局部遮蔽細分成 ROI 級別的降權，而不是只做整臉降權。
 
 ## 22. 官方文件參考
 

@@ -36,6 +36,14 @@ from typing import Any, Optional, cast
 import cv2
 import numpy as np
 
+from rppg.rppg_worker import (
+    FACE_OVAL_IDXS,
+    _face_center_px,
+    _pose_from_matrix,
+    _roi_weights_from_pose,
+    _rotate_points,
+)
+
 _IS_WIN = platform.system() == "Windows"
 # OpenCV: device description (MSMF / some backends)
 _CAP_DEVICE_DESC = getattr(cv2, "CAP_PROP_DEVICE_DESCRIPTION", None)
@@ -220,11 +228,17 @@ def roi_mean_bgr(
     lm: Any,
     indices: list[int],
     blur_ksize: int = 5,
+    transform_matrix: Any | None = None,
 ) -> Optional[tuple[float, float, float]]:
     h, w = frame_bgr.shape[:2]
-    pts = np.array([_landmark_xy(lm, i, w, h) for i in indices], dtype=np.int32)
+    pts = np.array([_landmark_xy(lm, i, w, h) for i in indices], dtype=np.float64)
     if pts.shape[0] < 3:
         return None
+    if transform_matrix is not None:
+        roll_deg, _, _, _ = _pose_from_matrix(transform_matrix, lm, w, h)
+        center = _face_center_px(lm, w, h)
+        pts = _rotate_points(pts, center, -roll_deg)
+    pts = np.round(pts).astype(np.int32)
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillConvexPoly(mask, pts, 255)
     if cv2.countNonZero(mask) < 30:
@@ -385,6 +399,11 @@ class Metrics:
     peak_freq_hz: float = 0.0
     frame_brightness: float = 0.0
     warmup_progress: float = 0.0
+    quality_score: float = 0.0
+    pose_roll_deg: float = 0.0
+    pose_yaw_deg: float = 0.0
+    pose_pitch_deg: float = 0.0
+    roi_valid_count: int = 0
     waveform: list[float] | None = None
     psd_freqs: list[float] | None = None
     psd_vals: list[float] | None = None
@@ -399,12 +418,18 @@ class RppgDemo:
         self._b: deque[float] = deque(maxlen=100000)
         self._t: deque[float] = deque(maxlen=100000)
         self._last_fs: float = target_fps
+        self._prev_face_center: tuple[float, float] | None = None
+        self._prev_face_center_t: float | None = None
+        self._face_motion_speed: float = 0.0
 
     def reset(self) -> None:
         self._r.clear()
         self._g.clear()
         self._b.clear()
         self._t.clear()
+        self._prev_face_center = None
+        self._prev_face_center_t = None
+        self._face_motion_speed = 0.0
 
     def push(self, t: float, r: float, g: float, b: float) -> None:
         self._r.append(r)
@@ -430,20 +455,59 @@ class RppgDemo:
         self._last_fs = float(np.clip(fs, 8.0, 90.0))
         return self._last_fs
 
-    def compute(self, t_now: float, frame_bgr: np.ndarray, lm: Any) -> Metrics:
+    def compute(
+        self,
+        t_now: float,
+        frame_bgr: np.ndarray,
+        lm: Any,
+        transform_matrix: Any | None = None,
+        roi_valid_count: int | None = None,
+    ) -> Metrics:
         self._trim_buffer(t_now)
         fs = self.estimate_fs()
         n = len(self._t)
         need = int(fs * max(6.0, self.buffer_sec * 0.5))
         warm = min(1.0, n / max(need, 1))
+        roi_valid_ratio = (
+            (roi_valid_count if roi_valid_count is not None else len(ROI_SPECS))
+            / max(len(ROI_SPECS), 1)
+        )
 
-        br_mean = roi_mean_bgr(frame_bgr, lm, FOREHEAD_ROI_IDX)
+        face_center = _face_center_px(lm, frame_bgr.shape[1], frame_bgr.shape[0])
+        if self._prev_face_center is not None and self._prev_face_center_t is not None:
+            dt_center = t_now - self._prev_face_center_t
+            if dt_center > 1e-4:
+                self._face_motion_speed = float(
+                    np.hypot(face_center[0] - self._prev_face_center[0], face_center[1] - self._prev_face_center[1])
+                    / dt_center
+                )
+        self._prev_face_center = face_center
+        self._prev_face_center_t = t_now
+
+        face_w = float(np.ptp(np.array([_landmark_xy(lm, i, frame_bgr.shape[1], frame_bgr.shape[0])[0] for i in FACE_OVAL_IDXS], dtype=np.float64))) + 1e-6
+        face_h = float(np.ptp(np.array([_landmark_xy(lm, i, frame_bgr.shape[1], frame_bgr.shape[0])[1] for i in FACE_OVAL_IDXS], dtype=np.float64))) + 1e-6
+        roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(
+            transform_matrix, lm, frame_bgr.shape[1], frame_bgr.shape[0]
+        )
+
+        br_mean = roi_mean_bgr(frame_bgr, lm, FOREHEAD_ROI_IDX, transform_matrix=transform_matrix)
         brightness = float(br_mean[1]) if br_mean else -1.0
 
         if n < int(fs * 4):
+            pose_q = float(np.clip(
+                0.40 * (1.0 - abs(roll_deg) / 48.0)
+                + 0.35 * (1.0 - abs(yaw_deg) / 48.0)
+                + 0.25 * (1.0 - max(0.0, abs(pitch_deg) - 6.0) / 38.0),
+                0.0, 1.0,
+            ))
             return Metrics(
                 frame_brightness=brightness,
                 warmup_progress=warm,
+                quality_score=pose_q,
+                pose_roll_deg=roll_deg,
+                pose_yaw_deg=yaw_deg,
+                pose_pitch_deg=pitch_deg,
+                roi_valid_count=int(roi_valid_count or 0),
                 hrv_confidence="LOW",
             )
 
@@ -464,6 +528,17 @@ class RppgDemo:
         lf_hf = lf_hf_from_tachogram(ibis_clean)
         prob, st_label = stress_heuristic(lf_hf, rmssd)
         conf = hrv_confidence(ibis_clean.size, sqi, art)
+        signal_q = float(np.clip(0.60 * sqi + 0.40 * (1.0 - art), 0.0, 1.0))
+        pose_q = float(np.clip(
+            0.40 * (1.0 - abs(roll_deg) / 48.0)
+            + 0.35 * (1.0 - abs(yaw_deg) / 48.0)
+            + 0.25 * (1.0 - max(0.0, abs(pitch_deg) - 6.0) / 38.0),
+            0.0, 1.0,
+        ))
+        motion_q = float(np.clip(1.0 - (self._face_motion_speed / max(face_h, 1e-6)) / 0.85, 0.0, 1.0))
+        coverage_q = float(np.clip((face_w * face_h) / max(1.0, frame_bgr.shape[0] * frame_bgr.shape[1] * 0.08), 0.0, 1.0))
+        coverage_q = float(np.clip(0.65 * coverage_q + 0.35 * roi_valid_ratio, 0.0, 1.0))
+        quality_score = float(np.clip(0.30 * pose_q + 0.25 * motion_q + 0.25 * coverage_q + 0.20 * signal_q, 0.0, 1.0))
 
         wf_n = min(160, filt.size)
         wave = filt[-wf_n:].copy()
@@ -493,6 +568,11 @@ class RppgDemo:
             peak_freq_hz=float(peak_f),
             frame_brightness=brightness,
             warmup_progress=float(warm),
+            quality_score=quality_score,
+            pose_roll_deg=roll_deg,
+            pose_yaw_deg=yaw_deg,
+            pose_pitch_deg=pitch_deg,
+            roi_valid_count=int(roi_valid_count or 0),
             waveform=[float(x) for x in wave],
             psd_freqs=[float(x) for x in pf],
             psd_vals=[float(x) for x in pv],
@@ -525,6 +605,7 @@ def draw_metrics_panel(
         f"BPM: {m.bpm:5.1f}  peak: {m.peak_freq_hz:.2f} Hz",
         f"RMSSD: {m.rmssd:5.1f} ms  SDNN: {m.sdnn:5.1f} ms",
         f"LF/HF: {m.lf_hf:5.2f}  SQI: {m.sqi:.2f}",
+        f"Quality: {m.quality_score:.2f}  Pose R/Y/P: {m.pose_roll_deg:+.0f}/{m.pose_yaw_deg:+.0f}/{m.pose_pitch_deg:+.0f}",
         f"HRV conf: {m.hrv_confidence}  IBI art: {m.ibi_artifact_ratio:.2f}",
         f"stress_p: {m.stress_prob:.2f}  ({m.stress_status})",
         f"ROI Y (mean G): {m.frame_brightness:5.1f}",
@@ -565,10 +646,15 @@ def draw_metrics_panel(
         cv2.putText(canvas, "PSD 0.5-4 Hz", (wx0, wy0 - 6), font, 0.4, (160, 160, 160), 1, cv2.LINE_AA)
 
 
-def draw_rois(frame: np.ndarray, lm: Any) -> None:
+def draw_rois(frame: np.ndarray, lm: Any, transform_matrix: Any | None = None) -> None:
     h, w = frame.shape[:2]
+    center = _face_center_px(lm, w, h)
+    roll_deg, _, _, _ = _pose_from_matrix(transform_matrix, lm, w, h)
     for _name, indices, _rid in ROI_SPECS:
-        pts = np.array([_landmark_xy(lm, i, w, h) for i in indices], dtype=np.int32)
+        pts = np.array([_landmark_xy(lm, i, w, h) for i in indices], dtype=np.float64)
+        if transform_matrix is not None:
+            pts = _rotate_points(pts, center, -roll_deg)
+        pts = np.round(pts).astype(np.int32)
         if pts.shape[0] >= 3:
             cv2.polylines(frame, [pts], True, (0, 200, 255), 1, cv2.LINE_AA)
 
@@ -607,6 +693,9 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
         base_options=base_options,
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
+        min_face_detection_confidence=0.55,
+        min_face_presence_confidence=0.55,
+        min_tracking_confidence=0.60,
         num_faces=1,
         running_mode=vision.RunningMode.VIDEO,
     )
@@ -663,19 +752,39 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
             lm = None
             if result.face_landmarks:
                 lm = result.face_landmarks[0]
-                draw_rois(display, lm)
+                transform_matrix = (
+                    result.facial_transformation_matrixes[0]
+                    if result.facial_transformation_matrixes else None
+                )
+                draw_rois(display, lm, transform_matrix)
+                roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(
+                    transform_matrix, lm, frame.shape[1], frame.shape[0]
+                )
+                roi_weights = _roi_weights_from_pose(
+                    roll_deg, yaw_deg, pitch_deg, lm, frame.shape[1], frame.shape[0]
+                )
 
                 rgbs: list[tuple[float, float, float]] = []
+                weights: list[float] = []
                 for _name, indices, _rid in ROI_SPECS:
-                    m = roi_mean_bgr(frame, lm, indices)
-                    if m:
+                    m = roi_mean_bgr(frame, lm, indices, transform_matrix=transform_matrix)
+                    weight = roi_weights.get(_name, 0.0)
+                    if m and weight > 0.0:
                         rgbs.append(m)
+                        weights.append(weight)
                 if rgbs:
-                    r = sum(x[0] for x in rgbs) / len(rgbs)
-                    g = sum(x[1] for x in rgbs) / len(rgbs)
-                    b = sum(x[2] for x in rgbs) / len(rgbs)
+                    total_w = sum(weights) or float(len(rgbs))
+                    r = sum(x[0] * w for x, w in zip(rgbs, weights)) / total_w
+                    g = sum(x[1] * w for x, w in zip(rgbs, weights)) / total_w
+                    b = sum(x[2] * w for x, w in zip(rgbs, weights)) / total_w
                     demo.push(now, r, g, b)
-                    last_metrics = demo.compute(now, frame, lm)
+                    last_metrics = demo.compute(
+                        now,
+                        frame,
+                        lm,
+                        transform_matrix=transform_matrix,
+                        roi_valid_count=len(rgbs),
+                    )
             else:
                 demo.reset()
 

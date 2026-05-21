@@ -395,6 +395,9 @@ class FatigueWorker(QObject):
             base_options=base_opts,
             output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
+            min_face_detection_confidence=0.55,
+            min_face_presence_confidence=0.55,
+            min_tracking_confidence=0.60,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
