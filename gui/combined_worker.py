@@ -130,8 +130,8 @@ class CombinedWorker(QObject):
         base_opts  = _mp_python.BaseOptions(model_asset_path=str(model_path))
         lm_options = _mp_vision.FaceLandmarkerOptions(
             base_options=base_opts,
-            output_face_blendshapes=False,
-            output_facial_transformation_matrixes=False,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
@@ -174,6 +174,8 @@ class CombinedWorker(QObject):
                 except Exception:
                     continue
 
+                blendshapes = result.face_blendshapes[0] if result.face_blendshapes else None
+
                 has_face = bool(result.face_landmarks)
                 if has_face != last_face:
                     self.face_detected.emit(has_face)
@@ -190,7 +192,7 @@ class CombinedWorker(QObject):
 
                     # ── Step 1: Fatigue annotations (drawn first, underneath rPPG ROI)
                     if fatigue_engine is not None:
-                        f_metrics = fatigue_engine.step(lm, w_px, h_px, ts)
+                        f_metrics = fatigue_engine.step(lm, w_px, h_px, ts, blendshapes=blendshapes)
                         f_metrics.face_detected = True
                         annotated = draw_fatigue_annotations(annotated, lm, f_metrics)
                         self.fatigue_metrics_ready.emit(f_metrics)

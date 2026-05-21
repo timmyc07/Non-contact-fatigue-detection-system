@@ -605,8 +605,8 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
     base_options = python.BaseOptions(model_asset_path=str(model_path))
     options = vision.FaceLandmarkerOptions(
         base_options=base_options,
-        output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
+        output_face_blendshapes=True,
+        output_facial_transformation_matrixes=True,
         num_faces=1,
         running_mode=vision.RunningMode.VIDEO,
     )

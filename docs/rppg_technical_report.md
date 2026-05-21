@@ -48,10 +48,21 @@ MediaPipe Face Landmarker 負責臉部 landmark 偵測。本專案使用 `face_l
 
 - `num_faces=1`：只取一張臉，降低計算量並避免多臉混合。
 - `running_mode=VIDEO`：逐幀處理影片串流，並傳入單調遞增 timestamp。
-- `output_face_blendshapes=False`：rPPG 不需要 blendshape。
-- `output_facial_transformation_matrixes=False`：rPPG 不需要臉部轉換矩陣。
+- `output_face_blendshapes=True`：目前已啟用，供眼、眉、嘴的輔助判定。
+- `output_facial_transformation_matrixes=True`：目前已啟用，保留臉部姿態矩陣以便後續姿態補償與 ROI 對齊擴充。
 
 VIDEO mode 要求每次呼叫 `detect_for_video(mp_img, ts_ms)` 時 timestamp 必須單調遞增。程式以第一幀時間作原點，並用 `max(ts_ms_prev + 1, int((ts - t_origin) * 1000))` 保證 timestamp 不倒退。
+
+### 2.2.1 Blendshape 輔助特徵
+
+Face Landmarker 的 52 個 blendshape 係數現在被用作輔助訊號：
+
+- `eyeBlinkLeft`、`eyeBlinkRight`：輔助眨眼與眼瞼閉合判定。
+- `eyeSquintLeft`、`eyeSquintRight`：輔助瞇眼與半閉眼判定。
+- `browDownLeft`、`browDownRight`、`browInnerUp`：輔助皺眉與壓力判定。
+- `jawOpen`、`mouthStretchLeft`、`mouthStretchRight`：輔助哈欠與嘴部張開判定。
+
+原則上，幾何 landmark 仍是主訊號，blendshape 只是增加穩定度與降低誤判。
 
 ### 2.3 NumPy
 
@@ -379,6 +390,8 @@ rPPG pillar 最終會乘上 SQI 權重。也就是說，波形品質不足時，
 - 降低 CPU/GPU 負載。
 - rPPG ROI 與疲勞標註使用同一幀 landmark，時間一致。
 
+目前此模式也會讀取 Face Landmarker 的 blendshape 與 transformation matrix 輸出，將表情訊號併入疲勞判定。
+
 ### 17.3 CameraStreamWorker
 
 攝影機 worker 負責：
@@ -458,8 +471,55 @@ Demo 也支援：
 4. BPM 較可信時通常需要：臉部穩定、光照穩定、SQI 高、artifact ratio 低。
 5. `stress_prob` 是 heuristic，不是醫療診斷。
 6. `face_landmarker.task` 是臉部 landmark 模型，不是心率模型；心率由後續訊號處理演算法估算。
+7. blendshape 與 transformation matrix 目前是輔助特徵，數值仍以幾何 landmark 為主。
 
-## 21. 官方文件參考
+## 21. MediaPipe 可優化項目、缺口與參數調整
+
+目前 MediaPipe Face Landmarker 在本專案中的核心工作是：提供穩定 landmark、blendshape 與 transformation matrix，讓 rPPG 與疲勞引擎共用同一組臉部資訊。若要再提升準確度，優先順序如下。
+
+### 21.1 已完成但仍可再精修的部分
+
+1. `output_face_blendshapes=True` 已啟用，但目前只拿來做輔助閘門，仍可再加入時間平滑與個人化基線。
+2. `output_facial_transformation_matrixes=True` 已啟用，但目前尚未真的拿來做 ROI 姿態補償或臉部旋轉對齊。
+3. `num_faces=1` 已固定，對單人 rPPG 是合理設定，也讓 smoothing 生效。
+
+### 21.2 目前比較缺少的部分
+
+1. 尚未把 transformation matrix 用於 ROI 幾何補償，所以大角度轉頭時，ROI 仍可能偏移。
+2. 尚未做 blendshape 的個人化校準，不同人臉的 blink、squint、jaw open 門檻仍可能有差異。
+3. 尚未建立 landmark / blendshape / pose confidence 的統一品質分數，現在主要靠幾何與疲勞引擎內部閘門。
+4. 尚未加入更強的遮擋處理，例如眼鏡反光、口罩、手遮臉或側臉遮蔽時的自動降權。
+5. 尚未將更多 MediaPipe 能力拆成獨立偵測子模組，例如更完整的姿態補償或多臉追蹤流程。
+
+### 21.3 參數調整建議
+
+1. `min_face_detection_confidence`
+   - 若誤抓背景或臉部誤檢偏多，可提高到 `0.6` 到 `0.75`。
+   - 若在低光、遠距離或小臉場景常常抓不到臉，可降到 `0.4` 到 `0.5`。
+2. `min_face_presence_confidence`
+   - 若 landmark 飄動、臉部存在感不穩，可提高到 `0.55` 到 `0.7`。
+   - 若追蹤過度保守、容易斷臉，可降到 `0.4` 到 `0.5`。
+3. `min_tracking_confidence`
+   - 若轉頭或快速移動時追蹤容易跳掉，可提高到 `0.6` 到 `0.8`。
+   - 若想降低短暫抖動造成的丟臉，可維持預設或略降到 `0.4` 到 `0.5`。
+4. `output_face_blendshapes`
+   - 若要維持目前眼、眉、嘴的輔助判定，應保持 `True`。
+   - 若只想追求最低推論成本，可關掉，但會失去表情輔助訊號。
+5. `output_facial_transformation_matrixes`
+   - 若後續要做 ROI 對齊、姿態補償或更穩定的頭部角度修正，應保持 `True`。
+   - 若只做最小化 landmark 擷取且不打算做幾何補償，才考慮關掉。
+6. `num_faces`
+   - 單人 rPPG 與疲勞監測建議維持 `1`。
+   - 多人場景雖可提高值，但會增加計算量，也會使 smoothing 效果下降。
+
+### 21.4 最值得優先補上的優化
+
+1. 用 transformation matrix 做 ROI 旋轉補償，減少側頭時 forehead / cheek 取樣漂移。
+2. 對 blendshape 做個人化門檻與 EMA 平滑，降低不同臉型、不同表情習慣造成的誤判。
+3. 加入更完整的品質分數，把臉部存在感、追蹤信心、ROI 面積與 motion proxy 一起納入。
+4. 將遮擋與極端姿態視為降權條件，而不是單純維持上一幀結果。
+
+## 22. 官方文件參考
 
 - MediaPipe Face Landmarker Python 官方文件：https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python
 - OpenCV VideoCapture 官方文件：https://docs.opencv.org/

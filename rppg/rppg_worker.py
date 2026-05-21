@@ -485,8 +485,8 @@ class RppgWorker(QObject):
         base_opts = _mp_python.BaseOptions(model_asset_path=str(model_path))
         lm_options = _mp_vision.FaceLandmarkerOptions(
             base_options=base_opts,
-            output_face_blendshapes=False,
-            output_facial_transformation_matrixes=False,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )

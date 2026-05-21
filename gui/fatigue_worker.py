@@ -393,8 +393,8 @@ class FatigueWorker(QObject):
         base_opts  = _mp_python.BaseOptions(model_asset_path=str(model_path))
         lm_options = _mp_vision.FaceLandmarkerOptions(
             base_options=base_opts,
-            output_face_blendshapes=False,
-            output_facial_transformation_matrixes=False,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
             num_faces=1,
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
@@ -436,12 +436,14 @@ class FatigueWorker(QObject):
                     self.face_detected.emit(has_face)
                     last_face = has_face
 
+                blendshapes = result.face_blendshapes[0] if result.face_blendshapes else None
+
                 annotated = bgr.copy()
 
                 if has_face:
                     lm      = result.face_landmarks[0]
                     h_px, w_px = bgr.shape[:2]
-                    metrics = engine.step(lm, w_px, h_px, ts)
+                    metrics = engine.step(lm, w_px, h_px, ts, blendshapes=blendshapes)
                     metrics.face_detected = True
 
                     annotated = draw_fatigue_annotations(annotated, lm, metrics)
