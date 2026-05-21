@@ -11,12 +11,24 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 
 ## Requirements
 - Python 3.10+ recommended
-- Windows supported (camera backend)
+- Windows and Ubuntu Linux supported
+- Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
 
 ## Setup
-```bash
-python -m venv .venv
+Windows:
+```powershell
+py -3 -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
+```
+
+Ubuntu:
+```bash
+bash scripts/setup_ubuntu.sh
+```
+
+If the virtual environment already exists, reinstall/update Python dependencies with:
+```bash
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## Run
@@ -24,9 +36,25 @@ python -m venv .venv
 python main.py
 ```
 
+Ubuntu:
+```bash
+.venv/bin/python main.py
+```
+
 Optional demo:
 ```bash
 python -m rppg.demo_rppg_live
+```
+
+On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
+```bash
+ls -l /dev/video*
+groups
+```
+
+Add your user to the `video` group if needed, then log out and back in:
+```bash
+sudo usermod -aG video "$USER"
 ```
 
 ## Project layout

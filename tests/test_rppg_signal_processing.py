@@ -15,6 +15,7 @@ from rppg.rppg_worker import (  # noqa: E402
     validate_ibi_intervals,
     welch_peak_hz,
 )
+from rppg.demo_rppg_live import RppgDemo  # noqa: E402
 
 
 def test_bandpass_and_welch_estimate_72_bpm() -> None:
@@ -45,3 +46,17 @@ def test_ibi_artifact_ratio_uses_cleaned_count() -> None:
     ratio = ibi_artifact_ratio(raw, clean)
 
     assert 0.0 < ratio < 1.0
+
+
+def test_demo_trim_buffer_keeps_channels_aligned() -> None:
+    demo = RppgDemo(buffer_sec=1.0, target_fps=30.0)
+    demo.push(0.0, 1.0, 2.0, 3.0)
+    demo.push(0.5, 4.0, 5.0, 6.0)
+    demo.push(1.5, 7.0, 8.0, 9.0)
+
+    demo._trim_buffer(1.5)
+
+    assert len(demo._t) == len(demo._r) == len(demo._g) == len(demo._b) == 2
+    assert list(demo._r) == [4.0, 7.0]
+    assert list(demo._g) == [5.0, 8.0]
+    assert list(demo._b) == [6.0, 9.0]

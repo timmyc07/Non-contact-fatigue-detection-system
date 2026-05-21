@@ -1,7 +1,8 @@
-"""Enumerate cameras — aligned with mediapipe_rppg_system V1 ``camera_utils.list_cameras``.
+"""Enumerate cameras across Windows and Linux backends.
 
 Windows: if pygrabber returns DirectShow device names, we **do not** open VideoCapture per
 index (instant list, same as V1). Only fall back to OpenCV probing when names are unavailable.
+Linux: prefer V4L2 and expose stable `/dev/v4l/by-id` labels when available.
 """
 
 from __future__ import annotations
@@ -135,17 +136,18 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
     return found
 
 
-def open_camera_capture(index: int, backend: str = "ffmpeg"):
+def open_camera_capture(index: int, backend: str = "auto"):
     """Open the first working VideoCapture for ``index``.
 
     ``backend``:
+        ``"auto"``   — Platform-preferred order without explicit backend.
+        ``"v4l2"``   — Linux Video4Linux2 directly.
         ``"ffmpeg"`` — Try CAP_FFMPEG first (file/stream path on Windows);
                        if that fails (common for integer camera indices),
-                       fall back through CAP_MSMF → CAP_ANY.
+                       fall back through platform-preferred APIs.
                        cap.set() works without pipeline rebuild.
         ``"msmf"``   — Windows Media Foundation directly; preserves native MJPG.
                        cap.set() causes pipeline rebuild (~1 s each).
-        ``"auto"``   — Platform-preferred order without explicit backend.
     """
     if cv2 is None:
         return None
@@ -168,10 +170,19 @@ def open_camera_capture(index: int, backend: str = "ffmpeg"):
             return _try(int(msmf))
         return None
 
+    if b == "v4l2":
+        v4l2 = getattr(cv2, "CAP_V4L2", None)
+        if v4l2 is not None:
+            return _try(int(v4l2))
+        return None
+
     if b == "ffmpeg":
         # CAP_FFMPEG only accepts integer indices on some builds/platforms;
         # cascade through workable alternatives if it fails.
-        for attr in ("CAP_FFMPEG", "CAP_MSMF", "CAP_ANY"):
+        attrs = ["CAP_FFMPEG"]
+        attrs.extend(["CAP_MSMF"] if _IS_WIN else ["CAP_V4L2"])
+        attrs.append("CAP_ANY")
+        for attr in attrs:
             api_val = getattr(cv2, attr, None)
             if api_val is None:
                 continue

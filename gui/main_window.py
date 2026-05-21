@@ -391,12 +391,18 @@ class MainWindow(QMainWindow):
 
         row3 = QHBoxLayout()
         self._cmb_backend = QComboBox()
-        self._cmb_backend.addItem("FFMPEG（預設）", "ffmpeg")
-        self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
+        self._cmb_backend.addItem("自動（平台預設）", "auto")
+        if sys.platform.startswith("linux"):
+            self._cmb_backend.addItem("V4L2（Linux）", "v4l2")
+        self._cmb_backend.addItem("FFMPEG", "ffmpeg")
+        if sys.platform.startswith("win"):
+            self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
         self._cmb_backend.setCurrentIndex(0)
         self._cmb_backend.setToolTip(
-            "FFMPEG — 自動嘗試多種後端，支援 cap.set() 不重建管線\n"
-            "MSMF   — 直接使用 Windows Media Foundation，可保留原生 MJPG"
+            "自動 — 依平台優先選擇可用後端\n"
+            "V4L2 — Linux 原生攝影機後端\n"
+            "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端\n"
+            "MSMF — Windows Media Foundation，可保留原生 MJPG"
         )
         lbl_backend = QLabel("後端：")
         lbl_backend.setObjectName("hintLabel")
@@ -1235,7 +1241,7 @@ class MainWindow(QMainWindow):
         except (ValueError, AttributeError):
             target_fps = 30
 
-        backend = self._cmb_backend.currentData() or "ffmpeg"
+        backend = self._cmb_backend.currentData() or "auto"
         backend_label = self._cmb_backend.currentText().split("（")[0].strip()
 
         thread = QThread(self)

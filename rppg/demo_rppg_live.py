@@ -12,11 +12,13 @@ Usage:
   python -m rppg.demo_rppg_live --pick
   python -m rppg.demo_rppg_live --camera 1
   python -m rppg.demo_rppg_live --backend msmf   # DroidCam / virtual cams often need MSMF
+  python -m rppg.demo_rppg_live --backend v4l2   # Ubuntu / Linux cameras
 
 PowerShell: options belong to Python, e.g. python -m rppg.demo_rppg_live --list-cameras
 (not "--list-cameras" alone).
 
 Windows: pygrabber gives DirectShow names; capture may use MSMF first (--backend auto).
+Linux: capture uses V4L2 first when available (--backend auto).
 First run downloads face_landmarker.task into ./models/ if missing.
 """
 
@@ -76,6 +78,9 @@ def _video_capture_single(index: int, backend: str) -> tuple[Optional[Any], str]
     if b == "any":
         cap = cv2.VideoCapture(index)
         return (cap if cap.isOpened() else None), "DEFAULT"
+    if b == "v4l2":
+        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        return (cap if cap.isOpened() else None), "V4L2"
     return None, ""
 
 
@@ -87,6 +92,9 @@ def open_video_capture(index: int, backend: str = "auto") -> tuple[Optional[Any]
         return cap, tag
 
     if not _IS_WIN:
+        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        if cap.isOpened():
+            return cap, "V4L2"
         cap = cv2.VideoCapture(index)
         return (cap if cap.isOpened() else None), "DEFAULT"
 
@@ -154,7 +162,10 @@ def resolve_camera_label(
 def print_camera_list(backend: str = "auto") -> None:
     devices = list_camera_devices(backend=backend)
     if not devices:
-        print("No cameras detected (try --backend msmf or dshow, different USB port).")
+        if _IS_WIN:
+            print("No cameras detected (try --backend msmf or dshow, different USB port).")
+        else:
+            print("No cameras detected (try --backend v4l2 or check /dev/video* permissions).")
         return
     print(f"Available cameras (backend={backend!r} for probe):")
     for idx, name in devices:
@@ -711,8 +722,8 @@ def main() -> None:
         "--backend",
         type=str,
         default="auto",
-        choices=("auto", "msmf", "dshow", "any"),
-        help="Video capture API (Windows: auto=MSMF then DSHOW; try msmf for DroidCam)",
+        choices=("auto", "msmf", "dshow", "v4l2", "any"),
+        help="Video capture API (Windows: auto=MSMF then DSHOW; Linux: auto=V4L2 then default)",
     )
     args = ap.parse_args()
     be = args.backend
