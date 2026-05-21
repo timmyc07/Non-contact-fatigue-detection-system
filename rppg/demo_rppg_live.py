@@ -113,7 +113,7 @@ def _dshow_names_pygrabber() -> list[str]:
     if not _IS_WIN:
         return []
     try:
-        from pygrabber.dshow_graph import FilterGraph
+        from pygrabber.dshow_graph import FilterGraph  # pyright: ignore[reportMissingModuleSource]
 
         devs = FilterGraph().get_input_devices()
         return [str(x).strip() for x in devs if str(x).strip()]

@@ -30,7 +30,7 @@ def _list_windows_dshow_device_names() -> list[str]:
     if not _IS_WIN:
         return []
     try:
-        from pygrabber.dshow_graph import FilterGraph
+        from pygrabber.dshow_graph import FilterGraph  # pyright: ignore[reportMissingModuleSource]
 
         graph = FilterGraph()
         names = graph.get_input_devices()

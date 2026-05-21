@@ -64,3 +64,4 @@ sudo usermod -aG video "$USER"
 ## Notes
 - Recordings are saved under the `recordings/` folder.
 - If playback video is needed in the web dashboard, make sure ffmpeg is available (imageio-ffmpeg is supported via requirements).
+- `pygrabber` is a Windows-only optional dependency for DirectShow camera names. On Ubuntu/Linux, camera access uses V4L2 and the guarded `pygrabber` imports are not executed.
