@@ -1,5 +1,7 @@
 {
   "extraPaths": ["."],
   "stubPath": "typings",
+  "venvPath": ".",
+  "venv": ".venv",
   "typeCheckingMode": "basic"
 }
