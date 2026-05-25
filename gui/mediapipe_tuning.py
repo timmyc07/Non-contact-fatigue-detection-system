@@ -21,6 +21,7 @@ class FaceLandmarkerTuning:
     min_face_detection_confidence: float = 0.55
     min_face_presence_confidence: float = 0.55
     min_tracking_confidence: float = 0.60
+    num_faces: int = 1
 
 
 @dataclass
@@ -40,6 +41,13 @@ class RppgRoiTuning:
     obstruction_low_chroma: float = 2.5
     obstruction_high_chroma: float = 48.0
     min_roi_weight: float = 0.04
+    roi_smoothing_enabled: bool = True
+    roi_smoothing_alpha: float = 0.35
+    roi_smoothing_max_shift_ratio: float = 0.12
+    landmark_jitter_full_norm: float = 0.020
+    roi_area_jitter_full_ratio: float = 0.25
+    canonical_roi_warp_enabled: bool = False
+    canonical_roi_warp_strength: float = 0.35
 
 
 @dataclass
@@ -65,10 +73,12 @@ class BlendshapeTuning:
 
 @dataclass
 class MediaPipeTuning:
+    active_profile: str = "default"
     face_landmarker: FaceLandmarkerTuning = field(default_factory=FaceLandmarkerTuning)
     rppg_roi: RppgRoiTuning = field(default_factory=RppgRoiTuning)
     quality: QualityTuning = field(default_factory=QualityTuning)
     blendshape: BlendshapeTuning = field(default_factory=BlendshapeTuning)
+    profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _deep_update(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
@@ -99,11 +109,24 @@ def load_mediapipe_tuning(path: Path | None = None) -> MediaPipeTuning:
             )
         except Exception as exc:
             log.warning("MediaPipe tuning 預設設定寫入失敗：%s", exc)
+    active_profile = str(default_data.get("active_profile", "default") or "default")
+    profiles = default_data.get("profiles", {})
+    if active_profile != "default" and isinstance(profiles, dict):
+        profile_data = profiles.get(active_profile)
+        if isinstance(profile_data, dict):
+            merged = dict(default_data)
+            merged["profiles"] = profiles
+            default_data = _deep_update(merged, profile_data)
+        else:
+            log.warning("MediaPipe tuning profile 不存在：%s，使用 default", active_profile)
+            default_data["active_profile"] = "default"
     return MediaPipeTuning(
+        active_profile=str(default_data.get("active_profile", "default") or "default"),
         face_landmarker=FaceLandmarkerTuning(**default_data.get("face_landmarker", {})),
         rppg_roi=RppgRoiTuning(**default_data.get("rppg_roi", {})),
         quality=QualityTuning(**default_data.get("quality", {})),
         blendshape=BlendshapeTuning(**default_data.get("blendshape", {})),
+        profiles=default_data.get("profiles", {}) if isinstance(default_data.get("profiles", {}), dict) else {},
     )
 
 

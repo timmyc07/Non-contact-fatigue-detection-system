@@ -70,6 +70,14 @@ FACE_OVAL_IDXS = [
     397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
     172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
 ]
+FACE_STABILITY_IDXS = sorted(set(
+    FACE_OVAL_IDXS
+    + FOREHEAD_ROI_IDX
+    + LEFT_CHEEK_ROI_IDX
+    + RIGHT_CHEEK_ROI_IDX
+    + GLABELLA_ROI_IDX
+    + [33, 263, NOSE_TIP_IDX]
+))
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
@@ -103,6 +111,11 @@ class RppgMetrics:
     roi_weight_l_cheek:   float = 0.0
     roi_weight_r_cheek:    float = 0.0
     roi_weight_glabella:   float = 0.0
+    landmark_jitter_norm:  float = 0.0
+    roi_area_stability:    float = 1.0
+    roi_area_jitter_ratio: float = 0.0
+    roi_smoothing_applied: bool = False
+    canonical_roi_warp_used: bool = False
     face_detected:     bool  = False
     waveform:  list[float] = field(default_factory=list)
     psd_freqs: list[float] = field(default_factory=list)
@@ -129,11 +142,27 @@ def _lm_xyf(lm: Any, idx: int, w: int, h: int) -> tuple[float, float]:
     return float(x), float(y)
 
 
+def _face_diag_px(lm: Any, w: int, h: int) -> float:
+    xs = np.array([_lm_xy(lm, i, w, h)[0] for i in FACE_OVAL_IDXS], dtype=np.float64)
+    ys = np.array([_lm_xy(lm, i, w, h)[1] for i in FACE_OVAL_IDXS], dtype=np.float64)
+    if xs.size == 0 or ys.size == 0:
+        return 1.0
+    return float(np.hypot(np.ptp(xs), np.ptp(ys)) + 1e-6)
+
+
 def _face_center_px(lm: Any, w: int, h: int) -> tuple[float, float]:
     pts = np.array([_lm_xy(lm, idx, w, h) for idx in FACE_OVAL_IDXS], dtype=np.float64)
     if pts.size == 0:
         return 0.0, 0.0
     return float(np.mean(pts[:, 0])), float(np.mean(pts[:, 1]))
+
+
+def _polygon_area(pts: np.ndarray) -> float:
+    if pts.shape[0] < 3:
+        return 0.0
+    x = pts[:, 0].astype(np.float64)
+    y = pts[:, 1].astype(np.float64)
+    return float(abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) * 0.5)
 
 
 def _rotate_points(
@@ -149,6 +178,221 @@ def _rotate_points(
     rot = np.array([[c, -s], [s, c]], dtype=np.float64)
     ctr = np.array(center, dtype=np.float64)
     return ((pts.astype(np.float64) - ctr) @ rot.T) + ctr
+
+
+def _pose_normalized_points(
+    pts: np.ndarray,
+    center: tuple[float, float],
+    yaw_deg: float,
+    pitch_deg: float,
+    strength: float,
+) -> np.ndarray:
+    """Experimental, disabled-by-default ROI geometry normalization."""
+    if pts.shape[0] < 3 or strength <= 1e-6:
+        return pts
+    strength = _clamp(strength, 0.0, 0.60)
+    yaw_scale = 1.0 + strength * min(abs(yaw_deg), 45.0) / 180.0
+    pitch_scale = 1.0 + strength * min(abs(pitch_deg), 45.0) / 220.0
+    ctr = np.array(center, dtype=np.float64)
+    out = pts.astype(np.float64) - ctr
+    out[:, 0] *= yaw_scale
+    out[:, 1] *= pitch_scale
+    return out + ctr
+
+
+class RoiGeometryTracker:
+    """Track MediaPipe ROI geometry stability and apply conservative smoothing."""
+
+    def __init__(self) -> None:
+        self._smoothed_roi_pts: dict[str, np.ndarray] = {}
+        self.last_roi_pts: dict[str, np.ndarray] = {}
+        self._prev_landmark_pts: np.ndarray | None = None
+        self._prev_roi_area_ratio: float | None = None
+        self.landmark_jitter_norm: float = 0.0
+        self.roi_area_jitter_ratio: float = 0.0
+        self.roi_area_stability: float = 1.0
+        self.roi_smoothing_applied: bool = False
+        self.canonical_roi_warp_used: bool = False
+
+    def reset(self) -> None:
+        self._smoothed_roi_pts.clear()
+        self.last_roi_pts.clear()
+        self._prev_landmark_pts = None
+        self._prev_roi_area_ratio = None
+        self.landmark_jitter_norm = 0.0
+        self.roi_area_jitter_ratio = 0.0
+        self.roi_area_stability = 1.0
+        self.roi_smoothing_applied = False
+        self.canonical_roi_warp_used = False
+
+    def begin_frame(self) -> None:
+        self.roi_smoothing_applied = False
+        self.canonical_roi_warp_used = False
+        self.last_roi_pts.clear()
+
+    def update_landmarks(self, lm: Any, w: int, h: int) -> None:
+        diag = _face_diag_px(lm, w, h)
+        pts = np.array([_lm_xy(lm, idx, w, h) for idx in FACE_STABILITY_IDXS], dtype=np.float64)
+        if self._prev_landmark_pts is not None and self._prev_landmark_pts.shape == pts.shape:
+            self.landmark_jitter_norm = float(np.mean(np.linalg.norm(pts - self._prev_landmark_pts, axis=1)) / diag)
+        else:
+            self.landmark_jitter_norm = 0.0
+        self._prev_landmark_pts = pts
+
+    def smooth_roi(self, name: str, pts: np.ndarray, face_diag: float, tuning: MediaPipeTuning) -> np.ndarray:
+        cfg = tuning.rppg_roi
+        if not cfg.roi_smoothing_enabled or pts.shape[0] < 3:
+            self._smoothed_roi_pts[name] = pts.copy()
+            self.last_roi_pts[name] = pts.copy()
+            return pts
+        prev = self._smoothed_roi_pts.get(name)
+        if prev is None or prev.shape != pts.shape:
+            self._smoothed_roi_pts[name] = pts.copy()
+            self.last_roi_pts[name] = pts.copy()
+            return pts
+        shift = float(np.mean(np.linalg.norm(pts - prev, axis=1)) / max(face_diag, 1e-6))
+        if shift > cfg.roi_smoothing_max_shift_ratio:
+            self._smoothed_roi_pts[name] = pts.copy()
+            self.last_roi_pts[name] = pts.copy()
+            return pts
+        alpha = _clamp(cfg.roi_smoothing_alpha, 0.05, 1.0)
+        smoothed = alpha * pts + (1.0 - alpha) * prev
+        self._smoothed_roi_pts[name] = smoothed.copy()
+        self.last_roi_pts[name] = smoothed.copy()
+        self.roi_smoothing_applied = True
+        return smoothed
+
+    def update_roi_area(self, areas_px: list[float], frame_area: float, tuning: MediaPipeTuning) -> None:
+        area_ratio = float(sum(areas_px) / max(frame_area, 1.0))
+        if self._prev_roi_area_ratio is None or self._prev_roi_area_ratio <= 1e-9:
+            self.roi_area_jitter_ratio = 0.0
+        else:
+            self.roi_area_jitter_ratio = abs(area_ratio - self._prev_roi_area_ratio) / self._prev_roi_area_ratio
+        self._prev_roi_area_ratio = area_ratio
+        full = max(tuning.rppg_roi.roi_area_jitter_full_ratio, 1e-6)
+        self.roi_area_stability = _clamp(1.0 - self.roi_area_jitter_ratio / full)
+
+
+def roi_points(
+    frame_bgr: np.ndarray,
+    lm: Any,
+    indices: list[int],
+    name: str,
+    transform_matrix: Any | None = None,
+    tracker: RoiGeometryTracker | None = None,
+    tuning: MediaPipeTuning | None = None,
+) -> np.ndarray:
+    tuning = tuning or load_mediapipe_tuning()
+    h, w = frame_bgr.shape[:2]
+    pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.float64)
+    if pts.shape[0] < 3:
+        return pts
+    center = _face_center_px(lm, w, h)
+    roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(transform_matrix, lm, w, h)
+    if transform_matrix is not None:
+        pts = _rotate_points(pts, center, -roll_deg)
+    if tuning.rppg_roi.canonical_roi_warp_enabled and transform_matrix is not None:
+        warped = _pose_normalized_points(
+            pts,
+            center,
+            yaw_deg,
+            pitch_deg,
+            tuning.rppg_roi.canonical_roi_warp_strength,
+        )
+        if warped.shape == pts.shape and _polygon_area(warped) >= 30.0:
+            pts = warped
+            if tracker is not None:
+                tracker.canonical_roi_warp_used = True
+    if tracker is not None:
+        pts = tracker.smooth_roi(name, pts, _face_diag_px(lm, w, h), tuning)
+    return pts
+
+
+def roi_mean_from_points(
+    frame_bgr: np.ndarray,
+    pts: np.ndarray,
+    blur_ksize: int = 5,
+) -> Optional[tuple[float, float, float]]:
+    h, w = frame_bgr.shape[:2]
+    if pts.shape[0] < 3:
+        return None
+    pts_i = np.round(pts).astype(np.int32)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, pts_i, 255)
+    if cv2.countNonZero(mask) < 30:
+        return None
+    roi = cv2.GaussianBlur(frame_bgr, (blur_ksize, blur_ksize), 0)
+    mean = cv2.mean(roi, mask=mask)
+    return float(mean[2]), float(mean[1]), float(mean[0])
+
+
+def roi_obstruction_score_from_points(
+    frame_bgr: np.ndarray,
+    pts: np.ndarray,
+    tuning: MediaPipeTuning | None = None,
+) -> float:
+    cfg = (tuning or load_mediapipe_tuning()).rppg_roi
+    h, w = frame_bgr.shape[:2]
+    if pts.shape[0] < 3:
+        return 1.0
+    pts_i = np.round(pts).astype(np.int32)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, pts_i, 255)
+    if cv2.countNonZero(mask) < 30:
+        return 1.0
+    mean_b, mean_g, mean_r, _ = cv2.mean(frame_bgr, mask=mask)
+    luma = 0.114 * mean_b + 0.587 * mean_g + 0.299 * mean_r
+    chroma = float(np.std([mean_b, mean_g, mean_r]))
+    dark_penalty = _clamp((cfg.obstruction_dark_luma - luma) / max(cfg.obstruction_dark_luma, 1e-6))
+    bright_penalty = _clamp((luma - cfg.obstruction_bright_luma) / max(255.0 - cfg.obstruction_bright_luma, 1e-6))
+    low_chroma_penalty = _clamp((cfg.obstruction_low_chroma - chroma) / max(cfg.obstruction_low_chroma, 1e-6))
+    high_chroma_penalty = _clamp((chroma - cfg.obstruction_high_chroma) / max(80.0 - cfg.obstruction_high_chroma, 1e-6))
+    return float(max(dark_penalty, bright_penalty, low_chroma_penalty, high_chroma_penalty))
+
+
+def collect_rppg_roi_sample(
+    frame_bgr: np.ndarray,
+    lm: Any,
+    transform_matrix: Any | None,
+    tracker: RoiGeometryTracker,
+    tuning: MediaPipeTuning,
+) -> tuple[Optional[tuple[float, float, float]], dict[str, float], int]:
+    h, w = frame_bgr.shape[:2]
+    tracker.begin_frame()
+    tracker.update_landmarks(lm, w, h)
+    roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(transform_matrix, lm, w, h)
+    roi_weights = _roi_weights_from_pose(roll_deg, yaw_deg, pitch_deg, lm, w, h, tuning)
+    rgbs: list[tuple[float, float, float]] = []
+    weights: list[float] = []
+    areas: list[float] = []
+    effective_weights: dict[str, float] = {name: 0.0 for name, _ in ROI_SPECS}
+    for name, indices in ROI_SPECS:
+        if tracker is not None and name in tracker.last_roi_pts:
+            pts = tracker.last_roi_pts[name]
+        else:
+            pts = roi_points(frame_bgr, lm, indices, name, transform_matrix, tracker, tuning)
+        areas.append(_polygon_area(pts))
+        val = roi_mean_from_points(frame_bgr, pts)
+        obstruction = roi_obstruction_score_from_points(frame_bgr, pts, tuning)
+        weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
+        if weight < tuning.rppg_roi.min_roi_weight:
+            weight = 0.0
+        effective_weights[name] = float(weight)
+        if val is not None and weight > 0.0:
+            rgbs.append(val)
+            weights.append(weight)
+    tracker.update_roi_area(areas, float(h * w), tuning)
+    if not rgbs:
+        return None, effective_weights, 0
+    total_w = sum(weights) or float(len(rgbs))
+    sample = (
+        sum(x[0] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
+        sum(x[1] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
+        sum(x[2] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
+    )
+    norm_total = sum(effective_weights.values()) or 1.0
+    effective_weights = {k: float(v / norm_total) if v > 0.0 else 0.0 for k, v in effective_weights.items()}
+    return sample, effective_weights, len(rgbs)
 
 
 def _pose_from_matrix(
@@ -275,23 +519,8 @@ def roi_obstruction_score(
     tuning: MediaPipeTuning | None = None,
 ) -> float:
     """Return 0..1 penalty for likely unusable ROI colour/illumination."""
-    cfg = (tuning or load_mediapipe_tuning()).rppg_roi
-    h, w = frame_bgr.shape[:2]
-    pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.int32)
-    if pts.shape[0] < 3:
-        return 1.0
-    mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillConvexPoly(mask, pts, 255)
-    if cv2.countNonZero(mask) < 30:
-        return 1.0
-    mean_b, mean_g, mean_r, _ = cv2.mean(frame_bgr, mask=mask)
-    luma = 0.114 * mean_b + 0.587 * mean_g + 0.299 * mean_r
-    chroma = float(np.std([mean_b, mean_g, mean_r]))
-    dark_penalty = _clamp((cfg.obstruction_dark_luma - luma) / max(cfg.obstruction_dark_luma, 1e-6))
-    bright_penalty = _clamp((luma - cfg.obstruction_bright_luma) / max(255.0 - cfg.obstruction_bright_luma, 1e-6))
-    low_chroma_penalty = _clamp((cfg.obstruction_low_chroma - chroma) / max(cfg.obstruction_low_chroma, 1e-6))
-    high_chroma_penalty = _clamp((chroma - cfg.obstruction_high_chroma) / max(80.0 - cfg.obstruction_high_chroma, 1e-6))
-    return float(max(dark_penalty, bright_penalty, low_chroma_penalty, high_chroma_penalty))
+    pts = roi_points(frame_bgr, lm, indices, "", tuning=tuning)
+    return roi_obstruction_score_from_points(frame_bgr, pts, tuning)
 
 
 def roi_mean_bgr(
@@ -301,32 +530,20 @@ def roi_mean_bgr(
     blur_ksize: int = 5,
     transform_matrix: Any | None = None,
 ) -> Optional[tuple[float, float, float]]:
-    h, w = frame_bgr.shape[:2]
-    pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.float64)
-    if pts.shape[0] < 3:
-        return None
-    if transform_matrix is not None:
-        roll_deg, _, _, _ = _pose_from_matrix(transform_matrix, lm, w, h)
-        center = _face_center_px(lm, w, h)
-        pts = _rotate_points(pts, center, -roll_deg)
-    pts = np.round(pts).astype(np.int32)
-    mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillConvexPoly(mask, pts, 255)
-    if cv2.countNonZero(mask) < 30:
-        return None
-    roi = cv2.GaussianBlur(frame_bgr, (blur_ksize, blur_ksize), 0)
-    mean = cv2.mean(roi, mask=mask)
-    return float(mean[2]), float(mean[1]), float(mean[0])  # R, G, B
+    pts = roi_points(frame_bgr, lm, indices, "", transform_matrix=transform_matrix)
+    return roi_mean_from_points(frame_bgr, pts, blur_ksize)
 
 
-def draw_rois(frame_bgr: np.ndarray, lm: Any, transform_matrix: Any | None = None) -> None:
+def draw_rois(
+    frame_bgr: np.ndarray,
+    lm: Any,
+    transform_matrix: Any | None = None,
+    tracker: RoiGeometryTracker | None = None,
+    tuning: MediaPipeTuning | None = None,
+) -> None:
     h, w = frame_bgr.shape[:2]
-    center = _face_center_px(lm, w, h)
-    roll_deg, _, _, _ = _pose_from_matrix(transform_matrix, lm, w, h)
-    for _, indices in ROI_SPECS:
-        pts = np.array([_lm_xy(lm, i, w, h) for i in indices], dtype=np.float64)
-        if transform_matrix is not None:
-            pts = _rotate_points(pts, center, -roll_deg)
+    for name, indices in ROI_SPECS:
+        pts = roi_points(frame_bgr, lm, indices, name, transform_matrix, tracker, tuning)
         pts = np.round(pts).astype(np.int32)
         if pts.shape[0] >= 3:
             cv2.polylines(frame_bgr, [pts], True, (0, 200, 255), 1, cv2.LINE_AA)
@@ -587,7 +804,12 @@ class RppgEngine:
         lm: Any,
         transform_matrix: Any | None = None,
         roi_valid_count: int | None = None,
+        roi_weights: dict[str, float] | None = None,
+        roi_tracker: RoiGeometryTracker | None = None,
+        tuning: MediaPipeTuning | None = None,
     ) -> RppgMetrics:
+        tuning = tuning or load_mediapipe_tuning()
+        roi_weights = roi_weights or {name: 0.0 for name, _ in ROI_SPECS}
         self._trim(t_now)
         fs = self._fs()
         n = len(self._t)
@@ -622,14 +844,31 @@ class RppgEngine:
                 face_area_ratio,
                 self._face_motion_speed / max(face_h, 1e-6),
                 roi_valid_ratio,
+                tuning,
+            )
+            landmark_jitter = roi_tracker.landmark_jitter_norm if roi_tracker else 0.0
+            roi_area_stability = roi_tracker.roi_area_stability if roi_tracker else 1.0
+            stability_q = _clamp(
+                0.55 * (1.0 - landmark_jitter / max(tuning.rppg_roi.landmark_jitter_full_norm, 1e-6))
+                + 0.45 * roi_area_stability
             )
             return RppgMetrics(
                 warmup_progress=warm,
                 frame_brightness=brightness,
-                quality_score=pose_quality,
+                quality_score=_clamp(0.75 * pose_quality + 0.25 * stability_q),
                 pose_roll_deg=roll_deg,
                 pose_yaw_deg=yaw_deg,
                 pose_pitch_deg=pitch_deg,
+                roi_valid_count=int(roi_valid_count or 0),
+                roi_weight_forehead=float(roi_weights.get("forehead", 0.0)),
+                roi_weight_l_cheek=float(roi_weights.get("L_cheek", 0.0)),
+                roi_weight_r_cheek=float(roi_weights.get("R_cheek", 0.0)),
+                roi_weight_glabella=float(roi_weights.get("glabella", 0.0)),
+                landmark_jitter_norm=float(landmark_jitter),
+                roi_area_stability=float(roi_area_stability),
+                roi_area_jitter_ratio=float(roi_tracker.roi_area_jitter_ratio if roi_tracker else 0.0),
+                roi_smoothing_applied=bool(roi_tracker.roi_smoothing_applied if roi_tracker else False),
+                canonical_roi_warp_used=bool(roi_tracker.canonical_roi_warp_used if roi_tracker else False),
                 hrv_confidence="LOW",
                 face_detected=True,
             )
@@ -660,8 +899,15 @@ class RppgEngine:
             face_area_ratio,
             self._face_motion_speed / max(face_h, 1e-6),
             roi_valid_count / max(len(ROI_SPECS), 1),
+            tuning,
         )
-        quality_score = _clamp(0.55 * quality_score + 0.45 * signal_quality)
+        landmark_jitter = roi_tracker.landmark_jitter_norm if roi_tracker else 0.0
+        roi_area_stability = roi_tracker.roi_area_stability if roi_tracker else 1.0
+        stability_q = _clamp(
+            0.55 * (1.0 - landmark_jitter / max(tuning.rppg_roi.landmark_jitter_full_norm, 1e-6))
+            + 0.45 * roi_area_stability
+        )
+        quality_score = _clamp(0.42 * quality_score + 0.38 * signal_quality + 0.20 * stability_q)
 
         wf_n = min(160, filt.size)
         wave = filt[-wf_n:].copy()
@@ -692,6 +938,11 @@ class RppgEngine:
             roi_weight_l_cheek=float(roi_weights.get("L_cheek", 0.0)),
             roi_weight_r_cheek=float(roi_weights.get("R_cheek", 0.0)),
             roi_weight_glabella=float(roi_weights.get("glabella", 0.0)),
+            landmark_jitter_norm=float(landmark_jitter),
+            roi_area_stability=float(roi_area_stability),
+            roi_area_jitter_ratio=float(roi_tracker.roi_area_jitter_ratio if roi_tracker else 0.0),
+            roi_smoothing_applied=bool(roi_tracker.roi_smoothing_applied if roi_tracker else False),
+            canonical_roi_warp_used=bool(roi_tracker.canonical_roi_warp_used if roi_tracker else False),
             face_detected=True,
             waveform=[float(x) for x in wave],
             psd_freqs=[float(x) for x in pf],
@@ -771,11 +1022,12 @@ class RppgWorker(QObject):
             min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
             min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
             min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
-            num_faces=1,
+            num_faces=max(1, int(self._tuning.face_landmarker.num_faces)),
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
 
         engine = RppgEngine(buffer_sec=self._buffer_sec, target_fps=self._target_fps)
+        roi_tracker = RoiGeometryTracker()
         last_face = False
         t_origin: Optional[float] = None
         ts_ms_prev = 0
@@ -825,37 +1077,22 @@ class RppgWorker(QObject):
                     roll_deg, yaw_deg, pitch_deg, _scale = _pose_from_matrix(
                         transform_matrix, lm, bgr.shape[1], bgr.shape[0]
                     )
-                    draw_rois(annotated, lm, transform_matrix)
-
-                    roi_weights = _roi_weights_from_pose(
-                        roll_deg, yaw_deg, pitch_deg, lm, bgr.shape[1], bgr.shape[0], self._tuning
+                    sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
+                        bgr, lm, transform_matrix, roi_tracker, self._tuning
                     )
-                    rgbs: list[tuple[float, float, float]] = []
-                    weights: list[float] = []
-                    for name, indices in ROI_SPECS:
-                        val = roi_mean_bgr(bgr, lm, indices, transform_matrix=transform_matrix)
-                        obstruction = roi_obstruction_score(bgr, lm, indices, self._tuning)
-                        weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
-                        if weight < self._tuning.rppg_roi.min_roi_weight:
-                            weight = 0.0
-                        if val is not None and weight > 0.0:
-                            rgbs.append(val)
-                            weights.append(weight)
+                    draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
+                    if sample is not None:
+                        engine.push(ts, sample[0], sample[1], sample[2])
 
-                    if rgbs:
-                        total_w = sum(weights) or float(len(rgbs))
-                        r_avg = sum(x[0] * w for x, w in zip(rgbs, weights)) / total_w
-                        g_avg = sum(x[1] * w for x, w in zip(rgbs, weights)) / total_w
-                        b_avg = sum(x[2] * w for x, w in zip(rgbs, weights)) / total_w
-                        engine.push(ts, r_avg, g_avg, b_avg)
-
-                    roi_valid_count = len(rgbs)
                     metrics = engine.compute(
                         ts,
                         bgr,
                         lm,
                         transform_matrix=transform_matrix,
                         roi_valid_count=roi_valid_count,
+                        roi_weights=roi_weights,
+                        roi_tracker=roi_tracker,
+                        tuning=self._tuning,
                     )
                     metrics.roi_valid_count = roi_valid_count
                     metrics.face_detected = True
@@ -873,6 +1110,7 @@ class RppgWorker(QObject):
                         )
                 else:
                     engine.reset()
+                    roi_tracker.reset()
                     metrics = RppgMetrics(face_detected=False)
                     self.status_changed.emit("未偵測到臉部…")
 

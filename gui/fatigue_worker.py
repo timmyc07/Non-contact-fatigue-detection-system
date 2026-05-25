@@ -27,6 +27,7 @@ _HAS_MP = True
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from rppg.rppg_worker import ensure_face_model, _MODELS_DIR
+from .mediapipe_tuning import load_mediapipe_tuning
 
 
 # ── Drawing constants ────────────────────────────────────────────────────────
@@ -391,14 +392,15 @@ class FatigueWorker(QObject):
             return
 
         base_opts  = _mp_python.BaseOptions(model_asset_path=str(model_path))
+        tuning = load_mediapipe_tuning()
         lm_options = _mp_vision.FaceLandmarkerOptions(
             base_options=base_opts,
             output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
-            min_face_detection_confidence=0.55,
-            min_face_presence_confidence=0.55,
-            min_tracking_confidence=0.60,
-            num_faces=1,
+            min_face_detection_confidence=tuning.face_landmarker.min_face_detection_confidence,
+            min_face_presence_confidence=tuning.face_landmarker.min_face_presence_confidence,
+            min_tracking_confidence=tuning.face_landmarker.min_tracking_confidence,
+            num_faces=max(1, int(tuning.face_landmarker.num_faces)),
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
 

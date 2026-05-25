@@ -268,6 +268,19 @@ SQI 由 `compute_sqi` 計算：
 - Web metrics、Web dashboard live/playback 與 SQLite 錄製會保留。
 - 融合分數中，rPPG pillar 會再乘上這個品質權重，避免低品質影像把整體疲勞分數推高。
 
+### 9.2 MediaPipe ROI 幾何穩定度
+
+目前 rPPG ROI 取樣已加入 MediaPipe 幾何穩定度診斷：
+
+- `landmark_jitter_norm`：追蹤臉部輪廓、ROI 與關鍵點的 frame-to-frame 平均位移，並以臉部對角線正規化。
+- `roi_area_stability`：追蹤四個 ROI polygon 面積總和的短窗變化，面積快速跳動時降低品質分數。
+- `roi_smoothing_applied`：表示該幀是否套用 ROI polygon EMA 平滑。
+- `canonical_roi_warp_used`：表示是否套用實驗性的姿態導向 ROI 幾何正規化。
+
+ROI polygon EMA 只作用在 rPPG ROI 幾何，不回寫 MediaPipe landmark，也不餵給疲勞眨眼、saccade 或 microsleep 等快速事件判定，避免低通濾波鈍化行為訊號。
+
+`canonical_roi_warp_enabled` 預設關閉。此功能只作為回放實驗開關，啟用後可能改變 ROI 取樣分布與 rPPG 數值行為，必須用固定錄影與 profile sweep 比較後再評估是否採用。
+
 ## 10. Peak Detection 與 IBI
 
 IBI（inter-beat interval）由 `ibi_from_peaks` 計算：
@@ -504,6 +517,22 @@ rPPG metrics 會被轉成兩種輸出：
 
 `.venv/bin/python scripts/replay_calibration_summary.py recordings/metrics_YYYYMMDD_HHMMSS.db`
 
+### 18.4 MediaPipe profile sweep
+
+`scripts/mediapipe_profile_sweep.py` 可用錄製影片重跑 MediaPipe Face Landmarker profiles，輸出：
+
+- face detection rate。
+- 平均 ROI 可用數。
+- 平均 landmark jitter。
+- 平均 ROI 面積穩定度。
+- ROI smoothing 與 canonical ROI warp 的使用比例。
+
+使用方式：
+
+`.venv/bin/python scripts/mediapipe_profile_sweep.py recordings/video_YYYYMMDD_HHMMSS.mp4 --csv reports/mediapipe_profile_sweep.csv`
+
+此工具只比較 MediaPipe 偵測與 ROI 幾何穩定度，不重算或宣稱真實 BPM 精準度。若要評估心率誤差，仍需同步參考儀器 ground truth。
+
 ## 19. Demo 模組
 
 `rppg/demo_rppg_live.py` 是獨立 demo，使用同樣概念：
@@ -534,6 +563,19 @@ Demo 也支援：
 5. `stress_prob` 是 heuristic，不是醫療診斷。
 6. `face_landmarker.task` 是臉部 landmark 模型，不是心率模型；心率由後續訊號處理演算法估算。
 7. blendshape 與 transformation matrix 已接入，但工程上仍以幾何 landmark 與訊號處理結果為主。
+
+## 20.1 數值行為保護區
+
+一般 MediaPipe 優化不應順手改動以下 rPPG 數值流程：
+
+1. POS 演算法公式、RGB 正規化方式與 RGB/BGR 通道順序。
+2. Butterworth band-pass 頻段、order 與零相位濾波流程。
+3. Welch PSD 的搜尋頻段、window、`nperseg`、overlap 與 `nfft`。
+4. `buffer_sec`、暖機門檻與取樣率 `fs` 估算方式。
+5. 四個 rPPG ROI 的 landmark index、mask 面積門檻、Gaussian blur 與平均色取樣方式。
+6. `num_faces=1` 的單人假設。
+
+若需要更改上述項目，應以固定錄影資料與參考儀器 ground truth 建立獨立驗證任務。
 
 ## 21. MediaPipe 可優化項目、缺口與參數調整
 

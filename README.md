@@ -53,9 +53,12 @@ python -m rppg.demo_rppg_live
 可調參數集中在 `config/mediapipe_tuning.json`：
 
 - `face_landmarker`：Face Landmarker 的 detection / presence / tracking confidence。
-- `rppg_roi`：ROI 基礎權重、姿態懲罰、遮擋門檻與最小權重。
+- `rppg_roi`：ROI 基礎權重、姿態懲罰、遮擋門檻、最小權重、ROI polygon EMA 平滑、landmark jitter 與 ROI 面積穩定度門檻。
 - `quality`：rPPG / fatigue 統一品質分數的組合權重。
 - `blendshape`：blendshape baseline 校準秒數、最小樣本、EMA 與眼眉嘴輔助閘門。
+- `active_profile` / `profiles`：可切換 `default`、`stable_indoor`、`low_light`、`high_motion` 等 MediaPipe 場景 profile。切換後需重啟 worker / 應用程式，Face Landmarker options 不做熱更新。
+
+`canonical_roi_warp_enabled` 是實驗開關，預設關閉。啟用後會做保守的姿態導向 ROI 幾何正規化；因會改變 ROI 取樣分布，正式比較前應保持關閉。
 
 個人化 baseline 會自動儲存在 `config/mediapipe_calibration.json`，此檔案包含使用者/環境校準結果，不納入版本控制。
 
@@ -64,6 +67,14 @@ python -m rppg.demo_rppg_live
 ```bash
 .venv/bin/python scripts/replay_calibration_summary.py recordings/metrics_YYYYMMDD_HHMMSS.db
 ```
+
+若有對應錄影檔，可用 profile sweep 比較不同 MediaPipe profile 的偵測率、ROI 可用數、landmark jitter 與 ROI 面積穩定度：
+
+```bash
+.venv/bin/python scripts/mediapipe_profile_sweep.py recordings/video_YYYYMMDD_HHMMSS.mp4 --csv reports/mediapipe_profile_sweep.csv
+```
+
+調整 tuning 會影響新錄製資料與舊錄製資料的可比性；需要比較精準度或穩定度時，請使用同一段錄影回放 sweep。
 
 On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
 ```bash
@@ -81,6 +92,7 @@ sudo usermod -aG video "$USER"
 - `gui/`: desktop GUI, fatigue analysis, recording, and web dashboard integration
 - `config/mediapipe_tuning.json`: MediaPipe、ROI、quality score 與 blendshape 校準參數。
 - `scripts/replay_calibration_summary.py`: 從錄製資料庫彙整 rPPG / fatigue 品質與 ROI 診斷。
+- `scripts/mediapipe_profile_sweep.py`: 以錄影檔重跑 MediaPipe profiles，輸出偵測與 ROI 穩定度比較。
 - `docs/rppg_technical_report.md`: rPPG 技術、演算法、模型與系統運作說明；可用 `scripts/build_rppg_pdf.py` 產生 PDF。
 - `docs/2026-05-21-mediapipe-landmark-expansion-log.md`: 本次新增 MediaPipe 部位與精準度提升的更新紀錄。
 

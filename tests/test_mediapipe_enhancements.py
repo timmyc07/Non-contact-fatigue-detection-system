@@ -3,13 +3,24 @@ from __future__ import annotations
 from types import SimpleNamespace
 import sys
 from pathlib import Path
+import sqlite3
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import numpy as np
+
+from gui.mediapipe_tuning import load_mediapipe_tuning  # noqa: E402
+from gui.metrics_recorder import MetricsRecorder  # noqa: E402
 from gui.fatigue_engine import _norm_blend  # noqa: E402
-from rppg.rppg_worker import _face_quality_from_pose, _roi_weights_from_pose  # noqa: E402
+from rppg.rppg_worker import (  # noqa: E402
+    RppgEngine,
+    RoiGeometryTracker,
+    _face_quality_from_pose,
+    _roi_weights_from_pose,
+    collect_rppg_roi_sample,
+)
 
 
 def _fake_landmarks() -> list[SimpleNamespace]:
@@ -44,3 +55,75 @@ def test_quality_score_penalises_motion() -> None:
 def test_blendshape_normalisation_uses_baseline() -> None:
     assert _norm_blend(0.65, 0.15) > _norm_blend(0.35, 0.15)
     assert _norm_blend(0.10, 0.15) == 0.0
+
+
+def test_mediapipe_tuning_profiles_load() -> None:
+    tuning = load_mediapipe_tuning()
+
+    assert tuning.face_landmarker.num_faces == 1
+    assert "stable_indoor" in tuning.profiles
+    assert 0.0 <= tuning.rppg_roi.roi_smoothing_alpha <= 1.0
+    assert tuning.rppg_roi.canonical_roi_warp_enabled is False
+
+
+def test_roi_tracker_reports_jitter_and_area_stability() -> None:
+    frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    lm = _fake_landmarks()
+    tracker = RoiGeometryTracker()
+    tuning = load_mediapipe_tuning()
+
+    collect_rppg_roi_sample(frame, lm, None, tracker, tuning)
+    first_jitter = tracker.landmark_jitter_norm
+    lm[10] = SimpleNamespace(x=0.52, y=0.22)
+    collect_rppg_roi_sample(frame, lm, None, tracker, tuning)
+
+    assert first_jitter == 0.0
+    assert tracker.landmark_jitter_norm > 0.0
+    assert 0.0 <= tracker.roi_area_stability <= 1.0
+
+
+def test_rppg_compute_non_warmup_returns_roi_weights() -> None:
+    frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    lm = _fake_landmarks()
+    engine = RppgEngine(buffer_sec=12.0, target_fps=30.0)
+    tracker = RoiGeometryTracker()
+    tuning = load_mediapipe_tuning()
+    roi_weights = {"forehead": 0.4, "L_cheek": 0.2, "R_cheek": 0.2, "glabella": 0.2}
+    for i in range(150):
+        t = i / 30.0
+        val = 128.0 + 3.0 * np.sin(2.0 * np.pi * 1.2 * t)
+        engine.push(t, val, 128.0, 127.0)
+
+    tracker.update_landmarks(lm, 640, 480)
+    metrics = engine.compute(
+        5.0,
+        frame,
+        lm,
+        roi_valid_count=4,
+        roi_weights=roi_weights,
+        roi_tracker=tracker,
+        tuning=tuning,
+    )
+
+    assert metrics.roi_weight_forehead == 0.4
+    assert metrics.roi_valid_count == 4
+    assert metrics.landmark_jitter_norm >= 0.0
+
+
+def test_metrics_recorder_migrates_mediapipe_diagnostics(tmp_path: Path) -> None:
+    db_path = tmp_path / "old_metrics.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL)")
+
+    recorder = MetricsRecorder(str(db_path))
+    try:
+        cols = {
+            row[1]
+            for row in recorder.conn.execute("PRAGMA table_info(metrics)").fetchall()  # type: ignore[union-attr]
+        }
+    finally:
+        recorder.close()
+
+    assert "rppg_landmark_jitter_norm" in cols
+    assert "rppg_roi_area_stability" in cols
+    assert "rppg_canonical_roi_warp_used" in cols

@@ -43,6 +43,7 @@ from rppg.rppg_worker import (
     _roi_weights_from_pose,
     _rotate_points,
 )
+from gui.mediapipe_tuning import load_mediapipe_tuning
 
 _IS_WIN = platform.system() == "Windows"
 # OpenCV: device description (MSMF / some backends)
@@ -688,15 +689,16 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
     from mediapipe.tasks.python import vision
 
     model_path = ensure_face_model(Path(__file__).resolve().parents[1] / "models")
+    tuning = load_mediapipe_tuning()
     base_options = python.BaseOptions(model_asset_path=str(model_path))
     options = vision.FaceLandmarkerOptions(
         base_options=base_options,
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
-        min_face_detection_confidence=0.55,
-        min_face_presence_confidence=0.55,
-        min_tracking_confidence=0.60,
-        num_faces=1,
+        min_face_detection_confidence=tuning.face_landmarker.min_face_detection_confidence,
+        min_face_presence_confidence=tuning.face_landmarker.min_face_presence_confidence,
+        min_tracking_confidence=tuning.face_landmarker.min_tracking_confidence,
+        num_faces=max(1, int(tuning.face_landmarker.num_faces)),
         running_mode=vision.RunningMode.VIDEO,
     )
 
@@ -761,7 +763,7 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
                     transform_matrix, lm, frame.shape[1], frame.shape[0]
                 )
                 roi_weights = _roi_weights_from_pose(
-                    roll_deg, yaw_deg, pitch_deg, lm, frame.shape[1], frame.shape[0]
+                    roll_deg, yaw_deg, pitch_deg, lm, frame.shape[1], frame.shape[0], tuning
                 )
 
                 rgbs: list[tuple[float, float, float]] = []

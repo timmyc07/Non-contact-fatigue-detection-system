@@ -1,8 +1,10 @@
 {
+  "active_profile": "default",
   "face_landmarker": {
     "min_face_detection_confidence": 0.55,
     "min_face_presence_confidence": 0.55,
-    "min_tracking_confidence": 0.6
+    "min_tracking_confidence": 0.6,
+    "num_faces": 1
   },
   "rppg_roi": {
     "base_weights": {
@@ -19,7 +21,14 @@
     "obstruction_bright_luma": 232.0,
     "obstruction_low_chroma": 2.5,
     "obstruction_high_chroma": 48.0,
-    "min_roi_weight": 0.04
+    "min_roi_weight": 0.04,
+    "roi_smoothing_enabled": true,
+    "roi_smoothing_alpha": 0.35,
+    "roi_smoothing_max_shift_ratio": 0.12,
+    "landmark_jitter_full_norm": 0.02,
+    "roi_area_jitter_full_ratio": 0.25,
+    "canonical_roi_warp_enabled": false,
+    "canonical_roi_warp_strength": 0.35
   },
   "quality": {
     "pose_weight": 0.3,
@@ -37,5 +46,44 @@
     "squint_gate": 0.18,
     "brow_gate": 0.18,
     "jaw_gate": 0.2
+  },
+  "profiles": {
+    "stable_indoor": {
+      "face_landmarker": {
+        "min_face_detection_confidence": 0.6,
+        "min_face_presence_confidence": 0.6,
+        "min_tracking_confidence": 0.7,
+        "num_faces": 1
+      },
+      "rppg_roi": {
+        "roi_smoothing_alpha": 0.30,
+        "roi_smoothing_max_shift_ratio": 0.10
+      }
+    },
+    "low_light": {
+      "face_landmarker": {
+        "min_face_detection_confidence": 0.45,
+        "min_face_presence_confidence": 0.50,
+        "min_tracking_confidence": 0.55,
+        "num_faces": 1
+      },
+      "rppg_roi": {
+        "obstruction_dark_luma": 28.0,
+        "roi_smoothing_alpha": 0.40
+      }
+    },
+    "high_motion": {
+      "face_landmarker": {
+        "min_face_detection_confidence": 0.60,
+        "min_face_presence_confidence": 0.60,
+        "min_tracking_confidence": 0.75,
+        "num_faces": 1
+      },
+      "rppg_roi": {
+        "roi_smoothing_alpha": 0.50,
+        "roi_smoothing_max_shift_ratio": 0.18,
+        "landmark_jitter_full_norm": 0.015
+      }
+    }
   }
 }

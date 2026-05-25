@@ -41,9 +41,8 @@ from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig
 from .fatigue_worker import draw_fatigue_annotations
 from rppg.rppg_worker import (
     RppgEngine, RppgMetrics,
-    draw_rois, roi_mean_bgr, ROI_SPECS,
-    roi_obstruction_score,
-    _pose_from_matrix, _roi_weights_from_pose,
+    draw_rois,
+    RoiGeometryTracker, collect_rppg_roi_sample,
     ensure_face_model, _MODELS_DIR,
 )
 
@@ -139,13 +138,14 @@ class CombinedWorker(QObject):
             min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
             min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
             min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
-            num_faces=1,
+            num_faces=max(1, int(self._tuning.face_landmarker.num_faces)),
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
 
         # ── Engines ───────────────────────────────────────────────────────────
         rppg_engine    = RppgEngine(buffer_sec=self._buffer_sec,
                                     target_fps=self._target_fps) if self._enable_rppg else None
+        roi_tracker    = RoiGeometryTracker() if self._enable_rppg else None
         fatigue_engine = FatigueEngine(params=self._fatigue_params) if self._enable_fatigue else None
 
         last_face      = False
@@ -210,40 +210,24 @@ class CombinedWorker(QObject):
 
                     # ── Step 2: rPPG ROI extraction + engine (draws on top)
                     if rppg_engine is not None:
-                        draw_rois(annotated, lm, transform_matrix)   # yellow ROI outlines on top
-                        roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(
-                            transform_matrix, lm, w_px, h_px
+                        assert roi_tracker is not None
+                        sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
+                            bgr, lm, transform_matrix, roi_tracker, self._tuning
                         )
-                        roi_weights = _roi_weights_from_pose(
-                            roll_deg, yaw_deg, pitch_deg, lm, w_px, h_px, self._tuning
-                        )
-                        rgbs: list[tuple[float, float, float]] = []
-                        weights: list[float] = []
-                        for name, indices in ROI_SPECS:
-                            val = roi_mean_bgr(
-                                bgr, lm, indices, transform_matrix=transform_matrix
-                            )
-                            obstruction = roi_obstruction_score(bgr, lm, indices, self._tuning)
-                            weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
-                            if weight < self._tuning.rppg_roi.min_roi_weight:
-                                weight = 0.0
-                            if val and weight > 0.0:
-                                rgbs.append(val)
-                                weights.append(weight)
-                        if rgbs:
-                            total_w = sum(weights) or float(len(rgbs))
-                            r_avg = sum(x[0] * w for x, w in zip(rgbs, weights)) / total_w
-                            g_avg = sum(x[1] * w for x, w in zip(rgbs, weights)) / total_w
-                            b_avg = sum(x[2] * w for x, w in zip(rgbs, weights)) / total_w
-                            rppg_engine.push(ts, r_avg, g_avg, b_avg)
+                        draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
+                        if sample is not None:
+                            rppg_engine.push(ts, sample[0], sample[1], sample[2])
                         r_metrics = rppg_engine.compute(
                             ts,
                             bgr,
                             lm,
                             transform_matrix=transform_matrix,
-                            roi_valid_count=len(rgbs),
+                            roi_valid_count=roi_valid_count,
+                            roi_weights=roi_weights,
+                            roi_tracker=roi_tracker,
+                            tuning=self._tuning,
                         )
-                        r_metrics.roi_valid_count = len(rgbs)
+                        r_metrics.roi_valid_count = roi_valid_count
                         r_metrics.face_detected = True
                         self.rppg_metrics_ready.emit(r_metrics)
 
@@ -256,6 +240,8 @@ class CombinedWorker(QObject):
                         self.fatigue_metrics_ready.emit(f_metrics)
                     if rppg_engine is not None:
                         rppg_engine.reset()
+                        if roi_tracker is not None:
+                            roi_tracker.reset()
                         r_metrics = RppgMetrics(face_detected=False)
                         self.rppg_metrics_ready.emit(r_metrics)
                     self.status_changed.emit("未偵測到臉部…")

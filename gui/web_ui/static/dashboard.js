@@ -180,6 +180,10 @@ function updateMetricsDisplay(m) {
     setVal('rppg-lcheek-weight-value', m.stress_roi_weight_l_cheek, v => v > 0 ? v.toFixed(2) : '--');
     setVal('rppg-rcheek-weight-value', m.stress_roi_weight_r_cheek, v => v > 0 ? v.toFixed(2) : '--');
     setVal('rppg-glabella-weight-value', m.stress_roi_weight_glabella, v => v > 0 ? v.toFixed(2) : '--');
+    setVal('rppg-jitter-value', m.stress_landmark_jitter_norm, v => v >= 0 ? v.toFixed(4) : '--');
+    setVal('rppg-area-stability-value', m.stress_roi_area_stability, v => v > 0 ? v.toFixed(2) : '--');
+    setVal('rppg-smoothing-value', m.stress_roi_smoothing_applied, v => v ? 'ON' : 'OFF');
+    setVal('rppg-canonical-value', m.stress_canonical_roi_warp_used, v => v ? 'ON' : 'OFF');
     // v12: HRV 信心值 + IBI 偽影比例
     const confEl = document.getElementById('hrv-confidence-value');
     if (confEl && m.stress_hrv_confidence) {
@@ -375,6 +379,7 @@ function _cachePbDom() {
         'pb-rppg-quality', 'pb-fatigue-quality', 'pb-roi-valid', 'pb-blend-calib',
         'pb-rppg-roll', 'pb-rppg-yaw', 'pb-rppg-pitch',
         'pb-rppg-fw', 'pb-rppg-lw', 'pb-rppg-rw', 'pb-rppg-gw',
+        'pb-rppg-jitter', 'pb-rppg-area-stability', 'pb-rppg-smoothing', 'pb-rppg-canonical',
         'pb-fstate', 'pb-fconf', 'pb-estatus', 'pb-timestamp',
         'pb-play-icon', 'pb-speed', 'pb-time-total', 'pb-total',
         'pb-controls', 'pb-data', 'pb-loading'
@@ -413,6 +418,8 @@ const _displayThresholds = {
     'pb-rppg-lw': 0.02,
     'pb-rppg-rw': 0.02,
     'pb-rppg-gw': 0.02,
+    'pb-rppg-jitter': 0.0005,
+    'pb-rppg-area-stability': 0.02,
 };
 
 /**
@@ -818,6 +825,10 @@ function seekTo(idx) {
     _stableSet('pb-rppg-lw', d.rppg_roi_weight_l_cheek, v => v > 0 ? v.toFixed(2) : '--');
     _stableSet('pb-rppg-rw', d.rppg_roi_weight_r_cheek, v => v > 0 ? v.toFixed(2) : '--');
     _stableSet('pb-rppg-gw', d.rppg_roi_weight_glabella, v => v > 0 ? v.toFixed(2) : '--');
+    _stableSet('pb-rppg-jitter', d.rppg_landmark_jitter_norm, v => v >= 0 ? v.toFixed(4) : '--');
+    _stableSet('pb-rppg-area-stability', d.rppg_roi_area_stability, v => v > 0 ? v.toFixed(2) : '--');
+    _setElText(_pb['pb-rppg-smoothing'], d.rppg_roi_smoothing_applied, v => v ? 'ON' : 'OFF');
+    _setElText(_pb['pb-rppg-canonical'], d.rppg_canonical_roi_warp_used, v => v ? 'ON' : 'OFF');
 
     // 文字狀態 — 只在實際改變時更新
     const fsEl = _pb['pb-fstate'];
