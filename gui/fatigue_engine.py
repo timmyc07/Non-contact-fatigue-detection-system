@@ -1177,7 +1177,7 @@ class FatigueEngine:
             + (self.head.yawn_count / 10.0) * 0.05,
             0.0, 1.0,
         )
-        quality_score = _clamp(fatigue_q)
+        quality_score = _clamp(fatigue_q, 0.0, 1.0)
 
         return FatigueMetrics(
             face_detected   = True,

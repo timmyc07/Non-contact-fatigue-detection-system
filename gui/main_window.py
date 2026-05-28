@@ -604,7 +604,7 @@ class MainWindow(QMainWindow):
             return
         self._unregister_global_hotkeys()
 
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32 = cast(Any, ctypes).WinDLL("user32", use_last_error=True)
         hwnd = int(self.winId())
 
         for hotkey_id, act in self._global_hotkey_id_map.items():
@@ -614,7 +614,7 @@ class MainWindow(QMainWindow):
                 continue
             mod_flags, vk = parsed
             if not user32.RegisterHotKey(hwnd, hotkey_id, mod_flags, vk):
-                err = ctypes.get_last_error()
+                err = cast(Any, ctypes).get_last_error()
                 if seq not in self._hotkey_failed_once:
                     if err == 1409:
                         self._append_log(f"⚠ 全域快捷鍵已被占用：{seq}（錯誤 {err}）")
@@ -628,7 +628,7 @@ class MainWindow(QMainWindow):
             return
         if not self._global_hotkeys_registered:
             return
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32 = cast(Any, ctypes).WinDLL("user32", use_last_error=True)
         hwnd = int(self.winId())
         for hotkey_id in self._global_hotkey_id_map:
             user32.UnregisterHotKey(hwnd, hotkey_id)

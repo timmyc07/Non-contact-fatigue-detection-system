@@ -5,6 +5,7 @@ import textwrap
 from pathlib import Path
 
 from matplotlib import font_manager
+from matplotlib.axes import Axes
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
@@ -107,7 +108,7 @@ def _parse_markdown(md: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def _new_page(pdf: PdfPages, page_no: int) -> tuple[Figure, object, float]:
+def _new_page(pdf: PdfPages, page_no: int) -> tuple[Figure, Axes, float]:
     fig = Figure(figsize=(8.27, 11.69))
     ax = fig.add_axes((0, 0, 1, 1))
     ax.axis("off")
