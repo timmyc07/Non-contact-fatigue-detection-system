@@ -57,6 +57,13 @@ QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py
 
 本專案 GUI 使用 PySide6。程式啟動時會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
 
+若 `setup_ubuntu.sh` 在非互動環境因 sudo 密碼失敗，請在自己的終端機直接執行：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 v4l-utils
+```
+
 Optional demo:
 ```bash
 python -m rppg.demo_rppg_live

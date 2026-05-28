@@ -11,6 +11,7 @@ Ubuntu 執行 `python main.py` 可能出現 Qt `xcb` platform plugin 載入失�
 - `gui/camera_devices.py` 找不到相機時不再回傳可選的假裝置，避免 GUI 顯示「偵測 1 台」但實際無硬體。
 - `gui/camera_stream_worker.py` 增加黑幀亮度診斷與連續讀取失敗偵測，只輸出診斷與錯誤，不改 rPPG 或疲勞演算法。
 - `scripts/diagnose_camera.py` 新增 Ubuntu 相機診斷入口，可檢查 `/dev/video*`、V4L2、權限、占用、OpenCV 讀幀與黑畫面亮度統計。
+- `main.py` 啟動前會檢查 `libxcb-cursor0`；若系統缺套件，會先輸出 Ubuntu apt 安裝指令並結束，避免 Qt 在建立 `QApplication` 時 core dump。
 
 ## 操作建議
 
