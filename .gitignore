@@ -81,6 +81,7 @@ models/*.onnx
 
 # Documentation artifacts (project documents folder contains many large binaries)
 docs/project_documents/
+docs/images/
 *.docx
 *.pdf
 
