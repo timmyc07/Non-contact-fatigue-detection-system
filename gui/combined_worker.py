@@ -36,6 +36,7 @@ _HAS_MP = True
 _HAS_SCIPY = True
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
+from .frame_queue import get_latest
 from .mediapipe_tuning import load_mediapipe_tuning
 from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig
 from .fatigue_worker import draw_fatigue_annotations
@@ -160,7 +161,7 @@ class CombinedWorker(QObject):
         with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
             while not self._stop:
                 try:
-                    ts, bgr = self._queue.get(timeout=0.1)
+                    ts, bgr = get_latest(self._queue, timeout=0.1)
                 except queue.Empty:
                     continue
 

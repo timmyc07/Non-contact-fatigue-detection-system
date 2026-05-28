@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import sys
 from pathlib import Path
 
@@ -8,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import gui.camera_devices as camera_devices  # noqa: E402
+from gui.frame_queue import get_latest, put_latest  # noqa: E402
 
 
 class _ClosedCapture:
@@ -80,6 +82,7 @@ def test_configure_camera_capture_prefers_mjpg_before_size_and_fps(monkeypatch) 
     cap = _OpenedCapture()
     monkeypatch.setattr(camera_devices, "_IS_WIN", False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FOURCC", 6, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_BUFFERSIZE", 38, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FRAME_WIDTH", 3, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FRAME_HEIGHT", 4, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FPS", 5, raising=False)
@@ -88,11 +91,39 @@ def test_configure_camera_capture_prefers_mjpg_before_size_and_fps(monkeypatch) 
     camera_devices.configure_camera_capture(cap, width=1280, height=720, target_fps=30)
 
     assert cap.set_calls == [
+        (38, 1),
         (6, 1196444237),
         (3, 1280.0),
         (4, 720.0),
         (5, 30.0),
     ]
+
+
+def test_configure_camera_capture_can_only_reduce_buffer(monkeypatch) -> None:
+    cap = _OpenedCapture()
+    monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_BUFFERSIZE", 38, raising=False)
+
+    camera_devices.configure_camera_capture(
+        cap,
+        width=1280,
+        height=720,
+        target_fps=30,
+        apply_format=False,
+    )
+
+    assert cap.set_calls == [(38, 1)]
+
+
+def test_frame_queue_keeps_latest_item_when_full() -> None:
+    q: "queue.Queue[int]" = queue.Queue(maxsize=2)
+
+    put_latest(q, 1)
+    put_latest(q, 2)
+    put_latest(q, 3)
+
+    assert list(q.queue) == [2, 3]
+    put_latest(q, 4)
+    assert get_latest(q, timeout=0.01) == 4
 
 
 def test_setup_ubuntu_lists_qt_xcb_and_v4l2_packages() -> None:

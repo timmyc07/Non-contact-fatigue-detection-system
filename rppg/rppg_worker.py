@@ -35,6 +35,7 @@ from mediapipe.tasks.python import vision as _mp_vision
 from scipy.interpolate import interp1d as _scipy_interp1d
 from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 
+from gui.frame_queue import get_latest
 from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
 
 _HAS_MP = True
@@ -1036,9 +1037,8 @@ class RppgWorker(QObject):
 
         with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
             while not self._stop:
-                # Drain the queue
                 try:
-                    ts, bgr = self._queue.get(timeout=0.1)
+                    ts, bgr = get_latest(self._queue, timeout=0.1)
                 except queue.Empty:
                     continue
 

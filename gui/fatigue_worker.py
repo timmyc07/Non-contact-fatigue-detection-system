@@ -26,8 +26,9 @@ from mediapipe.tasks.python import vision as _mp_vision
 _HAS_MP = True
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
-from rppg.rppg_worker import ensure_face_model, _MODELS_DIR
+from .frame_queue import get_latest
 from .mediapipe_tuning import load_mediapipe_tuning
+from rppg.rppg_worker import ensure_face_model, _MODELS_DIR
 
 
 # ── Drawing constants ────────────────────────────────────────────────────────
@@ -414,7 +415,7 @@ class FatigueWorker(QObject):
         with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
             while not self._stop:
                 try:
-                    ts, bgr = self._queue.get(timeout=0.1)
+                    ts, bgr = get_latest(self._queue, timeout=0.1)
                 except queue.Empty:
                     continue
 

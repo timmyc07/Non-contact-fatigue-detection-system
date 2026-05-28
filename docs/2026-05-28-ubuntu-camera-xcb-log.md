@@ -13,6 +13,7 @@ Ubuntu 執行 `python main.py` 可能出現 Qt `xcb` platform plugin 載入失�
 - `scripts/diagnose_camera.py` 新增 Ubuntu 相機診斷入口，可檢查 `/dev/video*`、V4L2、權限、占用、OpenCV 讀幀與黑畫面亮度統計。
 - `main.py` 啟動前會檢查 `libxcb-cursor0`；若系統缺套件，會先輸出 Ubuntu apt 安裝指令並結束，避免 Qt 在建立 `QApplication` 時 core dump。
 - Linux 相機設定會優先要求 MJPG，再協商解析度與 FPS，避免部分 UVC webcam 在 720p YUYV 模式只剩 10 FPS。
+- 相機與 MediaPipe worker 之間改用 latest-frame 佇列策略；當分析速度跟不上時丟棄舊幀而不是累積延遲。OpenCV camera buffer 也會盡量降到 1，但是否生效仍取決於 backend 與驅動。
 
 ## 操作建議
 
@@ -25,3 +26,4 @@ bash scripts/setup_ubuntu.sh
 
 若診斷腳本可讀到非黑畫面但 GUI 仍黑屏，優先在 GUI 切換相機後端並回報診斷輸出。若診斷腳本也無法開啟相機或沒有 `/dev/video*`，優先處理硬體枚舉、video 群組權限或裝置占用。
 若 GUI 顯示約 10 FPS，先用 `v4l2-ctl --list-formats-ext -d /dev/video0` 檢查該解析度的 YUYV/MJPG 支援幀率，再用診斷腳本確認 OpenCV 實際協商格式。
+若 Windows 顯示 30 FPS 但預覽延遲越來越大或中途卡住，優先比較 GUI 的 `MSMF` / `DSHOW` 後端，並確認是否有其他程式占用相機。

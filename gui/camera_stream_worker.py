@@ -13,6 +13,8 @@ from PySide6.QtGui import QImage
 
 import cv2
 
+from gui.frame_queue import put_latest
+
 # How long to wait for the first frame before declaring failure (seconds).
 _FIRST_FRAME_TIMEOUT = 10.0
 _READ_FAILURE_TIMEOUT = 5.0
@@ -129,18 +131,15 @@ class CameraStreamWorker(QObject):
             return
 
         # ── Apply resolution / FPS ────────────────────────────────────────
-        # FFMPEG (and fallback backends): cap.set() is lightweight, apply freely.
-        # MSMF: every cap.set() on an open capture triggers a full pipeline
-        # rebuild (~1-2 s each), so skip all property setting for MSMF and let
-        # the driver auto-negotiate its native format instead.
-        if self._backend != "msmf":
-            configure_camera_capture(
-                cap,
-                width=self._width,
-                height=self._height,
-                target_fps=self._target_fps,
-                prefer_mjpg=True,
-            )
+        # MSMF 明確指定時避免解析度/FPS set 觸發管線重建；仍嘗試壓低 buffer。
+        configure_camera_capture(
+            cap,
+            width=self._width,
+            height=self._height,
+            target_fps=self._target_fps,
+            prefer_mjpg=True,
+            apply_format=self._backend != "msmf",
+        )
 
         # Read what the backend negotiated and emit immediately.
         pre_codec, pre_w, pre_h, pre_fps = self._read_cap_info(cap)
@@ -242,10 +241,7 @@ class CameraStreamWorker(QObject):
             if self._bgr_queues:
                 payload = (time.perf_counter(), frame.copy())
                 for q in self._bgr_queues:
-                    try:
-                        q.put_nowait(payload)
-                    except queue.Full:
-                        pass
+                    put_latest(q, payload)
 
         try:
             cap.release()
