@@ -44,13 +44,13 @@ def test_linux_api_preferences_prioritise_v4l2(monkeypatch) -> None:
     assert camera_devices._build_api_preferences(None) == [200, 0]
 
 
-def test_windows_api_preferences_include_dshow_fallback(monkeypatch) -> None:
+def test_windows_api_preferences_prioritise_dshow_then_msmf(monkeypatch) -> None:
     monkeypatch.setattr(camera_devices, "_IS_WIN", True)
     monkeypatch.setattr(camera_devices.cv2, "CAP_MSMF", 1400, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_DSHOW", 700, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_ANY", 0, raising=False)
 
-    assert camera_devices._build_api_preferences(None) == [1400, 700, 0]
+    assert camera_devices._build_api_preferences(None) == [700, 1400, 0]
 
 
 def test_list_camera_devices_returns_empty_when_probe_finds_nothing(monkeypatch) -> None:

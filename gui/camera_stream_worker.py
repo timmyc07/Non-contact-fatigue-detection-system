@@ -19,6 +19,7 @@ from gui.frame_queue import put_latest
 _FIRST_FRAME_TIMEOUT = 10.0
 _READ_FAILURE_TIMEOUT = 5.0
 _DARK_FRAME_WARN_SECONDS = 3.0
+_PREVIEW_MAX_FPS = 20.0
 
 # Sliding-window FPS: keeps timestamps of last N frames.
 # fps = (N-1) / (newest_ts - oldest_ts)
@@ -188,8 +189,15 @@ class CameraStreamWorker(QObject):
 
         # ── Main capture loop ─────────────────────────────────────────────
         ts_window: deque[float] = deque(maxlen=_FPS_WINDOW_FRAMES)
+        last_preview_emit = 0.0
+        preview_emit_interval = 1.0 / _PREVIEW_MAX_FPS
 
         def _emit_frame(f: np.ndarray) -> None:
+            nonlocal last_preview_emit
+            now = time.perf_counter()
+            if now - last_preview_emit < preview_emit_interval:
+                return
+            last_preview_emit = now
             rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
             rgb = np.ascontiguousarray(rgb)
             fh, fw = rgb.shape[:2]

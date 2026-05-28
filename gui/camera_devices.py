@@ -120,14 +120,14 @@ def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
 
     prefs: list[int] = []
     if _IS_WIN:
-        # Prefer MSMF: preserves native codec (e.g. MJPG) without driver-level
-        # decompression that DirectShow typically applies.
-        cap_msmf = getattr(cv2, "CAP_MSMF", None)
-        if isinstance(cap_msmf, int):
-            prefs.append(cap_msmf)
+        # DirectShow is usually lower latency for live webcam preview on
+        # Windows; MSMF remains the first fallback for cameras that need it.
         cap_dshow = getattr(cv2, "CAP_DSHOW", None)
         if isinstance(cap_dshow, int):
             prefs.append(cap_dshow)
+        cap_msmf = getattr(cv2, "CAP_MSMF", None)
+        if isinstance(cap_msmf, int):
+            prefs.append(cap_msmf)
     else:
         cap_v4l2 = getattr(cv2, "CAP_V4L2", None)
         if isinstance(cap_v4l2, int):
@@ -287,7 +287,7 @@ def configure_camera_capture(
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not apply_format:
             return
-        if prefer_mjpg and not _IS_WIN:
+        if prefer_mjpg:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))

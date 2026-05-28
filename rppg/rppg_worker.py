@@ -40,6 +40,7 @@ from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
 
 _HAS_MP = True
 _HAS_SCIPY = True
+_ANNOTATED_PREVIEW_MAX_FPS = 20.0
 
 # ── ROI landmark indices (MediaPipe 478-point face mesh) ────────────────────
 FOREHEAD_ROI_IDX  = [107, 66, 69, 109, 10, 338, 299, 296, 336, 9]
@@ -1032,6 +1033,8 @@ class RppgWorker(QObject):
         last_face = False
         t_origin: Optional[float] = None
         ts_ms_prev = 0
+        last_preview_emit = 0.0
+        preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
 
         self.status_changed.emit("MediaPipe 初始化完成，等待幀資料…")
 
@@ -1116,15 +1119,16 @@ class RppgWorker(QObject):
 
                 self.metrics_ready.emit(metrics)
 
-                # Emit annotated QImage (BGR → RGB → QImage)
-                rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                rgb_ann = np.ascontiguousarray(rgb_ann)
-                fh, fw = rgb_ann.shape[:2]
-                qimg = QImage(
-                    rgb_ann.data, fw, fh,
-                    rgb_ann.strides[0],
-                    QImage.Format.Format_RGB888,
-                )
-                self.frame_annotated.emit(qimg.copy())
+                if ts - last_preview_emit >= preview_emit_interval:
+                    last_preview_emit = ts
+                    rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                    rgb_ann = np.ascontiguousarray(rgb_ann)
+                    fh, fw = rgb_ann.shape[:2]
+                    qimg = QImage(
+                        rgb_ann.data, fw, fh,
+                        rgb_ann.strides[0],
+                        QImage.Format.Format_RGB888,
+                    )
+                    self.frame_annotated.emit(qimg.copy())
 
         self.finished.emit()

@@ -34,6 +34,7 @@ from mediapipe.tasks.python import vision as _mp_vision
 
 _HAS_MP = True
 _HAS_SCIPY = True
+_ANNOTATED_PREVIEW_MAX_FPS = 20.0
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from .frame_queue import get_latest
@@ -152,6 +153,8 @@ class CombinedWorker(QObject):
         last_face      = False
         t_origin: Optional[float] = None
         ts_ms_prev     = 0
+        last_preview_emit = 0.0
+        preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
 
         parts = []
         if self._enable_rppg:    parts.append("rPPG")
@@ -251,16 +254,17 @@ class CombinedWorker(QObject):
                 fused = self._fuser.update(rppg=r_metrics, fatigue=f_metrics)
                 self.fused_score_ready.emit(fused)
 
-                # ── Emit combined annotated QImage ────────────────────────────
-                rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                rgb_ann = np.ascontiguousarray(rgb_ann)
-                fh, fw  = rgb_ann.shape[:2]
-                qimg    = QImage(
-                    rgb_ann.data, fw, fh,
-                    rgb_ann.strides[0],
-                    QImage.Format.Format_RGB888,
-                )
-                self.frame_annotated.emit(qimg.copy())
+                if ts - last_preview_emit >= preview_emit_interval:
+                    last_preview_emit = ts
+                    rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                    rgb_ann = np.ascontiguousarray(rgb_ann)
+                    fh, fw  = rgb_ann.shape[:2]
+                    qimg    = QImage(
+                        rgb_ann.data, fw, fh,
+                        rgb_ann.strides[0],
+                        QImage.Format.Format_RGB888,
+                    )
+                    self.frame_annotated.emit(qimg.copy())
 
         self.finished.emit()
 

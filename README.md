@@ -57,7 +57,7 @@ QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py
 
 本專案 GUI 使用 PySide6。程式啟動時會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
 
-Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機或分析端 buffer 累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，並讓分析 worker 永遠取最新幀；若仍有特定相機卡頓，可在 GUI 後端切換 `MSMF` / `DSHOW` 比較穩定性。
+Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機、分析端或 Qt 預覽訊號累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，讓分析 worker 永遠取最新幀，並限制預覽影像訊號輸出避免主執行緒堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 GUI 後端手動切換比較穩定性。
 
 若相機畫面左右相反，可在 GUI 攝影機區啟用或關閉「水平翻轉（鏡像校正）」。此設定會同步套用到預覽、錄影與分析輸入，避免畫面與分析來源不一致。
 
