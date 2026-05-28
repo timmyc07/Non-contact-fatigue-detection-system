@@ -397,12 +397,14 @@ class MainWindow(QMainWindow):
         self._cmb_backend.addItem("FFMPEG", "ffmpeg")
         if sys.platform.startswith("win"):
             self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
+            self._cmb_backend.addItem("DSHOW（DirectShow）", "dshow")
         self._cmb_backend.setCurrentIndex(0)
         self._cmb_backend.setToolTip(
             "自動 — 依平台優先選擇可用後端\n"
             "V4L2 — Linux 原生攝影機後端\n"
             "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端\n"
-            "MSMF — Windows Media Foundation，可保留原生 MJPG"
+            "MSMF — Windows Media Foundation，可保留原生 MJPG\n"
+            "DSHOW — Windows DirectShow，部分虛擬相機較穩定"
         )
         lbl_backend = QLabel("後端：")
         lbl_backend.setObjectName("hintLabel")
@@ -867,7 +869,10 @@ class MainWindow(QMainWindow):
         if dev_list:
             self._append_log(f"攝影機清單已更新：{len(dev_list)} 個項目。")
         else:
-            self._append_log("未取得攝影機清單。")
+            self._append_log(
+                "未取得攝影機清單。Linux 請檢查 /dev/video*、video 群組權限，"
+                "或執行 scripts/diagnose_camera.py。"
+            )
 
     def _apply_hotkey_shortcuts(self) -> None:
         hk = self._hotkeys
@@ -1283,6 +1288,7 @@ class MainWindow(QMainWindow):
 
         thread.started.connect(worker.run)
         worker.camera_info.connect(self._on_camera_info)
+        worker.diagnostic_ready.connect(self._append_log)
         worker.fps_ready.connect(self._on_fps)
         worker.failed.connect(self._on_camera_failed)
         worker.finished.connect(thread.quit)
@@ -1661,7 +1667,12 @@ class MainWindow(QMainWindow):
 
     def _on_camera_failed(self, msg: str) -> None:
         self._append_log(f"✗ 相機錯誤：{msg}")
+        self._stop_analysis_workers()
+        if self._cam_worker is not None:
+            self._cam_worker.request_stop()
         self._pipeline_running = False
+        self._cam_worker = None
+        self._cam_thread = None
         self._btn_start.setText("開始")
         self._lbl_pipeline.setText("管線：停止")
         self._lbl_fps.setText("FPS：—")

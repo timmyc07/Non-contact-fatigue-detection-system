@@ -43,6 +43,20 @@ Ubuntu:
 .venv/bin/python main.py
 ```
 
+Ubuntu GUI 若出現 `Could not load the Qt platform plugin "xcb"`，先重新執行 setup 補齊 Qt xcb runtime：
+
+```bash
+bash scripts/setup_ubuntu.sh
+```
+
+若仍需追蹤 Qt plugin 載入路徑，可用：
+
+```bash
+QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py
+```
+
+本專案 GUI 使用 PySide6。程式啟動時會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
+
 Optional demo:
 ```bash
 python -m rppg.demo_rppg_live
@@ -86,6 +100,28 @@ Add your user to the `video` group if needed, then log out and back in:
 ```bash
 sudo usermod -aG video "$USER"
 ```
+
+若相機黑屏或 GUI 沒有畫面，先用專案診斷腳本分辨硬體/權限與程式問題：
+
+```bash
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend v4l2
+```
+
+可追加檢查：
+
+```bash
+v4l2-ctl --list-devices
+v4l2-ctl --all -d /dev/video0
+ls -l /dev/v4l/by-id/
+fuser /dev/video0
+.venv/bin/python -m rppg.demo_rppg_live --list-cameras --backend v4l2
+```
+
+診斷判讀：
+- `/dev/video*` 不存在：偏向硬體未枚舉、驅動或容器/權限隔離問題。
+- OpenCV 無法開啟相機：偏向權限、裝置被占用、後端不相容或硬體/驅動問題。
+- OpenCV 可讀幀但亮度接近全黑：偏向鏡頭蓋、隱私快門、光線不足或虛擬相機無來源。
+- 診斷腳本可讀到非黑畫面但 GUI 黑屏：偏向 GUI 顯示或相機後端協商問題，請在 GUI 中切換「自動 / V4L2 / FFMPEG」後端再測。
 
 ## Project layout
 - `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo

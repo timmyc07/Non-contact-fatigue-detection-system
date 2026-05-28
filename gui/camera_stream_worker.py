@@ -15,6 +15,8 @@ import cv2
 
 # How long to wait for the first frame before declaring failure (seconds).
 _FIRST_FRAME_TIMEOUT = 10.0
+_READ_FAILURE_TIMEOUT = 5.0
+_DARK_FRAME_WARN_SECONDS = 3.0
 
 # Sliding-window FPS: keeps timestamps of last N frames.
 # fps = (N-1) / (newest_ts - oldest_ts)
@@ -40,6 +42,7 @@ class CameraStreamWorker(QObject):
     fps_ready = Signal(float)
     # emitted once after open (and again if values change): (codec, w, h, fps)
     camera_info = Signal(str, int, int, float)
+    diagnostic_ready = Signal(str)
     failed = Signal(str)
     finished = Signal()
 
@@ -88,6 +91,26 @@ class CameraStreamWorker(QObject):
         fps = cap.get(cv2.CAP_PROP_FPS)
         cc  = self._fourcc_to_str(int(cap.get(cv2.CAP_PROP_FOURCC)))
         return cc, w, h, fps
+
+    @staticmethod
+    def _frame_stats(frame: np.ndarray) -> tuple[float, float]:
+        if frame.size == 0:
+            return 0.0, 1.0
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        mean = float(np.mean(gray))
+        near_black_ratio = float(np.count_nonzero(gray <= 2) / gray.size)
+        return mean, near_black_ratio
+
+    def _is_diagnostic_black_frame(self, frame: np.ndarray) -> bool:
+        mean, near_black_ratio = self._frame_stats(frame)
+        return mean < 3.0 or near_black_ratio > 0.98
+
+    def _format_capture_context(self, codec: str, width: int, height: int, fps: float) -> str:
+        fps_str = f"{fps:.1f}" if fps > 0 else "未知"
+        return (
+            f"相機 {self._camera_index}，後端 {self._backend}，"
+            f"格式 {codec or '未知'} {width}×{height} @ {fps_str} fps"
+        )
 
     @Slot()
     def run(self) -> None:
@@ -141,7 +164,7 @@ class CameraStreamWorker(QObject):
                 pass
             self.failed.emit(
                 f"相機 {self._camera_index} 在 {_FIRST_FRAME_TIMEOUT:.0f} 秒內未送出影像。\n"
-                "請確認相機未被其他程式佔用，嘗試重新插拔後再按「開始」。"
+                "請確認相機未被其他程式佔用，Linux 可執行 scripts/diagnose_camera.py 檢查權限與 V4L2。"
             )
             self.finished.emit()
             return
@@ -150,6 +173,14 @@ class CameraStreamWorker(QObject):
         post_codec, post_w, post_h, post_fps = self._read_cap_info(cap)
         if (post_codec, post_w, post_h) != (pre_codec, pre_w, pre_h):
             self.camera_info.emit(post_codec, post_w, post_h, float(post_fps))
+        capture_context = self._format_capture_context(post_codec, post_w, post_h, float(post_fps))
+
+        if self._is_diagnostic_black_frame(first_frame):
+            mean, near_black_ratio = self._frame_stats(first_frame)
+            self.diagnostic_ready.emit(
+                f"[相機診斷] 首幀接近全黑（平均亮度 {mean:.1f}，黑像素 {near_black_ratio:.1%}）。"
+                f"{capture_context}；若 FPS 仍正常，優先檢查鏡頭蓋、隱私快門、虛擬相機來源或光線。"
+            )
 
         # ── Main capture loop ─────────────────────────────────────────────
         ts_window: deque[float] = deque(maxlen=_FPS_WINDOW_FRAMES)
@@ -171,12 +202,39 @@ class CameraStreamWorker(QObject):
 
         _emit_frame(first_frame)
         _tick_fps()
+        last_good_read = time.perf_counter()
+        dark_started_at = last_good_read if self._is_diagnostic_black_frame(first_frame) else None
+        dark_warning_sent = dark_started_at is not None
 
         while not self._stop:
             ok, frame = cap.read()
             if not ok or frame is None:
+                if time.perf_counter() - last_good_read >= _READ_FAILURE_TIMEOUT:
+                    self.failed.emit(
+                        f"{capture_context} 已連續 {_READ_FAILURE_TIMEOUT:.0f} 秒讀取失敗。\n"
+                        "請確認相機未被其他程式佔用，USB/驅動是否穩定。"
+                    )
+                    break
                 time.sleep(0.001)
                 continue
+            last_good_read = time.perf_counter()
+            if self._is_diagnostic_black_frame(frame):
+                if dark_started_at is None:
+                    dark_started_at = last_good_read
+                elif (
+                    not dark_warning_sent
+                    and last_good_read - dark_started_at >= _DARK_FRAME_WARN_SECONDS
+                ):
+                    mean, near_black_ratio = self._frame_stats(frame)
+                    self.diagnostic_ready.emit(
+                        f"[相機診斷] 連續 {_DARK_FRAME_WARN_SECONDS:.0f} 秒接近全黑"
+                        f"（平均亮度 {mean:.1f}，黑像素 {near_black_ratio:.1%}）。"
+                        "程式仍有收到影像，較可能是鏡頭遮擋、光線不足或虛擬相機無來源。"
+                    )
+                    dark_warning_sent = True
+            else:
+                dark_started_at = None
+                dark_warning_sent = False
             _tick_fps()
             _emit_frame(frame)
             # Feed any attached BGR consumers (rPPG / fatigue workers) non-blocking.

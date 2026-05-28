@@ -74,6 +74,9 @@ def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
         cap_msmf = getattr(cv2, "CAP_MSMF", None)
         if isinstance(cap_msmf, int):
             prefs.append(cap_msmf)
+        cap_dshow = getattr(cv2, "CAP_DSHOW", None)
+        if isinstance(cap_dshow, int):
+            prefs.append(cap_dshow)
     else:
         cap_v4l2 = getattr(cv2, "CAP_V4L2", None)
         if isinstance(cap_v4l2, int):
@@ -131,8 +134,6 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
             label = linux_labels.get(i, f"Camera {i}")
         found.append((i, label))
 
-    if not found:
-        found.append((0, "Camera 0（未偵測到裝置）"))
     return found
 
 
@@ -148,6 +149,8 @@ def open_camera_capture(index: int, backend: str = "auto"):
                        cap.set() works without pipeline rebuild.
         ``"msmf"``   — Windows Media Foundation directly; preserves native MJPG.
                        cap.set() causes pipeline rebuild (~1 s each).
+        ``"dshow"``  — Windows DirectShow directly; useful for some virtual
+                       cameras and drivers that do not work through MSMF.
     """
     if cv2 is None:
         return None
@@ -170,6 +173,12 @@ def open_camera_capture(index: int, backend: str = "auto"):
             return _try(int(msmf))
         return None
 
+    if b == "dshow":
+        dshow = getattr(cv2, "CAP_DSHOW", None)
+        if dshow is not None:
+            return _try(int(dshow))
+        return None
+
     if b == "v4l2":
         v4l2 = getattr(cv2, "CAP_V4L2", None)
         if v4l2 is not None:
@@ -180,7 +189,7 @@ def open_camera_capture(index: int, backend: str = "auto"):
         # CAP_FFMPEG only accepts integer indices on some builds/platforms;
         # cascade through workable alternatives if it fails.
         attrs = ["CAP_FFMPEG"]
-        attrs.extend(["CAP_MSMF"] if _IS_WIN else ["CAP_V4L2"])
+        attrs.extend(["CAP_MSMF", "CAP_DSHOW"] if _IS_WIN else ["CAP_V4L2"])
         attrs.append("CAP_ANY")
         for attr in attrs:
             api_val = getattr(cv2, attr, None)

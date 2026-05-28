@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import gui.camera_devices as camera_devices  # noqa: E402
+
+
+class _ClosedCapture:
+    def isOpened(self) -> bool:
+        return False
+
+    def release(self) -> None:
+        pass
+
+
+class _OpenedCapture:
+    def __init__(self) -> None:
+        self.released = False
+
+    def isOpened(self) -> bool:
+        return True
+
+    def release(self) -> None:
+        self.released = True
+
+
+def test_linux_api_preferences_prioritise_v4l2(monkeypatch) -> None:
+    monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_V4L2", 200, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_ANY", 0, raising=False)
+
+    assert camera_devices._build_api_preferences(None) == [200, 0]
+
+
+def test_windows_api_preferences_include_dshow_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(camera_devices, "_IS_WIN", True)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_MSMF", 1400, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_DSHOW", 700, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_ANY", 0, raising=False)
+
+    assert camera_devices._build_api_preferences(None) == [1400, 700, 0]
+
+
+def test_list_camera_devices_returns_empty_when_probe_finds_nothing(monkeypatch) -> None:
+    monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices, "_list_linux_v4l2_device_names", lambda: {})
+    monkeypatch.setattr(camera_devices, "_build_api_preferences", lambda _prefs: [0])
+    monkeypatch.setattr(camera_devices.cv2, "VideoCapture", lambda _index, _api: _ClosedCapture())
+
+    assert camera_devices.list_camera_devices(max_index=3, warmup_read=True) == []
+
+
+def test_open_camera_capture_uses_v4l2_backend(monkeypatch) -> None:
+    calls: list[tuple[int, int]] = []
+
+    def fake_capture(index: int, api: int) -> _OpenedCapture:
+        calls.append((index, api))
+        return _OpenedCapture()
+
+    monkeypatch.setattr(camera_devices.cv2, "CAP_V4L2", 200, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "VideoCapture", fake_capture)
+
+    cap = camera_devices.open_camera_capture(2, backend="v4l2")
+
+    assert cap is not None
+    assert calls == [(2, 200)]
+
+
+def test_setup_ubuntu_lists_qt_xcb_and_v4l2_packages() -> None:
+    setup = (ROOT / "scripts" / "setup_ubuntu.sh").read_text(encoding="utf-8")
+
+    for package in ("libxcb-cursor0", "libxcb-icccm4", "libxcb-image0", "libxcb-xkb1", "libxkbcommon-x11-0", "v4l-utils"):
+        assert package in setup
+
+
+def test_readme_lists_qt_and_camera_diagnostics() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    for text in (
+        "QT_DEBUG_PLUGINS=1",
+        "QT_QPA_PLATFORM=xcb",
+        "scripts/diagnose_camera.py",
+        "v4l2-ctl --list-devices",
+        "--list-cameras --backend v4l2",
+    ):
+        assert text in readme
