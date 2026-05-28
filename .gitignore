@@ -35,3 +35,59 @@ docs/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Additional common ignores
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE / editors
+.idea/
+*.suo
+*.user
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+
+# Test/coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs, databases, caches
+*.log
+*.sqlite3
+*.db
+
+# Media / recordings
+recordings/
+*.mp4
+*.avi
+*.mkv
+*.mov
+
+# Large model / binary assets (use Git LFS if you must track these)
+models/*.task
+models/*.tflite
+models/*.pb
+models/*.onnx
+
+# Documentation artifacts (project documents folder contains many large binaries)
+docs/project_documents/
+*.docx
+*.pdf
+
+# Secrets / local config
+.env
+config/mediapipe_calibration.json
+
+# Keep specific docs if explicitly desired (example whitelist already in file)
+# !docs/rppg_technical_report.md
+# !docs/rppg_technical_report.pdf
