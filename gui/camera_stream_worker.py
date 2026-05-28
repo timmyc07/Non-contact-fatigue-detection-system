@@ -55,6 +55,7 @@ class CameraStreamWorker(QObject):
         height: int = 720,
         target_fps: int = 30,
         backend: str = "ffmpeg",
+        horizontal_flip: bool = False,
     ) -> None:
         super().__init__()
         self._camera_index = camera_index
@@ -62,6 +63,7 @@ class CameraStreamWorker(QObject):
         self._height = max(120, height)
         self._target_fps = max(1, target_fps)
         self._backend = backend.lower().strip()
+        self._horizontal_flip = bool(horizontal_flip)
         self._stop = False
         self._bgr_queues: set["queue.Queue[tuple[float, np.ndarray]]"] = set()
 
@@ -153,6 +155,8 @@ class CameraStreamWorker(QObject):
         while not self._stop and time.perf_counter() < deadline:
             ok, frame = cap.read()
             if ok and frame is not None:
+                if self._horizontal_flip:
+                    frame = cv2.flip(frame, 1)
                 first_frame = frame
                 break
             time.sleep(0.005)
@@ -217,6 +221,8 @@ class CameraStreamWorker(QObject):
                     break
                 time.sleep(0.001)
                 continue
+            if self._horizontal_flip:
+                frame = cv2.flip(frame, 1)
             last_good_read = time.perf_counter()
             if self._is_diagnostic_black_frame(frame):
                 if dark_started_at is None:

@@ -406,10 +406,15 @@ class MainWindow(QMainWindow):
             "MSMF — Windows Media Foundation，可保留原生 MJPG\n"
             "DSHOW — Windows DirectShow，部分虛擬相機較穩定"
         )
+        self._chk_horizontal_flip = QCheckBox("水平翻轉（鏡像校正）")
+        self._chk_horizontal_flip.setChecked(True)
+        self._chk_horizontal_flip.setToolTip("相機畫面左右相反時啟用；預覽、錄影與分析會使用同一個翻轉後畫面。")
         lbl_backend = QLabel("後端：")
         lbl_backend.setObjectName("hintLabel")
         row3.addWidget(lbl_backend)
         row3.addWidget(self._cmb_backend)
+        row3.addSpacing(16)
+        row3.addWidget(self._chk_horizontal_flip)
         row3.addStretch(1)
         cam_l.addLayout(row3)
         body_layout.addWidget(gb_cam)
@@ -739,6 +744,7 @@ class MainWindow(QMainWindow):
             fps = camera.get("fps")
             backend = camera.get("backend")
             cam_idx = camera.get("index")
+            horizontal_flip = camera.get("horizontal_flip")
 
             if isinstance(resolution, str):
                 self._cmb_resolution.setCurrentText(resolution)
@@ -747,6 +753,8 @@ class MainWindow(QMainWindow):
             if isinstance(backend, str):
                 if not self._select_combo_by_data(self._cmb_backend, backend):
                     self._cmb_backend.setCurrentIndex(0)
+            if isinstance(horizontal_flip, bool):
+                self._chk_horizontal_flip.setChecked(horizontal_flip)
             if isinstance(cam_idx, int):
                 if not self._select_camera_by_index(cam_idx):
                     self._pending_camera_index = cam_idx
@@ -788,6 +796,7 @@ class MainWindow(QMainWindow):
                 "resolution": self._cmb_resolution.currentText(),
                 "fps": self._cmb_fps.currentText(),
                 "backend": self._cmb_backend.currentData(),
+                "horizontal_flip": self._chk_horizontal_flip.isChecked(),
             },
             "toggles": {
                 "all": self._chk_all.isChecked(),
@@ -1280,10 +1289,12 @@ class MainWindow(QMainWindow):
 
         backend = self._cmb_backend.currentData() or "auto"
         backend_label = self._cmb_backend.currentText().split("（")[0].strip()
+        horizontal_flip = self._chk_horizontal_flip.isChecked()
 
         thread = QThread(self)
         worker = CameraStreamWorker(cam_idx, width=w, height=h,
-                                    target_fps=target_fps, backend=backend)
+                                    target_fps=target_fps, backend=backend,
+                                    horizontal_flip=horizontal_flip)
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
@@ -1302,7 +1313,8 @@ class MainWindow(QMainWindow):
         # rPPG / fatigue workers start and call _update_frame_routing().
         self._update_frame_routing()
         self._append_log(
-            f"▶ 相機 [{cam_idx}] 開啟（{backend_label}  {w}×{h} @ {target_fps} fps）"
+            f"▶ 相機 [{cam_idx}] 開啟（{backend_label}  {w}×{h} @ {target_fps} fps"
+            f"{'，水平翻轉' if horizontal_flip else ''}）"
         )
 
     def _stop_camera_worker(self) -> None:

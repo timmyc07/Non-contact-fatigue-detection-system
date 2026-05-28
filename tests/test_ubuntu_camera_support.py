@@ -62,6 +62,42 @@ def test_list_camera_devices_returns_empty_when_probe_finds_nothing(monkeypatch)
     assert camera_devices.list_camera_devices(max_index=3, warmup_read=True) == []
 
 
+def test_linux_camera_scan_only_probes_existing_video_nodes(monkeypatch) -> None:
+    calls: list[int] = []
+
+    def fake_capture(index: int, _api: int) -> _OpenedCapture:
+        calls.append(index)
+        return _OpenedCapture()
+
+    monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices, "_list_linux_v4l2_device_names", lambda: {})
+    monkeypatch.setattr(camera_devices, "_list_linux_video_indices", lambda: [0, 1])
+    monkeypatch.setattr(camera_devices, "_build_api_preferences", lambda _prefs: [0])
+    monkeypatch.setattr(camera_devices.cv2, "VideoCapture", fake_capture)
+
+    devices = camera_devices.list_camera_devices(max_index=20, warmup_read=False)
+
+    assert calls == [0, 1]
+    assert devices == [(0, "Camera 0"), (1, "Camera 1")]
+
+
+def test_linux_video_indices_skip_metadata_nodes(monkeypatch) -> None:
+    monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+
+    import glob
+    import os
+
+    monkeypatch.setattr(glob, "glob", lambda _pattern: ["/dev/video0", "/dev/video1", "/dev/media0"])
+    monkeypatch.setattr(os.path, "basename", lambda path: path.rsplit("/", 1)[-1])
+    monkeypatch.setattr(
+        camera_devices,
+        "_is_linux_video_capture_node",
+        lambda path: path.endswith("video0"),
+    )
+
+    assert camera_devices._list_linux_video_indices() == [0]
+
+
 def test_open_camera_capture_uses_v4l2_backend(monkeypatch) -> None:
     calls: list[tuple[int, int]] = []
 

@@ -59,6 +59,8 @@ QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py
 
 Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機或分析端 buffer 累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，並讓分析 worker 永遠取最新幀；若仍有特定相機卡頓，可在 GUI 後端切換 `MSMF` / `DSHOW` 比較穩定性。
 
+若相機畫面左右相反，可在 GUI 攝影機區啟用或關閉「水平翻轉（鏡像校正）」。此設定會同步套用到預覽、錄影與分析輸入，避免畫面與分析來源不一致。
+
 若 `setup_ubuntu.sh` 在非互動環境因 sudo 密碼失敗，請在自己的終端機直接執行：
 
 ```bash
@@ -139,6 +141,7 @@ fuser /dev/video0
 - `/dev/video*` 不存在：偏向硬體未枚舉、驅動或容器/權限隔離問題。
 - OpenCV 無法開啟相機：偏向權限、裝置被占用、後端不相容或硬體/驅動問題。
 - OpenCV 可讀幀但亮度接近全黑：偏向鏡頭蓋、隱私快門、光線不足或虛擬相機無來源。
+- 終端出現大量 `Camera index out of range` 或 `VIDIOC_QBUF`：通常是掃描不存在的相機 index 或把 metadata 節點當成相機；GUI 會在 Linux 只掃描實際存在且具備 Video Capture capability 的 `/dev/video*`。
 - 診斷腳本可讀到非黑畫面但 GUI 黑屏：偏向 GUI 顯示或相機後端協商問題，請在 GUI 中切換「自動 / V4L2 / FFMPEG」後端再測。
 
 ## Project layout

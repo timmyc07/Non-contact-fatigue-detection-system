@@ -63,6 +63,57 @@ def _list_linux_v4l2_device_names() -> dict[int, str]:
     return devices
 
 
+def _list_linux_video_indices() -> list[int]:
+    if _IS_WIN:
+        return []
+    try:
+        import glob
+        import os
+    except Exception:
+        return []
+
+    indices: list[int] = []
+    for node in glob.glob("/dev/video*"):
+        if not _is_linux_video_capture_node(node):
+            continue
+        suffix = os.path.basename(node).replace("video", "", 1)
+        if suffix.isdigit():
+            indices.append(int(suffix))
+    return sorted(set(indices))
+
+
+def _is_linux_video_capture_node(path: str) -> bool:
+    if _IS_WIN:
+        return False
+    try:
+        import fcntl
+        import os
+    except Exception:
+        return True
+
+    vidioc_querycap = 0x80685600
+    v4l2_cap_video_capture = 0x00000001
+    v4l2_cap_video_capture_mplane = 0x00001000
+    v4l2_cap_device_caps = 0x80000000
+    fd: int | None = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        buf = bytearray(104)
+        fcntl.ioctl(fd, vidioc_querycap, buf, True)
+        capabilities = int.from_bytes(buf[84:88], "little")
+        device_caps = int.from_bytes(buf[88:92], "little")
+        caps = device_caps if capabilities & v4l2_cap_device_caps else capabilities
+        return bool(caps & (v4l2_cap_video_capture | v4l2_cap_video_capture_mplane))
+    except Exception:
+        return True
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+
+
 def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
     if api_preferences is not None:
         return [int(api) for api in api_preferences]
@@ -125,7 +176,13 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
     linux_labels = _list_linux_v4l2_device_names()
     found: list[tuple[int, str]] = []
 
-    for i in range(max_index):
+    candidate_indices = (
+        [i for i in _list_linux_video_indices() if i < max_index]
+        if not _IS_WIN
+        else list(range(max_index))
+    )
+
+    for i in candidate_indices:
         if not _probe_camera_index(i, warmup_read, api_preferences):
             continue
         if _IS_WIN:
