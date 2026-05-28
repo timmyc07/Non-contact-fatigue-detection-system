@@ -21,8 +21,13 @@ class _ClosedCapture:
 class _OpenedCapture:
     def __init__(self) -> None:
         self.released = False
+        self.set_calls: list[tuple[int, float]] = []
 
     def isOpened(self) -> bool:
+        return True
+
+    def set(self, prop: int, value: float) -> bool:
+        self.set_calls.append((prop, value))
         return True
 
     def release(self) -> None:
@@ -69,6 +74,25 @@ def test_open_camera_capture_uses_v4l2_backend(monkeypatch) -> None:
 
     assert cap is not None
     assert calls == [(2, 200)]
+
+
+def test_configure_camera_capture_prefers_mjpg_before_size_and_fps(monkeypatch) -> None:
+    cap = _OpenedCapture()
+    monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FOURCC", 6, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FRAME_WIDTH", 3, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FRAME_HEIGHT", 4, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_PROP_FPS", 5, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "VideoWriter_fourcc", lambda *chars: 1196444237)
+
+    camera_devices.configure_camera_capture(cap, width=1280, height=720, target_fps=30)
+
+    assert cap.set_calls == [
+        (6, 1196444237),
+        (3, 1280.0),
+        (4, 720.0),
+        (5, 30.0),
+    ]
 
 
 def test_setup_ubuntu_lists_qt_xcb_and_v4l2_packages() -> None:

@@ -119,7 +119,7 @@ class CameraStreamWorker(QObject):
             self.finished.emit()
             return
 
-        from gui.camera_devices import open_camera_capture
+        from gui.camera_devices import configure_camera_capture, open_camera_capture
 
         self._stop = False
         cap = open_camera_capture(self._camera_index, backend=self._backend)
@@ -134,12 +134,13 @@ class CameraStreamWorker(QObject):
         # rebuild (~1-2 s each), so skip all property setting for MSMF and let
         # the driver auto-negotiate its native format instead.
         if self._backend != "msmf":
-            try:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  float(self._width))
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self._height))
-                cap.set(cv2.CAP_PROP_FPS,          float(self._target_fps))
-            except Exception:
-                pass
+            configure_camera_capture(
+                cap,
+                width=self._width,
+                height=self._height,
+                target_fps=self._target_fps,
+                prefer_mjpg=True,
+            )
 
         # Read what the backend negotiated and emit immediately.
         pre_codec, pre_w, pre_h, pre_fps = self._read_cap_info(cap)

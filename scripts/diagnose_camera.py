@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gui.camera_devices import list_camera_devices, open_camera_capture  # noqa: E402
+from gui.camera_devices import configure_camera_capture, list_camera_devices, open_camera_capture  # noqa: E402
 
 
 def _run(command: list[str]) -> tuple[int, str]:
@@ -59,12 +59,28 @@ def _frame_stats(frame: np.ndarray) -> tuple[float, float]:
     return mean, near_black_ratio
 
 
-def _read_probe(index: int, backend: str, seconds: float) -> dict[str, Any]:
+def _read_probe(
+    index: int,
+    backend: str,
+    seconds: float,
+    *,
+    width: int,
+    height: int,
+    target_fps: float,
+    prefer_mjpg: bool,
+) -> dict[str, Any]:
     cap = open_camera_capture(index, backend=backend)
     if cap is None:
         return {"opened": False, "frames": 0}
 
     try:
+        configure_camera_capture(
+            cap,
+            width=width,
+            height=height,
+            target_fps=target_fps,
+            prefer_mjpg=prefer_mjpg,
+        )
         deadline = time.perf_counter() + seconds
         frames = 0
         last_stats: tuple[float, float] | None = None
@@ -101,6 +117,10 @@ def main() -> int:
     parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index，預設 0。")
     parser.add_argument("--backend", default="v4l2", choices=("auto", "v4l2", "ffmpeg"), help="測試後端。")
     parser.add_argument("--seconds", type=float, default=3.0, help="讀幀測試秒數。")
+    parser.add_argument("--width", type=int, default=1280, help="測試寬度，預設 1280。")
+    parser.add_argument("--height", type=int, default=720, help="測試高度，預設 720。")
+    parser.add_argument("--fps", type=float, default=30.0, help="目標 FPS，預設 30。")
+    parser.add_argument("--no-mjpg", action="store_true", help="不要優先要求 MJPG，保留後端預設格式。")
     args = parser.parse_args()
 
     print("== 系統 ==")
@@ -145,7 +165,15 @@ def main() -> int:
     print()
 
     print("== OpenCV 讀幀測試 ==")
-    result = _read_probe(args.camera, args.backend, max(0.5, args.seconds))
+    result = _read_probe(
+        args.camera,
+        args.backend,
+        max(0.5, args.seconds),
+        width=max(160, args.width),
+        height=max(120, args.height),
+        target_fps=max(1.0, args.fps),
+        prefer_mjpg=not args.no_mjpg,
+    )
     if not result["opened"]:
         print(f"無法開啟 camera={args.camera} backend={args.backend}。")
         print("判斷：偏向權限、裝置忙碌、後端不相容或硬體/驅動問題。")

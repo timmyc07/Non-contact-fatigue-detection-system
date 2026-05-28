@@ -206,3 +206,29 @@ def open_camera_capture(index: int, backend: str = "auto"):
         if cap is not None:
             return cap
     return None
+
+
+def configure_camera_capture(
+    cap: Any,
+    *,
+    width: int,
+    height: int,
+    target_fps: float,
+    prefer_mjpg: bool = True,
+) -> None:
+    """套用 OpenCV 相機協商參數。
+
+    Linux UVC webcam 常在 720p 的 YUYV 模式只能提供 10 FPS，但同解析度
+    MJPG 可達 30 FPS；因此在 Linux 先要求 MJPG，再設定解析度與 FPS。
+    """
+    if cv2 is None:
+        return
+
+    try:
+        if prefer_mjpg and not _IS_WIN:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+        cap.set(cv2.CAP_PROP_FPS, float(target_fps))
+    except Exception:
+        pass

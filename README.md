@@ -114,6 +114,15 @@ sudo usermod -aG video "$USER"
 .venv/bin/python scripts/diagnose_camera.py --camera 0 --backend v4l2
 ```
 
+若 720p 僅有約 10 FPS，先檢查相機格式。許多 USB UVC webcam 在 `1280×720 YUYV`
+只支援 10 FPS，但 `1280×720 MJPG` 可達 30 FPS；GUI 在 Linux 會優先要求 MJPG。
+可用下列指令確認協商結果：
+
+```bash
+v4l2-ctl --list-formats-ext -d /dev/video0
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend v4l2 --width 1280 --height 720 --fps 30
+```
+
 可追加檢查：
 
 ```bash
