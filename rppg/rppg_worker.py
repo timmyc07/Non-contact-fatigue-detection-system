@@ -770,6 +770,10 @@ class RppgEngine:
     _BPM_EMA_ALPHA = 0.18
     _BPM_MIN_PLAUSIBLE = 42.0
     _BPM_MAX_PLAUSIBLE = 210.0
+    _BPM_JUMP_CONFIRM_DELTA = 25.0
+    _BPM_JUMP_CONFIRM_SEC = 2.0
+    _BPM_JUMP_CONFIRM_COUNT = 4
+    _BPM_JUMP_CLUSTER_DELTA = 8.0
 
     def __init__(self, buffer_sec: float = 12.0, target_fps: float = 30.0) -> None:
         self.buffer_sec = buffer_sec
@@ -783,6 +787,7 @@ class RppgEngine:
         self._prev_face_center_t: Optional[float] = None
         self._face_motion_speed: float = 0.0
         self._bpm_candidates: deque[tuple[float, float]] = deque()
+        self._pending_bpm_jump: deque[tuple[float, float]] = deque()
         self._stable_bpm: Optional[float] = None
         self._stable_bpm_t: Optional[float] = None
 
@@ -793,6 +798,7 @@ class RppgEngine:
         self._prev_face_center_t = None
         self._face_motion_speed = 0.0
         self._bpm_candidates.clear()
+        self._pending_bpm_jump.clear()
         self._stable_bpm = None
         self._stable_bpm_t = None
 
@@ -818,6 +824,22 @@ class RppgEngine:
     def _accept_bpm_candidate(self, t_now: float, raw_bpm: float) -> float:
         if not self._BPM_MIN_PLAUSIBLE <= raw_bpm <= self._BPM_MAX_PLAUSIBLE:
             return float(self._stable_bpm or 0.0)
+        if self._stable_bpm is not None and abs(raw_bpm - self._stable_bpm) >= self._BPM_JUMP_CONFIRM_DELTA:
+            cutoff = t_now - self._BPM_JUMP_CONFIRM_SEC
+            while self._pending_bpm_jump and self._pending_bpm_jump[0][0] < cutoff:
+                self._pending_bpm_jump.popleft()
+            if (
+                self._pending_bpm_jump
+                and abs(raw_bpm - self._pending_bpm_jump[-1][1]) > self._BPM_JUMP_CLUSTER_DELTA
+            ):
+                self._pending_bpm_jump.clear()
+            self._pending_bpm_jump.append((t_now, float(raw_bpm)))
+            pending_vals = np.array([v for _, v in self._pending_bpm_jump], dtype=np.float64)
+            if pending_vals.size < self._BPM_JUMP_CONFIRM_COUNT:
+                return float(self._stable_bpm)
+            raw_bpm = float(np.median(pending_vals))
+        else:
+            self._pending_bpm_jump.clear()
         self._bpm_candidates.append((t_now, float(raw_bpm)))
         cutoff = t_now - self._BPM_HISTORY_SEC
         while self._bpm_candidates and self._bpm_candidates[0][0] < cutoff:

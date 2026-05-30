@@ -80,7 +80,20 @@ def test_bpm_stabilizer_smooths_large_transient_jump() -> None:
     jumped = engine._stabilize_bpm(1.2, 130.0)
 
     assert stable == 72.0
-    assert jumped - stable < 15.0
+    assert jumped == stable
+
+
+def test_bpm_stabilizer_confirms_sustained_large_jump() -> None:
+    engine = RppgEngine(target_fps=30.0)
+    engine._stabilize_bpm(1.0, 80.0)
+
+    assert engine._stabilize_bpm(1.2, 50.0) == 80.0
+    assert engine._stabilize_bpm(1.6, 51.0) == 80.0
+    assert engine._stabilize_bpm(2.0, 49.0) == 80.0
+    confirmed = engine._stabilize_bpm(2.4, 50.0)
+
+    assert confirmed < 80.0
+    assert confirmed > 70.0
 
 
 def test_bpm_stabilizer_ignores_implausible_bpm() -> None:

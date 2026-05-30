@@ -239,6 +239,8 @@ BPM 由 `welch_peak_hz` 計算：
 
 目前 GUI 與 recorder 使用的 `bpm` 以第一版直接 Welch peak 為基準，只排除 42 到 210 BPM 外的明顯不合理值，避免品質 gate 太嚴造成長時間空白。`RppgEngine` 仍保留最近 10 秒候選值中位數與輕量 EMA，降低單幀跳動，但不再用 SQI、quality score、artifact、landmark jitter 或 FPS jitter 阻擋 BPM 顯示。
 
+為避免頻譜偶爾選到次諧波或雜訊峰，當已有穩定 BPM 時，單次超過 25 BPM 的跳動不會立刻寫入候選歷史。新的大幅跳動必須在約 2 秒內連續出現 4 次，且彼此落在 8 BPM 內，才會被視為真實趨勢並透過 EMA 慢慢更新。這主要處理 80 BPM 突然掉到 40 到 50 BPM 的偶發情況，同時保留真實心率變化的追蹤能力。
+
 ## 9. SQI 訊號品質指標
 
 SQI 由 `compute_sqi` 計算：
