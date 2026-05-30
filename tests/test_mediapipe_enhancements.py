@@ -13,8 +13,11 @@ import numpy as np
 
 from gui.mediapipe_tuning import load_mediapipe_tuning  # noqa: E402
 from gui.metrics_recorder import MetricsRecorder  # noqa: E402
+from gui.fatigue_scorer import FatigueFuser  # noqa: E402
+from gui.fatigue_engine import FatigueMetrics  # noqa: E402
 from gui.fatigue_engine import _norm_blend  # noqa: E402
 from rppg.rppg_worker import (  # noqa: E402
+    RppgMetrics,
     RppgEngine,
     RoiGeometryTracker,
     _face_quality_from_pose,
@@ -108,6 +111,50 @@ def test_rppg_compute_non_warmup_returns_roi_weights() -> None:
     assert metrics.roi_weight_forehead == 0.4
     assert metrics.roi_valid_count == 4
     assert metrics.landmark_jitter_norm >= 0.0
+
+
+def test_fatigue_fuser_downweights_rppg_when_both_sources_available() -> None:
+    fuser = FatigueFuser()
+    rppg = RppgMetrics(
+        bpm=82.0,
+        sqi=0.8,
+        quality_score=0.8,
+        roi_valid_count=4,
+        stress_prob=0.6,
+        warmup_progress=1.0,
+        face_detected=True,
+    )
+    fatigue = FatigueMetrics(
+        face_detected=True,
+        calibrated=True,
+        fatigue_level=0.4,
+        perclos=0.2,
+    )
+
+    score = fuser.update(rppg=rppg, fatigue=fatigue)
+
+    assert score.rppg_available is True
+    assert score.behavior_available is True
+    assert score.rppg_weight_eff == 0.15
+    assert score.behavior_weight_eff == 0.85
+
+
+def test_fatigue_fuser_ignores_low_quality_rppg() -> None:
+    fuser = FatigueFuser()
+    rppg = RppgMetrics(
+        bpm=82.0,
+        sqi=0.2,
+        quality_score=0.8,
+        roi_valid_count=4,
+        stress_prob=0.6,
+        warmup_progress=1.0,
+        face_detected=True,
+    )
+
+    score = fuser.update(rppg=rppg, fatigue=None)
+
+    assert score.rppg_available is False
+    assert score.rppg_weight_eff == 0.0
 
 
 def test_metrics_recorder_migrates_mediapipe_diagnostics(tmp_path: Path) -> None:

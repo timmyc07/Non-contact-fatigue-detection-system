@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rppg.rppg_worker import (  # noqa: E402
+    RppgEngine,
     butter_bandpass,
     ibi_artifact_ratio,
     validate_ibi_intervals,
@@ -60,3 +61,28 @@ def test_demo_trim_buffer_keeps_channels_aligned() -> None:
     assert list(demo._r) == [4.0, 7.0]
     assert list(demo._g) == [5.0, 8.0]
     assert list(demo._b) == [6.0, 9.0]
+
+
+def test_bpm_stabilizer_limits_large_transient_jump() -> None:
+    engine = RppgEngine(target_fps=30.0)
+    stable = engine._stabilize_bpm(
+        1.0, 72.0, 0.8, 0.8, 0.0, 4, 0.0, 0.0, 0.0, 0.0, 1.0, 0.02
+    )
+    jumped = engine._stabilize_bpm(
+        1.2, 130.0, 0.8, 0.8, 0.0, 4, 0.0, 0.0, 0.0, 0.0, 1.0, 0.02
+    )
+
+    assert stable == 72.0
+    assert jumped - stable <= 1.0
+
+
+def test_bpm_stabilizer_freezes_on_low_quality() -> None:
+    engine = RppgEngine(target_fps=30.0)
+    engine._stabilize_bpm(
+        1.0, 72.0, 0.8, 0.8, 0.0, 4, 0.0, 0.0, 0.0, 0.0, 1.0, 0.02
+    )
+    frozen = engine._stabilize_bpm(
+        2.0, 95.0, 0.2, 0.8, 0.0, 4, 0.0, 0.0, 0.0, 0.0, 1.0, 0.02
+    )
+
+    assert frozen == 72.0

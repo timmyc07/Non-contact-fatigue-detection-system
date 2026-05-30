@@ -237,6 +237,8 @@ BPM 由 `welch_peak_hz` 計算：
 
 搜尋頻段 0.7 到 3.5 Hz 約等於 42 到 210 BPM。這比 band-pass 略窄，避免濾波邊界附近的能量成為主峰。
 
+目前 GUI 與 recorder 使用的 `bpm` 是穩定化後的 BPM，而不是每次 Welch peak 的原始瞬時值。`RppgEngine` 會先用 SQI、quality score、IBI artifact ratio、ROI 可用數、姿態角度、landmark jitter、ROI 面積穩定度與 FPS jitter 做 gate；未通過時短時間保留上一個可信 BPM。通過 gate 後，再用最近 10 秒候選 BPM 的中位數、EMA 與每秒最大變化率限制，降低光線、自動曝光、頭部微動與 ROI 抖動造成的跳動。
+
 ## 9. SQI 訊號品質指標
 
 SQI 由 `compute_sqi` 計算：
@@ -388,7 +390,7 @@ GUI 與 Web dashboard 顯示用資料：
 
 ## 16. rPPG 與疲勞融合
 
-融合邏輯在 `gui/fatigue_scorer.py`。rPPG 是綜合疲勞分數的 40%，行為疲勞是 60%。若其中一方不可用，另一方會承擔 100% 權重。
+融合邏輯在 `gui/fatigue_scorer.py`。目前以 MediaPipe 行為疲勞為主，rPPG 是綜合疲勞分數的 15%，行為疲勞是 85%。若其中一方不可用，另一方會承擔 100% 權重。
 
 rPPG 子分數由三部分組成：
 
@@ -402,11 +404,11 @@ LF/HF 子分數：
 
 `lfhf_score = clip((lf_hf - 1.5) / (4.0 - 1.5), 0, 1)`
 
-SQI 折扣：
+SQI 與 quality gate：
 
-`sqi_weight = clamp(sqi / 0.30)`
+`sqi_weight = clamp(sqi / 0.45)`
 
-rPPG pillar 最終會乘上 SQI 權重。也就是說，波形品質不足時，即使壓力或 BPM 子項偏高，rPPG 對綜合分數的影響也會下降。
+若 SQI 低於 0.45、quality score 低於 0.55，或四個 ROI 中少於三個可用，rPPG 會被視為不可用，不參與綜合疲勞分數。rPPG pillar 最終也會乘上 SQI 與 quality 權重；波形品質不足時，即使壓力或 BPM 子項偏高，rPPG 對綜合分數的影響也會下降或歸零。
 
 綜合分數等級：
 

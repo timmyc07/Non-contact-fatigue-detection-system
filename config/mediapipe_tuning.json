@@ -1,5 +1,5 @@
 {
-  "active_profile": "default",
+  "active_profile": "stable_indoor",
   "face_landmarker": {
     "min_face_detection_confidence": 0.55,
     "min_face_presence_confidence": 0.55,
@@ -23,7 +23,7 @@
     "obstruction_high_chroma": 48.0,
     "min_roi_weight": 0.04,
     "roi_smoothing_enabled": true,
-    "roi_smoothing_alpha": 0.35,
+    "roi_smoothing_alpha": 0.30,
     "roi_smoothing_max_shift_ratio": 0.12,
     "landmark_jitter_full_norm": 0.02,
     "roi_area_jitter_full_ratio": 0.25,
