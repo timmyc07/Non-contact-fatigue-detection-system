@@ -766,10 +766,13 @@ class RppgEngine:
     _BPM_EMA_ALPHA = 0.25
     _BPM_MAX_SLEW_PER_SEC = 5.0
     _BPM_UPDATE_EPS = 1.0
-    _BPM_MIN_RELIABLE = 42.0
-    _BPM_MAX_RELIABLE = 180.0
+    _BPM_MIN_PLAUSIBLE = 42.0
+    _BPM_MAX_PLAUSIBLE = 210.0
     _GATE_MIN_SQI = 0.45
     _GATE_MIN_QUALITY = 0.55
+    _GATE_BOOTSTRAP_MIN_SQI = 0.35
+    _GATE_BOOTSTRAP_MIN_QUALITY = 0.45
+    _GATE_BOOTSTRAP_MIN_ROI_COUNT = 2
     _GATE_MAX_ARTIFACT = 0.35
     _GATE_MIN_ROI_COUNT = 3
     _GATE_MAX_ROLL_DEG = 35.0
@@ -845,37 +848,7 @@ class RppgEngine:
             return float(self._stable_bpm)
         return 0.0
 
-    def _stabilize_bpm(
-        self,
-        t_now: float,
-        raw_bpm: float,
-        sqi: float,
-        quality_score: float,
-        artifact_ratio: float,
-        roi_valid_count: int,
-        roll_deg: float,
-        yaw_deg: float,
-        pitch_deg: float,
-        landmark_jitter: float,
-        roi_area_stability: float,
-        fps_jitter_ratio: float,
-    ) -> float:
-        reliable = (
-            self._BPM_MIN_RELIABLE <= raw_bpm <= self._BPM_MAX_RELIABLE
-            and sqi >= self._GATE_MIN_SQI
-            and quality_score >= self._GATE_MIN_QUALITY
-            and artifact_ratio <= self._GATE_MAX_ARTIFACT
-            and roi_valid_count >= self._GATE_MIN_ROI_COUNT
-            and abs(roll_deg) <= self._GATE_MAX_ROLL_DEG
-            and abs(yaw_deg) <= self._GATE_MAX_YAW_DEG
-            and abs(pitch_deg) <= self._GATE_MAX_PITCH_DEG
-            and landmark_jitter <= self._GATE_MAX_LANDMARK_JITTER
-            and roi_area_stability >= self._GATE_MIN_ROI_AREA_STABILITY
-            and fps_jitter_ratio <= self._GATE_MAX_FPS_JITTER_RATIO
-        )
-        if not reliable:
-            return self._last_stable_bpm(t_now)
-
+    def _accept_bpm_candidate(self, t_now: float, raw_bpm: float) -> float:
         self._bpm_candidates.append((t_now, float(raw_bpm)))
         cutoff = t_now - self._BPM_HISTORY_SEC
         while self._bpm_candidates and self._bpm_candidates[0][0] < cutoff:
@@ -897,6 +870,47 @@ class RppgEngine:
             self._stable_bpm = limited
         self._stable_bpm_t = t_now
         return float(self._stable_bpm)
+
+    def _stabilize_bpm(
+        self,
+        t_now: float,
+        raw_bpm: float,
+        sqi: float,
+        quality_score: float,
+        artifact_ratio: float,
+        roi_valid_count: int,
+        roll_deg: float,
+        yaw_deg: float,
+        pitch_deg: float,
+        landmark_jitter: float,
+        roi_area_stability: float,
+        fps_jitter_ratio: float,
+    ) -> float:
+        plausible = self._BPM_MIN_PLAUSIBLE <= raw_bpm <= self._BPM_MAX_PLAUSIBLE
+        hard_quality_ok = (
+            plausible
+            and sqi >= self._GATE_BOOTSTRAP_MIN_SQI
+            and quality_score >= self._GATE_BOOTSTRAP_MIN_QUALITY
+            and roi_valid_count >= self._GATE_BOOTSTRAP_MIN_ROI_COUNT
+            and abs(roll_deg) <= self._GATE_MAX_ROLL_DEG
+            and abs(yaw_deg) <= self._GATE_MAX_YAW_DEG
+            and abs(pitch_deg) <= self._GATE_MAX_PITCH_DEG
+        )
+        if not hard_quality_ok:
+            return self._last_stable_bpm(t_now)
+
+        soft_quality_ok = (
+            sqi >= self._GATE_MIN_SQI
+            and quality_score >= self._GATE_MIN_QUALITY
+            and artifact_ratio <= self._GATE_MAX_ARTIFACT
+            and roi_valid_count >= self._GATE_MIN_ROI_COUNT
+            and landmark_jitter <= self._GATE_MAX_LANDMARK_JITTER
+            and roi_area_stability >= self._GATE_MIN_ROI_AREA_STABILITY
+            and fps_jitter_ratio <= self._GATE_MAX_FPS_JITTER_RATIO
+        )
+        if soft_quality_ok or self._stable_bpm is None:
+            return self._accept_bpm_candidate(t_now, raw_bpm)
+        return self._last_stable_bpm(t_now)
 
     def compute(
         self,

@@ -86,3 +86,21 @@ def test_bpm_stabilizer_freezes_on_low_quality() -> None:
     )
 
     assert frozen == 72.0
+
+
+def test_bpm_stabilizer_bootstraps_when_soft_gate_fails() -> None:
+    engine = RppgEngine(target_fps=30.0)
+    bpm = engine._stabilize_bpm(
+        1.0, 84.0, 0.98, 0.83, 0.0, 4, -2.0, -8.0, 10.0, 0.0, 1.0, 0.45
+    )
+
+    assert bpm == 84.0
+
+
+def test_bpm_stabilizer_accepts_high_but_plausible_bpm() -> None:
+    engine = RppgEngine(target_fps=30.0)
+    bpm = engine._stabilize_bpm(
+        1.0, 188.0, 0.98, 0.83, 0.0, 4, -2.0, -8.0, 10.0, 0.0, 1.0, 0.02
+    )
+
+    assert bpm == 188.0
