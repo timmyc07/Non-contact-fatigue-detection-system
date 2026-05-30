@@ -8,7 +8,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - Fatigue/behavior analysis overlays
 - Recording to SQLite (.db) and video (.mp4)
 - Web dashboard for live metrics and playback
-- rPPG BPM 穩定器：低品質 frame 會凍結上一個可信 BPM，並用中位數、EMA 與最大變化率降低短時間跳動。
+- rPPG BPM 估測回到第一版基準：有效 ROI 等權平均、Welch peak 直接輸出，並用峰值插值與輕量平滑補足 71/72/73 這類細節。
 - 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
 - MediaPipe 姿態補償、ROI 動態權重、遮擋降權與品質診斷
 - Blendshape 個人化 baseline 校準與跨 session 持久化
@@ -79,7 +79,7 @@ python -m rppg.demo_rppg_live
 
 目前 `active_profile` 預設為 `stable_indoor`，提高 Face Landmarker tracking confidence 並加強 ROI polygon 平滑，目標是降低室內 webcam 下的 landmark 與 ROI 抖動。若環境偏暗或頭部動作較大，可切換 `low_light` 或 `high_motion` 後用固定錄影回放比較。
 
-rPPG BPM 輸出會套用品質門檻：SQI、quality score、ROI 可用數、姿態角度、IBI artifact ratio、landmark jitter、ROI 面積穩定度與 FPS jitter 任一不佳時，BPM 不會用新估值覆蓋，而是短時間保留上一個可信值。這能降低光線、自動曝光、頭部微動與 ROI 抖動造成的顯示跳動，但低品質期間仍不應把 rPPG 視為精準心率。
+rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等權平均後送入 POS、band-pass 與 Welch peak。新版只在頻譜峰值附近做插值來提升解析度，避免只跳 70、80、90、100 這類粗略數值；BPM 只排除明顯不合理的生理範圍，避免因品質 gate 太嚴而長時間顯示空白。
 
 可調參數集中在 `config/mediapipe_tuning.json`：
 

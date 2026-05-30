@@ -365,7 +365,6 @@ def collect_rppg_roi_sample(
     roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(transform_matrix, lm, w, h)
     roi_weights = _roi_weights_from_pose(roll_deg, yaw_deg, pitch_deg, lm, w, h, tuning)
     rgbs: list[tuple[float, float, float]] = []
-    weights: list[float] = []
     areas: list[float] = []
     effective_weights: dict[str, float] = {name: 0.0 for name, _ in ROI_SPECS}
     for name, indices in ROI_SPECS:
@@ -382,15 +381,15 @@ def collect_rppg_roi_sample(
         effective_weights[name] = float(weight)
         if val is not None and weight > 0.0:
             rgbs.append(val)
-            weights.append(weight)
     tracker.update_roi_area(areas, float(h * w), tuning)
     if not rgbs:
         return None, effective_weights, 0
-    total_w = sum(weights) or float(len(rgbs))
+    # Keep the first-version rPPG sampling behavior: valid skin ROIs are
+    # averaged equally. The pose/obstruction weights remain diagnostic only.
     sample = (
-        sum(x[0] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
-        sum(x[1] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
-        sum(x[2] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
+        sum(x[0] for x in rgbs) / len(rgbs),
+        sum(x[1] for x in rgbs) / len(rgbs),
+        sum(x[2] for x in rgbs) / len(rgbs),
     )
     norm_total = sum(effective_weights.values()) or 1.0
     effective_weights = {k: float(v / norm_total) if v > 0.0 else 0.0 for k, v in effective_weights.items()}
@@ -592,35 +591,41 @@ def welch_peak_hz(
     if not _HAS_SCIPY:
         return 0.0, np.array([]), np.array([])
     n = len(sig)
-    nperseg = min(n, max(64, int(fs * 5)))
-    noverlap = min(nperseg - 1, nperseg * 3 // 4)
+    nperseg = min(256, max(32, n // 2))
     f, pxx = welch(
         sig,
         fs=fs,
         nperseg=nperseg,
-        noverlap=noverlap,
-        nfft=max(512, nperseg),
-        window="blackmanharris",
+        noverlap=nperseg // 2,
+        nfft=max(2048, nperseg * 4),
     )
     band = (f >= 0.7) & (f <= 3.5)
     if not np.any(band):
         return 0.0, f, pxx
-    ib = np.argmax(pxx[band])
-    return float(f[band][ib]), f, pxx
+    band_idx = np.flatnonzero(band)
+    peak_i = int(band_idx[np.argmax(pxx[band])])
+    peak_hz = float(f[peak_i])
+    if 0 < peak_i < len(pxx) - 1:
+        y0 = float(np.log(max(pxx[peak_i - 1], 1e-18)))
+        y1 = float(np.log(max(pxx[peak_i], 1e-18)))
+        y2 = float(np.log(max(pxx[peak_i + 1], 1e-18)))
+        denom = y0 - 2.0 * y1 + y2
+        if abs(denom) > 1e-12:
+            delta = float(np.clip(0.5 * (y0 - y2) / denom, -1.0, 1.0))
+            peak_hz = float(f[peak_i] + delta * (f[1] - f[0]))
+    return peak_hz, f, pxx
 
 
 def compute_sqi(sig: np.ndarray, fs: float) -> float:
     if not _HAS_SCIPY or len(sig) < 32:
         return 0.0
-    nperseg = min(len(sig), max(64, int(fs * 5)))
-    noverlap = min(nperseg - 1, nperseg * 3 // 4)
+    nperseg = min(256, max(32, len(sig) // 2))
     f, pxx = welch(
         sig,
         fs=fs,
         nperseg=nperseg,
-        noverlap=noverlap,
-        nfft=max(512, nperseg),
-        window="blackmanharris",
+        noverlap=nperseg // 2,
+        nfft=max(2048, nperseg * 4),
     )
     total = float(np.sum(pxx)) + 1e-12
     inband = float(np.sum(pxx[(f >= 0.6) & (f <= 4.0)]))
@@ -762,25 +767,9 @@ class RppgEngine:
     """Buffer RGB samples and compute rPPG + HRV metrics on demand."""
 
     _BPM_HISTORY_SEC = 10.0
-    _BPM_FREEZE_SEC = 8.0
-    _BPM_EMA_ALPHA = 0.25
-    _BPM_MAX_SLEW_PER_SEC = 5.0
-    _BPM_UPDATE_EPS = 1.0
+    _BPM_EMA_ALPHA = 0.18
     _BPM_MIN_PLAUSIBLE = 42.0
     _BPM_MAX_PLAUSIBLE = 210.0
-    _GATE_MIN_SQI = 0.45
-    _GATE_MIN_QUALITY = 0.55
-    _GATE_BOOTSTRAP_MIN_SQI = 0.35
-    _GATE_BOOTSTRAP_MIN_QUALITY = 0.45
-    _GATE_BOOTSTRAP_MIN_ROI_COUNT = 2
-    _GATE_MAX_ARTIFACT = 0.35
-    _GATE_MIN_ROI_COUNT = 3
-    _GATE_MAX_ROLL_DEG = 35.0
-    _GATE_MAX_YAW_DEG = 35.0
-    _GATE_MAX_PITCH_DEG = 42.0
-    _GATE_MAX_LANDMARK_JITTER = 0.025
-    _GATE_MIN_ROI_AREA_STABILITY = 0.60
-    _GATE_MAX_FPS_JITTER_RATIO = 0.28
 
     def __init__(self, buffer_sec: float = 12.0, target_fps: float = 30.0) -> None:
         self.buffer_sec = buffer_sec
@@ -826,29 +815,9 @@ class RppgEngine:
         self._last_fs = float(np.clip(1.0 / dt, 8.0, 90.0))
         return self._last_fs
 
-    def _fps_jitter_ratio(self) -> float:
-        if len(self._t) < 8:
-            return 0.0
-        ts = np.array(self._t, dtype=np.float64)
-        dts = np.diff(ts)
-        dts = dts[np.isfinite(dts) & (dts > 1e-6)]
-        if dts.size < 4:
-            return 0.0
-        median_dt = float(np.median(dts))
-        if median_dt <= 1e-6:
-            return 1.0
-        return float(np.std(dts) / median_dt)
-
-    def _last_stable_bpm(self, t_now: float) -> float:
-        if (
-            self._stable_bpm is not None
-            and self._stable_bpm_t is not None
-            and t_now - self._stable_bpm_t <= self._BPM_FREEZE_SEC
-        ):
-            return float(self._stable_bpm)
-        return 0.0
-
     def _accept_bpm_candidate(self, t_now: float, raw_bpm: float) -> float:
+        if not self._BPM_MIN_PLAUSIBLE <= raw_bpm <= self._BPM_MAX_PLAUSIBLE:
+            return float(self._stable_bpm or 0.0)
         self._bpm_candidates.append((t_now, float(raw_bpm)))
         cutoff = t_now - self._BPM_HISTORY_SEC
         while self._bpm_candidates and self._bpm_candidates[0][0] < cutoff:
@@ -861,56 +830,15 @@ class RppgEngine:
             self._stable_bpm_t = t_now
             return candidate
 
-        dt = max(t_now - self._stable_bpm_t, 1.0 / max(self.target_fps, 1.0))
-        blended = (1.0 - self._BPM_EMA_ALPHA) * self._stable_bpm + self._BPM_EMA_ALPHA * candidate
-        delta = blended - self._stable_bpm
-        max_delta = self._BPM_MAX_SLEW_PER_SEC * dt
-        limited = self._stable_bpm + float(np.clip(delta, -max_delta, max_delta))
-        if abs(limited - self._stable_bpm) >= self._BPM_UPDATE_EPS:
-            self._stable_bpm = limited
+        self._stable_bpm = (
+            (1.0 - self._BPM_EMA_ALPHA) * self._stable_bpm
+            + self._BPM_EMA_ALPHA * candidate
+        )
         self._stable_bpm_t = t_now
         return float(self._stable_bpm)
 
-    def _stabilize_bpm(
-        self,
-        t_now: float,
-        raw_bpm: float,
-        sqi: float,
-        quality_score: float,
-        artifact_ratio: float,
-        roi_valid_count: int,
-        roll_deg: float,
-        yaw_deg: float,
-        pitch_deg: float,
-        landmark_jitter: float,
-        roi_area_stability: float,
-        fps_jitter_ratio: float,
-    ) -> float:
-        plausible = self._BPM_MIN_PLAUSIBLE <= raw_bpm <= self._BPM_MAX_PLAUSIBLE
-        hard_quality_ok = (
-            plausible
-            and sqi >= self._GATE_BOOTSTRAP_MIN_SQI
-            and quality_score >= self._GATE_BOOTSTRAP_MIN_QUALITY
-            and roi_valid_count >= self._GATE_BOOTSTRAP_MIN_ROI_COUNT
-            and abs(roll_deg) <= self._GATE_MAX_ROLL_DEG
-            and abs(yaw_deg) <= self._GATE_MAX_YAW_DEG
-            and abs(pitch_deg) <= self._GATE_MAX_PITCH_DEG
-        )
-        if not hard_quality_ok:
-            return self._last_stable_bpm(t_now)
-
-        soft_quality_ok = (
-            sqi >= self._GATE_MIN_SQI
-            and quality_score >= self._GATE_MIN_QUALITY
-            and artifact_ratio <= self._GATE_MAX_ARTIFACT
-            and roi_valid_count >= self._GATE_MIN_ROI_COUNT
-            and landmark_jitter <= self._GATE_MAX_LANDMARK_JITTER
-            and roi_area_stability >= self._GATE_MIN_ROI_AREA_STABILITY
-            and fps_jitter_ratio <= self._GATE_MAX_FPS_JITTER_RATIO
-        )
-        if soft_quality_ok or self._stable_bpm is None:
-            return self._accept_bpm_candidate(t_now, raw_bpm)
-        return self._last_stable_bpm(t_now)
+    def _stabilize_bpm(self, t_now: float, raw_bpm: float) -> float:
+        return self._accept_bpm_candidate(t_now, raw_bpm)
 
     def compute(
         self,
@@ -1023,21 +951,7 @@ class RppgEngine:
             + 0.45 * roi_area_stability
         )
         quality_score = _clamp(0.42 * quality_score + 0.38 * signal_quality + 0.20 * stability_q)
-        fps_jitter_ratio = self._fps_jitter_ratio()
-        bpm = self._stabilize_bpm(
-            t_now,
-            raw_bpm,
-            sqi,
-            quality_score,
-            art,
-            roi_valid_count,
-            roll_deg,
-            yaw_deg,
-            pitch_deg,
-            landmark_jitter,
-            roi_area_stability,
-            fps_jitter_ratio,
-        )
+        bpm = self._stabilize_bpm(t_now, raw_bpm)
 
         wf_n = min(160, filt.size)
         wave = filt[-wf_n:].copy()
