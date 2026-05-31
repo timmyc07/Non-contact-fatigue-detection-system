@@ -58,14 +58,14 @@ def _clean_inline(text: str) -> str:
     return text
 
 
-def _wrap(text: str, width: int) -> list[str]:
+def _wrap(text: str, width: int, *, break_long_words: bool = False) -> list[str]:
     if not text.strip():
         return [""]
     return textwrap.wrap(
         _clean_inline(text),
         width=width,
-        break_long_words=False,
-        break_on_hyphens=False,
+        break_long_words=break_long_words,
+        break_on_hyphens=break_long_words,
         replace_whitespace=False,
     ) or [""]
 
@@ -73,6 +73,7 @@ def _wrap(text: str, width: int) -> list[str]:
 def _parse_markdown(md: str) -> list[tuple[str, str]]:
     blocks: list[tuple[str, str]] = []
     in_code = False
+    in_refs = False
     code_lines: list[str] = []
     para: list[str] = []
 
@@ -105,7 +106,9 @@ def _parse_markdown(md: str) -> list[tuple[str, str]]:
             continue
         if line.startswith("## "):
             flush_para()
-            blocks.append(("h2", line[3:].strip()))
+            heading = line[3:].strip()
+            in_refs = heading.startswith("參考資料")
+            blocks.append(("h2", heading))
             continue
         if line.startswith("### "):
             flush_para()
@@ -114,6 +117,18 @@ def _parse_markdown(md: str) -> list[tuple[str, str]]:
         if line.startswith("|"):
             flush_para()
             blocks.append(("code", line))
+            continue
+        if in_refs and re.match(r"^\d+\.\s+", line):
+            flush_para()
+            blocks.append(("ref_title", re.sub(r"^\d+\.\s+", "", line).strip()))
+            continue
+        if in_refs and line.strip().startswith("http"):
+            flush_para()
+            blocks.append(("ref_url", line.strip()))
+            continue
+        if in_refs and line.strip().startswith("本系統參考技術"):
+            flush_para()
+            blocks.append(("ref_note", line.strip()))
             continue
         if line.startswith("- "):
             flush_para()
@@ -148,18 +163,24 @@ def _new_page(pdf: PdfPages, page_no: int, footer: str) -> tuple[Figure, Axes, f
     return fig, ax, 0.955
 
 
-def _block_style(kind: str) -> tuple[font_manager.FontProperties, float, float, int, str, float]:
+def _block_style(kind: str) -> tuple[font_manager.FontProperties, float, float, int, str, float, bool]:
     if kind == "h1":
-        return FONT_H1, 0.031, 0.020, 26, "#111111", 0.085
+        return FONT_H1, 0.031, 0.020, 25, "#111111", 0.085, False
     if kind == "h2":
-        return FONT_H2, 0.024, 0.014, 34, "#1f2937", 0.085
+        return FONT_H2, 0.024, 0.017, 31, "#1f2937", 0.085, False
     if kind == "h3":
-        return FONT_H3, 0.021, 0.010, 38, "#334155", 0.085
+        return FONT_H3, 0.021, 0.012, 35, "#334155", 0.085, False
     if kind == "li":
-        return FONT_BODY, 0.0185, 0.005, 49, "#111111", 0.105
+        return FONT_BODY, 0.019, 0.007, 43, "#111111", 0.105, True
     if kind == "code":
-        return FONT_CODE, 0.016, 0.008, 70, "#334155", 0.095
-    return FONT_BODY, 0.0185, 0.007, 52, "#111111", 0.085
+        return FONT_CODE, 0.0165, 0.010, 60, "#334155", 0.095, True
+    if kind == "ref_title":
+        return FONT_BODY, 0.019, 0.004, 43, "#111111", 0.095, True
+    if kind == "ref_url":
+        return FONT_SMALL, 0.0165, 0.006, 62, "#374151", 0.095, True
+    if kind == "ref_note":
+        return FONT_BODY, 0.0188, 0.019, 45, "#111111", 0.095, True
+    return FONT_BODY, 0.019, 0.009, 45, "#111111", 0.085, True
 
 
 def build_pdf(source: Path, target: Path, footer: str) -> None:
@@ -171,13 +192,15 @@ def build_pdf(source: Path, target: Path, footer: str) -> None:
         fig, ax, y = _new_page(pdf, page_no, footer)
 
         for kind, text in blocks:
-            font, line_h, gap, width, color, x = _block_style(kind)
+            font, line_h, gap, width, color, x, break_long_words = _block_style(kind)
             if kind == "li":
+                text = "• " + text
+            elif kind == "ref_title":
                 text = "• " + text
 
             lines: list[str] = []
             for part in text.split("\n"):
-                lines.extend(_wrap(part, width))
+                lines.extend(_wrap(part, width, break_long_words=break_long_words))
             needed = len(lines) * line_h + gap
             if y - needed < 0.065:
                 pdf.savefig(fig)
