@@ -78,21 +78,21 @@ rPPG 訊號處理使用：
 ## 3. 系統架構
 
 ```text
-CameraStreamWorker
-  -> BGR frame queue
-  -> CombinedWorker 或 RppgWorker
-  -> MediaPipe FaceLandmarker.detect_for_video
-  -> face landmarks / transformation matrix
-  -> ROI extraction
-  -> RppgEngine buffer
-  -> POS pulse
-  -> Butterworth band-pass
-  -> Welch PSD peak
-  -> BPM / HRV / SQI / stress metrics
-  -> GUI overlay / Web dashboard / SQLite recorder
+攝影機影像擷取流程
+  -> 即時 BGR 影像佇列
+  -> 共用臉部偵測分流流程或單獨 rPPG 分析流程
+  -> MediaPipe 臉部特徵點影片模式偵測
+  -> 臉部特徵點與姿態轉換矩陣
+  -> 臉部皮膚 ROI 取樣
+  -> rPPG 時序訊號緩衝區
+  -> POS 脈波訊號分離
+  -> Butterworth 帶通濾波
+  -> Welch 頻譜峰值搜尋
+  -> 心率、心率變異度、訊號品質與壓力指標
+  -> 桌面畫面疊圖、網頁儀表板與 SQLite 紀錄
 ```
 
-`CombinedWorker` 是 GUI 主流程。它只建立一個 Face Landmarker，將同一份 landmark 同時送給 rPPG 與疲勞偵測，避免同一 frame 重複推論。無臉時會 reset `RppgEngine` 與 `RoiGeometryTracker`，避免舊 buffer 影響下一段量測。
+共用臉部偵測分流流程是 GUI 主流程。它只建立一個 Face Landmarker，將同一份臉部特徵點同時送給 rPPG 與疲勞偵測，避免同一 frame 重複推論。無臉時會重設 rPPG 訊號緩衝區與 ROI 幾何追蹤狀態，避免舊 buffer 影響下一段量測。
 
 ## 4. ROI 取樣
 

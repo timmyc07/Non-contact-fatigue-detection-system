@@ -67,28 +67,28 @@ OpenCV BGR frame
 ## 3. 系統架構
 
 ```text
-CameraStreamWorker
-  -> BGR frame queue
-  -> CombinedWorker
-  -> FaceLandmarker.detect_for_video
-  -> landmarks / blendshapes / transformation matrix
-  -> FatigueEngine.step
-       -> EyeCognitiveModule
-       -> GazeTrackingModule
-       -> HeadMouthModule
-  -> FatigueMetrics
-  -> FatigueFuser + optional RppgMetrics
-  -> FusedFatigueScore
-  -> GUI overlay / Web dashboard / SQLite recorder
+攝影機影像擷取流程
+  -> 即時 BGR 影像佇列
+  -> 共用臉部偵測與疲勞分析流程
+  -> MediaPipe 臉部特徵點影片模式偵測
+  -> 臉部特徵點、表情係數與姿態轉換矩陣
+  -> 疲勞特徵分析流程
+       -> 眼部與認知狀態分析
+       -> 視線穩定度與掃視頻率分析
+       -> 頭部姿態、微睡眠與張嘴哈欠分析
+  -> 行為疲勞特徵與品質分數
+  -> 行為疲勞與可選 rPPG 生理指標融合
+  -> 整體疲勞分數
+  -> 桌面畫面疊圖、網頁儀表板與 SQLite 紀錄
 ```
 
-`CombinedWorker` 是主流程，單一 Face Landmarker 同時供應 rPPG 與疲勞偵測，避免重複推論與 overlay 競爭。
+共用臉部偵測與疲勞分析流程是主流程，單一 Face Landmarker 同時供應 rPPG 與疲勞偵測，避免重複推論與畫面疊圖競爭。
 
 內部模組：
 
-- `EyeCognitiveModule`：EAR、blink、PERCLOS、squint、brow、iris ratio、blendshape baseline。
-- `GazeTrackingModule`：gaze position、gaze stability、saccadic velocity、fixation duration、saccade frequency。
-- `HeadMouthModule`：solvePnP head pose、microsleep、MAR、mouth open ratio、yawn。
+- 眼部與認知狀態分析：EAR、blink、PERCLOS、squint、brow、iris ratio、blendshape baseline。
+- 視線穩定度與掃視頻率分析：gaze position、gaze stability、saccadic velocity、fixation duration、saccade frequency。
+- 頭部姿態、微睡眠與張嘴哈欠分析：solvePnP head pose、microsleep、MAR、mouth open ratio、yawn。
 
 效能策略：
 
