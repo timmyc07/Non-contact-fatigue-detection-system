@@ -6,7 +6,7 @@
 
 ## 1. 系統定位
 
-MediaPipe 疲勞偵測系統使用 Face Landmarker 輸出的臉部 landmarks、iris landmarks、blendshape scores 與姿態資訊，估計使用者行為警覺狀態。疲勞判定本身是規則式、多門檻、個人化校準演算法，不是端到端 fatigue AI classifier。
+MediaPipe 疲勞偵測系統使用 Face Landmarker 輸出的臉部特徵點（landmarks）、虹膜特徵點（iris landmarks）、表情係數（blendshape scores）與姿態資訊，估計使用者行為警覺狀態。疲勞判定本身是規則式、多門檻、個人化校準演算法，不是端到端 fatigue AI classifier。
 
 主要輸出：
 
@@ -18,7 +18,7 @@ MediaPipe 疲勞偵測系統使用 Face Landmarker 輸出的臉部 landmarks、i
 
 唯一直接使用的 AI 模型是 `models/face_landmarker.task`。若模型不存在，程式會下載 Google MediaPipe model storage 的 `face_landmarker/float16/latest/face_landmarker.task`。
 
-官方文件說明 Face Landmarker 可輸出 3D face landmarks、blendshape scores 與 facial transformation matrices。
+官方文件說明 Face Landmarker 可輸出 3D 臉部特徵點（3D face landmarks）、表情係數（blendshape scores）與臉部姿態轉換矩陣（facial transformation matrices）。
 
 官方文件：  
 https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python
@@ -26,27 +26,27 @@ https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python
 ### 2.1 模型 input
 
 ```text
-OpenCV BGR frame
-  -> cv2.cvtColor(..., COLOR_BGR2RGB)
-  -> mp.Image(image_format=SRGB)
-  -> detect_for_video(mp_img, timestamp_ms)
+攝影機原始影像（OpenCV BGR frame，藍綠紅色彩順序）
+  -> 轉成模型使用的 RGB 色彩順序（cv2.cvtColor(..., COLOR_BGR2RGB)）
+  -> 包裝成 MediaPipe 影像物件（mp.Image，標示影像為 SRGB）
+  -> 以影片模式執行偵測（detect_for_video，並附上每張 frame 的 timestamp_ms 毫秒時間戳記）
 ```
 
 模型設定：
 
-- `running_mode=VIDEO`
-- `num_faces=1`
-- `output_face_blendshapes=True`
-- `output_facial_transformation_matrixes=True`
-- active profile `stable_indoor` 時 detection/presence/tracking confidence 為 0.6、0.6、0.7。
+- 影片連續偵測模式（`running_mode=VIDEO`）：讓模型依照連續 frame 的時間順序處理。
+- 單人臉偵測（`num_faces=1`）：只追蹤畫面中最主要的一張臉。
+- 輸出表情係數（`output_face_blendshapes=True`）：提供眨眼、瞇眼、皺眉與張嘴判斷。
+- 輸出臉部姿態矩陣（`output_facial_transformation_matrixes=True`）：提供姿態補償與品質診斷。
+- 室內穩定設定檔（active profile `stable_indoor`）下，偵測、存在與追蹤信心門檻（detection/presence/tracking confidence）為 0.6、0.6、0.7。
 
 ### 2.2 模型 output
 
-- `face_landmarks[0]`：第一張臉的 478 點 normalized landmarks。
-- `face_blendshapes[0]`：52 類表情係數，程式轉成小寫 key-value map。
-- `facial_transformation_matrixes[0]`：給 rPPG ROI/姿態補償使用；疲勞系統主要用 solvePnP 自行估 head pose。
+- 第一張臉的 478 個臉部特徵點（`face_landmarks[0]`，normalized landmarks，座標已正規化到影像比例範圍）。
+- 52 類表情係數（`face_blendshapes[0]`，例如眨眼、瞇眼、皺眉、張嘴等強度），程式轉成小寫 key-value map。
+- 臉部姿態轉換矩陣（`facial_transformation_matrixes[0]`，描述臉部相對鏡頭的旋轉與位移），給 rPPG ROI/姿態補償使用；疲勞系統主要用 solvePnP 自行估 head pose。
 
-重要 landmarks：
+重要臉部特徵點（landmarks）：
 
 | 類別 | indices | 用途 |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ OpenCV BGR frame
 | MAR mouth | `[61,82,13,312,291,316,14,86]` | 張嘴、哈欠 |
 | solvePnP | `[1,199,33,263,61,291]` | head pitch/yaw/roll |
 
-重要 blendshapes：
+重要表情係數（blendshapes）：
 
 - `eye_blink_left`、`eye_blink_right`
 - `eye_squint_left`、`eye_squint_right`
@@ -86,7 +86,7 @@ OpenCV BGR frame
 
 內部模組：
 
-- 眼部與認知狀態分析：EAR、blink、PERCLOS、squint、brow、iris ratio、blendshape baseline。
+- 眼部與認知狀態分析：EAR、blink、PERCLOS、squint、brow、iris ratio、表情係數個人基準值（blendshape baseline）。
 - 視線穩定度與掃視頻率分析：gaze position、gaze stability、saccadic velocity、fixation duration、saccade frequency。
 - 頭部姿態、微睡眠與張嘴哈欠分析：solvePnP head pose、microsleep、MAR、mouth open ratio、yawn。
 
@@ -155,11 +155,11 @@ PERCLOS = window 內閉眼時間加權總和 / 有效觀察時間
 
 PERCLOS 達門檻時狀態為 `TIRED`；連續閉眼超過 `long_closed_sec` 時狀態為 `DROWSY`。
 
-## 6. 瞇眼、皺眉與 blendshape 校準
+## 6. 瞇眼、皺眉與表情係數校準
 
-### 6.1 Blendshape baseline
+### 6.1 表情係數個人基準值
 
-不同使用者與光線下 blendshape baseline 不同，因此系統做個人化校準：
+不同使用者與光線下表情係數個人基準值（blendshape baseline）不同，因此系統做個人化校準：
 
 - `blend_calib_sec=4.0`
 - `blend_min_samples=24`
@@ -198,7 +198,7 @@ norm = clamp((raw - baseline) / (1 - baseline), 0, 1)
 
 ## 7. Iris、gaze、saccade 與 fixation
 
-若 landmarks 數量達 478，系統使用 iris landmarks。
+若臉部特徵點（landmarks）數量達 478，系統使用虹膜特徵點（iris landmarks）。
 
 Iris ratio：
 
@@ -238,7 +238,7 @@ Saccade：
 
 `solve_head_pose()` 使用 OpenCV `solvePnP`：
 
-- 2D landmarks：`[1,199,33,263,61,291]`。
+- 2D 臉部特徵點（2D landmarks）：`[1,199,33,263,61,291]`。
 - 3D template：程式內 `_HEAD_POSE_3D`。
 - camera matrix：以影像寬度為 focal length，principal point 為影像中心。
 - distortion：零矩陣。
@@ -348,7 +348,7 @@ Behavior sub-score 權重：
 目前測試涵蓋：
 
 - tuning profiles 載入。
-- blendshape baseline normalization。
+- 表情係數個人基準值正規化（blendshape baseline normalization）。
 - face quality motion penalty。
 - ROI jitter 與 ROI area stability。
 - rPPG/behavior 同時可用時融合權重為 15% / 85%。
@@ -413,7 +413,7 @@ Behavior sub-score 權重：
 - EAR、MAR、PERCLOS 對相機角度、眼鏡、遮擋、眼型與照明敏感。
 - Iris/gaze 在一般 webcam 上容易受解析度與反光影響。
 - solvePnP 使用簡化 3D template 與估計 camera matrix，head pose 是近似值。
-- blendshape baseline 若在不自然表情下校準，後續分數會偏移。
+- 表情係數個人基準值（blendshape baseline）若在不自然表情下校準，後續分數會偏移。
 - 本系統不應作為醫療診斷、安全執法或單獨自動決策依據。
 
 ## 13. 維運建議
@@ -427,19 +427,19 @@ Behavior sub-score 權重：
 
 1. MediaPipe Face Landmarker Python guide  
    https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python  
-   本系統參考技術：`FaceLandmarkerOptions`、`RunningMode.VIDEO`、`detect_for_video()`、`output_face_blendshapes`、`output_facial_transformation_matrixes`、confidence threshold 與 `num_faces` 設定。
+   本系統參考技術：Face Landmarker 設定物件（`FaceLandmarkerOptions`）、影片連續偵測模式（`RunningMode.VIDEO`）、影片模式偵測呼叫（`detect_for_video()`）、表情係數輸出（`output_face_blendshapes`）、臉部姿態矩陣輸出（`output_facial_transformation_matrixes`）、信心門檻（confidence threshold）與單人臉偵測數量（`num_faces`）設定。
 
 2. MediaPipe Face Landmarks Detection guide  
    https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker  
-   本系統參考技術：Face Landmarker 的 3D landmarks、blendshape scores、facial transformation matrices 輸出；本專案以 landmarks 建立 EAR/MAR/gaze/head pose 特徵，以 blendshape 輔助 blink、squint、brow 與 jaw 判斷。
+   本系統參考技術：Face Landmarker 的 3D 臉部特徵點（3D landmarks）、表情係數（blendshape scores）、臉部姿態轉換矩陣（facial transformation matrices）輸出；本專案以臉部特徵點建立 EAR/MAR/gaze/head pose 特徵，以表情係數輔助 blink、squint、brow 與 jaw 判斷。
 
 3. Camillo Lugaresi et al., "MediaPipe: A Framework for Building Perception Pipelines", arXiv:1906.08172, 2019  
    https://arxiv.org/abs/1906.08172  
-   本系統參考技術：即時 perception pipeline 與 graph-based 處理概念；本專案在 `CombinedWorker` 中以單一 Face Landmarker 產生共同 landmarks，分流給 rPPG 與 fatigue engine。
+   本系統參考技術：即時感知處理流程（perception pipeline）與 graph-based 處理概念；本專案以單一 Face Landmarker 產生共同臉部特徵點，分流給 rPPG 與疲勞分析流程。
 
 4. Tereza Soukupova and Jan Cech, "Real-Time Eye Blink Detection using Facial Landmarks", 21st Computer Vision Winter Workshop, 2016  
    https://vision.fe.uni-lj.si/cvww2016/proceedings/papers/05.pdf  
-   本系統參考技術：Eye Aspect Ratio（EAR）六點眼睛模型；本專案用左右眼 6 landmarks 計算 EAR、眨眼與閉眼狀態。
+   本系統參考技術：Eye Aspect Ratio（EAR，眼睛長寬比例）六點眼睛模型；本專案用左右眼 6 個特徵點（landmarks）計算 EAR、眨眼與閉眼狀態。
 
 5. Grace, R., Byrne, V. E., Bierman, D. M., Legrand, J. M., Gricourt, D., Davis, B. K., Staszewski, J. J., Carnahan, B., "A Drowsy Driver Detection System for Heavy Vehicles", Digital Avionics Systems Conference, 1998  
    https://doi.org/10.1109/DASC.1998.741493  
@@ -451,7 +451,7 @@ Behavior sub-score 權重：
 
 7. OpenCV `solvePnP` documentation  
    https://docs.opencv.org/4.x/d5/d1f/calib3d_solvePnP.html  
-   本系統參考技術：以 3D object points 與 2D image points 求解 camera pose；本專案用 6 個臉部 landmarks 與簡化 3D face template 估算 pitch/yaw/roll。
+   本系統參考技術：以 3D 物體點（3D object points）與 2D 影像點（2D image points）求解相機姿態（camera pose）；本專案用 6 個臉部特徵點（landmarks）與簡化 3D 臉部模板估算 pitch/yaw/roll。
 
 8. OpenCV camera calibration and 3D reconstruction module  
    https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html  
@@ -471,4 +471,4 @@ Behavior sub-score 權重：
 
 12. OpenCV drawing and image processing documentation  
     https://docs.opencv.org/4.x/d6/d6e/group__imgproc__draw.html  
-    本系統參考技術：overlay annotation 與 landmarks/ROI 繪製；本專案將疲勞特徵畫到 GUI preview。
+    本系統參考技術：畫面疊圖標註（overlay annotation）與臉部特徵點/取樣區域（landmarks/ROI）繪製；本專案將疲勞特徵畫到 GUI preview。

@@ -6,7 +6,7 @@
 
 ## 1. 系統定位
 
-rPPG（remote photoplethysmography）使用一般 RGB 攝影機觀察臉部皮膚顏色的微小週期變化，推估心跳頻率與心率變異度。本專案的 rPPG 不使用心率 AI 模型；AI 只用於臉部 landmark/ROI 定位，BPM、HRV、SQI 與壓力指標皆由訊號處理與 heuristic 產生。
+rPPG（remote photoplethysmography，遠端光體積變化描記）使用一般 RGB 攝影機觀察臉部皮膚顏色的微小週期變化，推估心跳頻率與心率變異度。本專案的 rPPG 不使用心率 AI 模型；AI 只用於臉部特徵點（landmark）與皮膚取樣區域（ROI）定位，BPM、HRV、SQI 與壓力指標皆由訊號處理與 heuristic 產生。
 
 此子系統輸出：
 
@@ -26,23 +26,23 @@ rPPG（remote photoplethysmography）使用一般 RGB 攝影機觀察臉部皮�
 
 模型 input：
 
-- OpenCV BGR frame 轉為 RGB。
-- 以 `mp.Image(image_format=mp.ImageFormat.SRGB, data=...)` 包裝。
-- `RunningMode.VIDEO` 需要單調遞增的 `timestamp_ms`。
+- 攝影機原始影像（OpenCV BGR frame，OpenCV 預設的藍綠紅色彩順序）先轉為 RGB（紅綠藍色彩順序），符合 MediaPipe 模型輸入格式。
+- 將影像包裝成 MediaPipe 影像物件（`mp.Image(image_format=mp.ImageFormat.SRGB, data=...)`，表示這張影像使用標準 RGB 色彩空間並帶有影像資料）。
+- 使用影片連續偵測模式（`RunningMode.VIDEO`），每張影像都要附上遞增的毫秒時間戳記（`timestamp_ms`，用來告訴模型 frame 的時間順序）。
 
 模型 output：
 
-- `face_landmarks[0]`：478 點 normalized face landmarks，rPPG 用來建立皮膚 ROI polygon。
-- `facial_transformation_matrixes[0]`：用於 roll 補償、姿態估計與 ROI 診斷。
-- `face_blendshapes[0]`：在 `CombinedWorker` 中傳給疲勞系統；rPPG 心率估算本身不使用 blendshape。
+- 第一張臉的 478 個臉部特徵點（`face_landmarks[0]`，normalized face landmarks，座標已正規化到影像比例範圍），rPPG 用來建立皮膚取樣多邊形（ROI polygon）。
+- 臉部姿態轉換矩陣（`facial_transformation_matrixes[0]`，描述臉部相對鏡頭的旋轉與位移），用於 roll 補償、姿態估計與 ROI 診斷。
+- 臉部表情係數（`face_blendshapes[0]`，例如眨眼、張嘴、皺眉等表情強度），會傳給疲勞系統；rPPG 心率估算本身不使用此係數。
 
 本專案設定：
 
-- `running_mode=VIDEO`
-- `num_faces=1`
-- `output_face_blendshapes=True`
-- `output_facial_transformation_matrixes=True`
-- `active_profile=stable_indoor` 時 detection/presence/tracking confidence 分別為 0.6、0.6、0.7。
+- 影片連續偵測模式（`running_mode=VIDEO`）：讓模型依照連續 frame 的時間順序處理。
+- 單人臉偵測（`num_faces=1`）：只追蹤畫面中最主要的一張臉。
+- 輸出表情係數（`output_face_blendshapes=True`）：提供疲勞偵測使用的眨眼、張嘴與皺眉訊號。
+- 輸出臉部姿態矩陣（`output_facial_transformation_matrixes=True`）：提供姿態補償與 ROI 品質診斷。
+- 室內穩定設定檔（`active_profile=stable_indoor`）下，偵測、存在與追蹤信心門檻（detection/presence/tracking confidence）分別為 0.6、0.6、0.7。
 
 官方文件：MediaPipe Face Landmarker Python guide  
 https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python
@@ -51,10 +51,10 @@ https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python
 
 OpenCV 負責 frame 轉色、ROI mask、ROI 平均色與 overlay：
 
-- `cv2.cvtColor`：BGR/RGB 轉換。
-- `cv2.fillConvexPoly`：依 ROI polygon 建立 mask。
+- `cv2.cvtColor`：BGR/RGB 轉換，也就是把 OpenCV 的藍綠紅順序轉成模型使用的紅綠藍順序。
+- `cv2.fillConvexPoly`：依 ROI polygon 建立 mask，也就是只保留臉部皮膚取樣區域。
 - `cv2.GaussianBlur`：以 5x5 blur 降低 ROI pixel noise。
-- `cv2.mean`：計算 mask 內平均 BGR，再轉為 `(R, G, B)`。
+- `cv2.mean`：計算 mask 內平均 BGR，再轉為 `(R, G, B)`，作為後續 rPPG 的顏色時間序列。
 - `cv2.polylines`：在 preview 上繪製 ROI。
 
 ### 2.3 SciPy 與 NumPy
@@ -107,8 +107,8 @@ rPPG 訊號處理使用：
 
 流程：
 
-1. 將 normalized landmark 轉為 pixel。
-2. 若有 transformation matrix，估計 roll/yaw/pitch，並對 ROI 做 roll 補償。
+1. 將正規化臉部特徵點（normalized landmark，比例座標）轉為影像像素座標（pixel）。
+2. 若有臉部姿態轉換矩陣（transformation matrix），估計 roll/yaw/pitch，也就是頭部左右傾斜、左右轉頭與上下點頭角度，並對 ROI 做 roll 補償。
 3. `canonical_roi_warp_enabled` 預設關閉；開啟時才做實驗性姿態導向 ROI 幾何正規化。
 4. `RoiGeometryTracker` 使用 EMA 平滑 ROI polygon。
 5. polygon mask 面積少於 30 pixel 時視為無效。
@@ -235,7 +235,7 @@ HRV：
 - `SDNN = std(IBI, ddof=1)`
 - LF/HF：IBI tachogram 線性插值到 4 Hz，Welch PSD 後計算 LF 0.04 到 0.15 Hz、HF 0.15 到 0.4 Hz。
 
-HRV confidence：
+HRV 可信度（HRV confidence）：
 
 - LOW：IBI 少於 6、SQI 低於 0.25 或 artifact ratio 高於 0.35。
 - MEDIUM：IBI 少於 12、SQI 低於 0.45 或 artifact ratio 高於 0.15。
@@ -311,15 +311,15 @@ LF/HF 或 RMSSD 不可用時輸出 `stress_prob=0.0`、`stress_status="calibrati
 
 1. MediaPipe Face Landmarker Python guide  
    https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python  
-   本系統參考技術：`FaceLandmarkerOptions`、`RunningMode.VIDEO`、`detect_for_video()`、`output_face_blendshapes`、`output_facial_transformation_matrixes`、face landmarks 與 transformation matrix 的輸入輸出定義。
+   本系統參考技術：Face Landmarker 設定物件（`FaceLandmarkerOptions`）、影片連續偵測模式（`RunningMode.VIDEO`）、影片模式偵測呼叫（`detect_for_video()`）、表情係數輸出（`output_face_blendshapes`）、臉部姿態矩陣輸出（`output_facial_transformation_matrixes`）、臉部特徵點（face landmarks）與姿態轉換矩陣（transformation matrix）的輸入輸出定義。
 
 2. MediaPipe Face Landmarks Detection guide  
    https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker  
-   本系統參考技術：Face Landmarker 可輸出 3D face landmarks、blendshape scores 與 facial transformation matrices；本專案將 landmarks 用於 ROI，matrix 用於姿態與 ROI roll 補償。
+   本系統參考技術：Face Landmarker 可輸出 3D 臉部特徵點（3D face landmarks）、表情係數（blendshape scores）與臉部姿態轉換矩陣（facial transformation matrices）；本專案將臉部特徵點用於 ROI，姿態矩陣用於姿態估計與 ROI roll 補償。
 
 3. Camillo Lugaresi et al., "MediaPipe: A Framework for Building Perception Pipelines", arXiv:1906.08172, 2019  
    https://arxiv.org/abs/1906.08172  
-   本系統參考技術：MediaPipe perception pipeline 的即時推論概念；本專案以單一 Face Landmarker worker 共用 landmarks，降低重複推論成本。
+   本系統參考技術：MediaPipe 感知處理流程（perception pipeline）的即時推論概念；本專案以單一 Face Landmarker 推論流程共用臉部特徵點，降低重複推論成本。
 
 4. W. Wang, A. C. den Brinker, S. Stuijk, G. de Haan, "Algorithmic Principles of Remote PPG", IEEE Transactions on Biomedical Engineering, 2017  
    https://doi.org/10.1109/TBME.2016.2609282  
@@ -359,7 +359,7 @@ LF/HF 或 RMSSD 不可用時輸出 `stress_prob=0.0`、`stress_status="calibrati
 
 13. OpenCV VideoCapture documentation  
     https://docs.opencv.org/4.x/d8/dfe/classcv_1_1VideoCapture.html  
-    本系統參考技術：相機 frame 擷取；本專案由 camera worker 取得 BGR frame 並餵入 rPPG pipeline。
+    本系統參考技術：相機 frame 擷取；本專案由攝影機擷取流程取得 BGR frame（OpenCV 原始藍綠紅影像）並餵入 rPPG pipeline。
 
 14. OpenCV image filtering documentation  
     https://docs.opencv.org/4.x/d4/d86/group__imgproc__filter.html  
