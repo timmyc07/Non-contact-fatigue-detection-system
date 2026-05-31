@@ -162,6 +162,14 @@ fuser /dev/video0
 ## Technical reports
 - `docs/rppg_technical_report_v2.md`: rPPG 子系統報告書，整理模型、演算法、input/output、架構與可信度驗證方式。
 - `docs/mediapipe_fatigue_technical_report.md`: MediaPipe 疲勞偵測子系統報告書，整理 Face Landmarker、行為疲勞演算法、融合分數與驗證方式。
+- `docs/rppg_technical_report_v2.pdf`: rPPG 子系統 PDF 報告。
+- `docs/mediapipe_fatigue_technical_report.pdf`: MediaPipe 疲勞偵測 PDF 報告。
+
+PDF reports can be regenerated with:
+
+```bash
+.venv/bin/python scripts/build_technical_report_pdfs.py
+```
 
 ## Notes
 - Recordings are saved under the `recordings/` folder.

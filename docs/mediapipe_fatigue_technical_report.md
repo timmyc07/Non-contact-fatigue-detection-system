@@ -422,3 +422,53 @@ Behavior sub-score 權重：
 - 修改 `config/mediapipe_tuning.json` active profile 時，應跑 profile sweep。
 - 新增 AI 模型時，必須記錄模型檔名、來源、版本、input/output、推論模式與 fallback。
 - `config/mediapipe_calibration.json` 是個人/環境校準結果，不應提交版本控制。
+
+## 14. 參考資料與本系統採用技術
+
+1. MediaPipe Face Landmarker Python guide  
+   https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python  
+   本系統參考技術：`FaceLandmarkerOptions`、`RunningMode.VIDEO`、`detect_for_video()`、`output_face_blendshapes`、`output_facial_transformation_matrixes`、confidence threshold 與 `num_faces` 設定。
+
+2. MediaPipe Face Landmarks Detection guide  
+   https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker  
+   本系統參考技術：Face Landmarker 的 3D landmarks、blendshape scores、facial transformation matrices 輸出；本專案以 landmarks 建立 EAR/MAR/gaze/head pose 特徵，以 blendshape 輔助 blink、squint、brow 與 jaw 判斷。
+
+3. Camillo Lugaresi et al., "MediaPipe: A Framework for Building Perception Pipelines", arXiv:1906.08172, 2019  
+   https://arxiv.org/abs/1906.08172  
+   本系統參考技術：即時 perception pipeline 與 graph-based 處理概念；本專案在 `CombinedWorker` 中以單一 Face Landmarker 產生共同 landmarks，分流給 rPPG 與 fatigue engine。
+
+4. Tereza Soukupova and Jan Cech, "Real-Time Eye Blink Detection using Facial Landmarks", 21st Computer Vision Winter Workshop, 2016  
+   https://vision.fe.uni-lj.si/cvww2016/proceedings/papers/05.pdf  
+   本系統參考技術：Eye Aspect Ratio（EAR）六點眼睛模型；本專案用左右眼 6 landmarks 計算 EAR、眨眼與閉眼狀態。
+
+5. Grace, R., Byrne, V. E., Bierman, D. M., Legrand, J. M., Gricourt, D., Davis, B. K., Staszewski, J. J., Carnahan, B., "A Drowsy Driver Detection System for Heavy Vehicles", Digital Avionics Systems Conference, 1998  
+   https://doi.org/10.1109/DASC.1998.741493  
+   本系統參考技術：以眼睛閉合比例作為駕駛嗜睡偵測指標的概念；本專案用 PERCLOS sliding window 計算疲勞程度。
+
+6. National Highway Traffic Safety Administration, "Development of a Drowsy Driver Detection System", DOT HS 808 247, 1998  
+   https://rosap.ntl.bts.gov/view/dot/1644  
+   本系統參考技術：PERCLOS 作為 drowsiness detection 的工程驗證概念；本專案將 PERCLOS 與長閉眼事件作為 TIRED/DROWSY 判斷依據。
+
+7. OpenCV `solvePnP` documentation  
+   https://docs.opencv.org/4.x/d5/d1f/calib3d_solvePnP.html  
+   本系統參考技術：以 3D object points 與 2D image points 求解 camera pose；本專案用 6 個臉部 landmarks 與簡化 3D face template 估算 pitch/yaw/roll。
+
+8. OpenCV camera calibration and 3D reconstruction module  
+   https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html  
+   本系統參考技術：Rodrigues、camera matrix 與 pose decomposition 的基本工具；本專案將 solvePnP 的 rotation vector 轉為 rotation matrix 後估角度。
+
+9. W. Wang, A. C. den Brinker, S. Stuijk, G. de Haan, "Algorithmic Principles of Remote PPG", IEEE Transactions on Biomedical Engineering, 2017  
+   https://doi.org/10.1109/TBME.2016.2609282  
+   本系統參考技術：rPPG POS 生理訊號估計；本專案在融合分數中使用 rPPG pillar 作為 15% 輔助疲勞/壓力訊號。
+
+10. Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology, "Heart rate variability: standards of measurement, physiological interpretation and clinical use", Circulation, 1996  
+    https://pubmed.ncbi.nlm.nih.gov/8598068/  
+    本系統參考技術：HRV 指標 RMSSD、SDNN、LF/HF 的定義；本專案在融合器中使用 rPPG stress、BPM deviation 與 LF/HF 作為輔助生理 pillar。
+
+11. SciPy `scipy.signal.find_peaks` API reference  
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html  
+    本系統參考技術：rPPG IBI peak detection；本報告中的融合說明引用此 rPPG pipeline 產生的生理指標。
+
+12. OpenCV drawing and image processing documentation  
+    https://docs.opencv.org/4.x/d6/d6e/group__imgproc__draw.html  
+    本系統參考技術：overlay annotation 與 landmarks/ROI 繪製；本專案將疲勞特徵畫到 GUI preview。

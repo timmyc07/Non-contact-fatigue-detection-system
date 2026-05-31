@@ -306,3 +306,61 @@ LF/HF 或 RMSSD 不可用時輸出 `stress_prob=0.0`、`stress_status="calibrati
 - 週期性動作或光源閃爍可能被 Welch peak 誤判為心率。
 - `stress_prob` 是 heuristic，不是醫療或臨床 AI 模型。
 - 本系統輸出不應用於醫療診斷或安全關鍵單點決策。
+
+## 14. 參考資料與本系統採用技術
+
+1. MediaPipe Face Landmarker Python guide  
+   https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python  
+   本系統參考技術：`FaceLandmarkerOptions`、`RunningMode.VIDEO`、`detect_for_video()`、`output_face_blendshapes`、`output_facial_transformation_matrixes`、face landmarks 與 transformation matrix 的輸入輸出定義。
+
+2. MediaPipe Face Landmarks Detection guide  
+   https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker  
+   本系統參考技術：Face Landmarker 可輸出 3D face landmarks、blendshape scores 與 facial transformation matrices；本專案將 landmarks 用於 ROI，matrix 用於姿態與 ROI roll 補償。
+
+3. Camillo Lugaresi et al., "MediaPipe: A Framework for Building Perception Pipelines", arXiv:1906.08172, 2019  
+   https://arxiv.org/abs/1906.08172  
+   本系統參考技術：MediaPipe perception pipeline 的即時推論概念；本專案以單一 Face Landmarker worker 共用 landmarks，降低重複推論成本。
+
+4. W. Wang, A. C. den Brinker, S. Stuijk, G. de Haan, "Algorithmic Principles of Remote PPG", IEEE Transactions on Biomedical Engineering, 2017  
+   https://doi.org/10.1109/TBME.2016.2609282  
+   本系統參考技術：POS（Plane-Orthogonal-to-Skin）rPPG 方法；本專案採用 RGB 時序正規化、`X = 3R - 2G`、`Y = 1.5R + G - 1.5B` 與 `pulse = X - alpha * Y` 的色彩投影概念。
+
+5. Peter D. Welch, "The Use of Fast Fourier Transform for the Estimation of Power Spectra", IEEE Transactions on Audio and Electroacoustics, 1967  
+   https://doi.org/10.1109/TAU.1967.1161901  
+   本系統參考技術：以分段、重疊與平均估計 power spectral density；本專案使用 Welch PSD 在心率頻帶尋找 peak 估算 BPM，並用 PSD band power 計算 SQI。
+
+6. SciPy `scipy.signal.welch` API reference  
+   https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.welch.html  
+   本系統參考技術：`fs`、`nperseg`、`noverlap`、`nfft` 參數與 PSD 輸出；本專案用於 BPM peak、SQI 與 LF/HF 頻域估計。
+
+7. Stephen Butterworth, "On the Theory of Filter Amplifiers", Wireless Engineer, 1930  
+   https://www.changpuak.ch/electronics/downloads/On_the_Theory_of_Filter_Amplifiers.pdf  
+   本系統參考技術：Butterworth filter 的平坦 passband 概念；本專案用 3 階 Butterworth band-pass 保留心跳頻帶並削弱漂移與高頻雜訊。
+
+8. SciPy `scipy.signal.butter` API reference  
+   https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.butter.html  
+   本系統參考技術：Butterworth IIR filter 設計與 SOS 輸出；本專案以 `output="sos"` 建立 band-pass filter。
+
+9. SciPy `scipy.signal.sosfiltfilt` API reference  
+   https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.sosfiltfilt.html  
+   本系統參考技術：second-order sections forward-backward 零相位濾波；本專案用於降低相位延遲對 peak timing 的影響。
+
+10. SciPy `scipy.signal.find_peaks` API reference  
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html  
+    本系統參考技術：以 distance 與 prominence 找 local maxima；本專案用於 pulse waveform peak detection 與 IBI 估算。
+
+11. SciPy `scipy.interpolate.interp1d` API reference  
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.interp1d.html  
+    本系統參考技術：一維線性插值；本專案將不等間隔 IBI tachogram 重採樣到 4 Hz 以計算 LF/HF。
+
+12. Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology, "Heart rate variability: standards of measurement, physiological interpretation and clinical use", Circulation, 1996  
+    https://pubmed.ncbi.nlm.nih.gov/8598068/  
+    本系統參考技術：RMSSD、SDNN、LF/HF 的 HRV 指標定義與頻帶概念；本專案採用這些指標名稱與計算方向，但因 rPPG 短窗限制，僅作趨勢參考。
+
+13. OpenCV VideoCapture documentation  
+    https://docs.opencv.org/4.x/d8/dfe/classcv_1_1VideoCapture.html  
+    本系統參考技術：相機 frame 擷取；本專案由 camera worker 取得 BGR frame 並餵入 rPPG pipeline。
+
+14. OpenCV image filtering documentation  
+    https://docs.opencv.org/4.x/d4/d86/group__imgproc__filter.html  
+    本系統參考技術：Gaussian blur；本專案在 ROI mean color 前做 5x5 blur 降低 pixel noise。
