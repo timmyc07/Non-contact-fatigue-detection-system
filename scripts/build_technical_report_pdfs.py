@@ -14,6 +14,11 @@ from matplotlib.figure import Figure
 ROOT = Path(__file__).resolve().parents[1]
 
 REPORTS = {
+    "overview": {
+        "source": ROOT / "docs" / "system_overview_technical_report.md",
+        "target": ROOT / "docs" / "system_overview_technical_report.pdf",
+        "footer": "系統總技術報告書",
+    },
     "rppg": {
         "source": ROOT / "docs" / "rppg_technical_report_v2.md",
         "target": ROOT / "docs" / "rppg_technical_report_v2.pdf",
