@@ -344,7 +344,7 @@ class MainWindow(QMainWindow):
         outer.setSpacing(14)
 
         header = QVBoxLayout()
-        t = QLabel("rPPG 控制台")
+        t = QLabel("rPPG 疲勞/生理訊號控制台")
         t.setObjectName("titleLabel")
         header.addWidget(t)
         outer.addLayout(header)
@@ -530,7 +530,7 @@ class MainWindow(QMainWindow):
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
 
-        self._append_log("歡迎使用 rPPG V2 控制台（介面示範）。變更選項僅寫入此視窗日誌。")
+        self._append_log("歡迎使用 rPPG 疲勞/生理訊號偵測 V2 控制台。變更選項僅寫入此視窗日誌。")
         self._start_camera_scan()
 
         self._db_flush_timer = QTimer(self)
