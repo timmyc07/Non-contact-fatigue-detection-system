@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000" viewBox="0 0 1400 1000">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#1f4b6b" />
+    </marker>
+    <style>
+      .box { fill:#fff; stroke:#1f4b6b; stroke-width:2.5; rx:8; }
+      .title { font: 700 22px 'Noto Sans TC', Arial; fill:#1f4b6b; }
+      .label { font: 15px 'Noto Sans TC', Arial; fill:#0b2a3a; font-weight:700; }
+      .sub { font: 13px 'Noto Sans TC', Arial; fill:#264653; }
+      .note { font: 12px 'Noto Sans TC', Arial; fill:#6b7b85; }
+    </style>
+  </defs>
+
+  <text x="700" y="40" text-anchor="middle" class="title">rPPG 訊號流程圖（草稿）</text>
+
+  <!-- Stage: ROI / Color space -->
+  <rect class="box" x="60" y="100" width="300" height="100" />
+  <text x="210" y="135" text-anchor="middle" class="label">ROI 擷取</text>
+  <text x="210" y="160" text-anchor="middle" class="sub">臉部/額頭/頸部等區域</text>
+
+  <rect class="box" x="420" y="100" width="300" height="100" />
+  <text x="570" y="135" text-anchor="middle" class="label">色彩空間轉換</text>
+  <text x="570" y="160" text-anchor="middle" class="sub">RGB → YUV / HSV / 色彩投影</text>
+
+  <line x1="360" y1="150" x2="420" y2="150" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+
+  <!-- Stage: Spatial pooling -->
+  <rect class="box" x="780" y="100" width="300" height="100" />
+  <text x="930" y="135" text-anchor="middle" class="label">空間整合</text>
+  <text x="930" y="160" text-anchor="middle" class="sub">像素平均 / 加權平均 / superpixel</text>
+
+  <line x1="720" y1="150" x2="780" y2="150" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+
+  <!-- Temporal pipeline -->
+  <rect class="box" x="60" y="260" width="360" height="120" />
+  <text x="240" y="295" text-anchor="middle" class="label">去趨勢 / Normalization</text>
+  <text x="240" y="320" text-anchor="middle" class="sub">移除基線漂移、DC 成分</text>
+
+  <rect class="box" x="460" y="260" width="360" height="120" />
+  <text x="640" y="295" text-anchor="middle" class="label">濾波 (Bandpass)</text>
+  <text x="640" y="320" text-anchor="middle" class="sub">濾掉低頻 / 高頻雜訊 (e.g., 0.7–4 Hz)</text>
+
+  <rect class="box" x="860" y="260" width="360" height="120" />
+  <text x="1040" y="295" text-anchor="middle" class="label">ICA / PCA (選用)</text>
+  <text x="1040" y="320" text-anchor="middle" class="sub">分離心搏成分 / 去除雜訊來源</text>
+
+  <line x1="930" y1="200" x2="930" y2="260" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+  <line x1="540" y1="200" x2="540" y2="260" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+
+  <!-- Signal extraction -->
+  <rect class="box" x="60" y="440" width="360" height="120" />
+  <text x="240" y="475" text-anchor="middle" class="label">脈搏波形擷取</text>
+  <text x="240" y="500" text-anchor="middle" class="sub">峰值檢測、週期分割</text>
+
+  <rect class="box" x="460" y="440" width="360" height="120" />
+  <text x="640" y="475" text-anchor="middle" class="label">心率估測 (HR)</text>
+  <text x="640" y="500" text-anchor="middle" class="sub">時域 / 頻域方法 (FFT, autocorr)</text>
+
+  <rect class="box" x="860" y="440" width="360" height="120" />
+  <text x="1040" y="475" text-anchor="middle" class="label">HRV / 特徵擷取</text>
+  <text x="1040" y="500" text-anchor="middle" class="sub">SDNN, RMSSD, LF/HF 等</text>
+
+  <path d="M 240 380 Q 240 420 240 440" stroke="#1f4b6b" stroke-width="2.5" fill="none" marker-end="url(#arrow)" />
+  <line x1="640" y1="380" x2="640" y2="440" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+  <path d="M 1040 380 Q 1040 420 1040 440" stroke="#1f4b6b" stroke-width="2.5" fill="none" marker-end="url(#arrow)" />
+
+  <!-- Quality check and scoring -->
+  <rect class="box" x="300" y="620" width="420" height="120" />
+  <text x="510" y="660" text-anchor="middle" class="label">訊號品質檢測 (SNR / Flag)</text>
+  <text x="510" y="685" text-anchor="middle" class="sub">若品質低則重取或標記為低信度</text>
+
+  <rect class="box" x="780" y="620" width="360" height="120" />
+  <text x="960" y="660" text-anchor="middle" class="label">疲勞/狀態判定</text>
+  <text x="960" y="685" text-anchor="middle" class="sub">規則/ML 模型 → 得分、等級</text>
+
+  <line x1="420" y1="560" x2="420" y2="620" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+  <line x1="920" y1="560" x2="920" y2="620" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+
+  <!-- Storage and Outputs -->
+  <rect class="box" x="120" y="780" width="300" height="100" />
+  <text x="270" y="815" text-anchor="middle" class="label">本地 / 雲端儲存</text>
+  <text x="270" y="840" text-anchor="middle" class="sub">原始訊號、HR、事件、影片</text>
+
+  <rect class="box" x="520" y="780" width="300" height="100" />
+  <text x="670" y="815" text-anchor="middle" class="label">即時 Dashboard</text>
+  <text x="670" y="840" text-anchor="middle" class="sub">即時顯示 HR、警示、圖表</text>
+
+  <rect class="box" x="920" y="780" width="360" height="100" />
+  <text x="1100" y="815" text-anchor="middle" class="label">警示 / 事件處理</text>
+  <text x="1100" y="840" text-anchor="middle" class="sub">通知使用者、觸發錄影或紀錄</text>
+
+  <line x1="510" y1="740" x2="360" y2="780" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+  <line x1="510" y1="740" x2="670" y2="780" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+  <line x1="960" y1="740" x2="1100" y2="780" stroke="#1f4b6b" stroke-width="2.5" marker-end="url(#arrow)" />
+
+  <!-- Notes -->
+  <text x="60" y="960" class="note">說明：此流程為 rPPG 訊號處理草稿，包含常見步驟：ROI→色彩轉換→空間整合→去趨勢→濾波→ICA→脈搏擷取→HR/HRV→品質檢測→儲存/警示。可依需求加入同步化、滑動視窗、異步寫入等。</text>
+
+</svg>

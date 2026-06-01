@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#2b5876" />
+    </marker>
+    <style>
+      .box { fill:#fff; stroke:#2b5876; stroke-width:2.5; rx:8; }
+      .title { font: 700 24px 'Noto Sans TC', Arial; fill:#2b5876; }
+      .label { font: 17px 'Noto Sans TC', Arial; fill:#111; font-weight:600; }
+      .sub { font: 15px 'Noto Sans TC', Arial; fill:#555; }
+      .cloud { fill:#e8f2ff; stroke:#2b5876; stroke-width:2.5; rx:12; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="700" y="50" text-anchor="middle" class="title">系統架構圖（草稿）</text>
+
+  <!-- 左側：資料擷取 -->
+  <rect class="box" x="50" y="130" width="240" height="100" />
+  <text x="170" y="165" text-anchor="middle" class="label">相機 / 影像擷取</text>
+  <text x="170" y="190" text-anchor="middle" class="sub">(V4L2 / DirectShow)</text>
+  <text x="170" y="215" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: camera_input</text>
+
+  <rect class="box" x="50" y="290" width="240" height="100" />
+  <text x="170" y="325" text-anchor="middle" class="label">前處理</text>
+  <text x="170" y="350" text-anchor="middle" class="sub">ROI 擷取、去噪</text>
+  <text x="170" y="375" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: preprocessor</text>
+
+  <!-- 中央上：MediaPipe -->
+  <rect class="cloud" x="360" y="90" width="380" height="120" />
+  <text x="550" y="130" text-anchor="middle" class="label">MediaPipe / Landmark</text>
+  <text x="550" y="155" text-anchor="middle" class="sub">臉部偵測、臉部 landmark</text>
+  <text x="550" y="180" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: face_detector</text>
+
+  <!-- 中央下：rPPG 處理模組 -->
+  <rect class="box" x="360" y="270" width="380" height="120" />
+  <text x="550" y="310" text-anchor="middle" class="label">rPPG 處理模組</text>
+  <text x="550" y="335" text-anchor="middle" class="sub">訊號擷取 → 濾波 → 特徵</text>
+  <text x="550" y="360" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: rppg_processor</text>
+
+  <!-- 右上：疲勞判定 -->
+  <rect class="box" x="920" y="130" width="240" height="100" />
+  <text x="1040" y="165" text-anchor="middle" class="label">疲勞判定 / Scorer</text>
+  <text x="1040" y="190" text-anchor="middle" class="sub">分數計算、警示邏輯</text>
+  <text x="1040" y="215" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: fatigue_scorer</text>
+
+  <!-- 右下：資料庫 / 儲存 -->
+  <rect class="box" x="920" y="290" width="240" height="100" />
+  <text x="1040" y="325" text-anchor="middle" class="label">資料庫 / 儲存</text>
+  <text x="1040" y="350" text-anchor="middle" class="sub">紀錄 rPPG、事件、影片</text>
+  <text x="1040" y="375" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: db_storage</text>
+
+  <!-- 下方：Web UI -->
+  <rect class="box" x="280" y="500" width="280" height="100" />
+  <text x="420" y="540" text-anchor="middle" class="label">Web UI / Dashboard</text>
+  <text x="420" y="565" text-anchor="middle" class="sub">即時視覺化、歷史查詢</text>
+  <text x="420" y="590" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: web_dashboard</text>
+
+  <!-- 下方：錄影 / Recorder -->
+  <rect class="box" x="840" y="500" width="280" height="100" />
+  <text x="980" y="540" text-anchor="middle" class="label">錄影 / Recorder</text>
+  <text x="980" y="565" text-anchor="middle" class="sub">本地或雲端存檔</text>
+  <text x="980" y="590" text-anchor="middle" class="sub" opacity="0.8" font-size="13">ID: video_recorder</text>
+
+  <!-- 箭頭連線 - 修正版本 -->
+  <!-- 相機 → MediaPipe -->
+  <line x1="290" y1="180" x2="360" y2="150" stroke="#2b5876" stroke-width="2.5" marker-end="url(#arrow)" />
+  
+  <!-- 前處理 → rPPG -->
+  <line x1="290" y1="320" x2="360" y2="320" stroke="#2b5876" stroke-width="2.5" marker-end="url(#arrow)" />
+  
+  <!-- MediaPipe → rPPG（從下方） -->
+  <line x1="550" y1="210" x2="550" y2="270" stroke="#2b5876" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="5,5" />
+  
+  <!-- rPPG → 疲勞判定 -->
+  <line x1="740" y1="310" x2="920" y2="180" stroke="#2b5876" stroke-width="2.5" marker-end="url(#arrow)" />
+  
+  <!-- 疲勞判定 → 儲存 -->
+  <line x1="1040" y1="230" x2="1040" y2="290" stroke="#2b5876" stroke-width="2.5" marker-end="url(#arrow)" />
+  
+  <!-- rPPG → Web Dashboard（下左） -->
+  <path d="M 550 390 Q 450 450 420 500" stroke="#2b5876" stroke-width="2.5" fill="none" marker-end="url(#arrow)" />
+  
+  <!-- 儲存 → Recorder（下右） -->
+  <path d="M 1040 390 Q 1020 450 980 500" stroke="#2b5876" stroke-width="2.5" fill="none" marker-end="url(#arrow)" />
+
+  <!-- Legend / Notes -->
+  <rect x="50" y="730" width="1300" height="140" rx="8" fill="#fff" stroke="#d0d7df" stroke-width="1.5" />
+  <text x="70" y="765" class="sub" font-weight="600">說明：</text>
+  <text x="70" y="795" class="sub">• 輸入流：相機 → 前處理 → MediaPipe landmark 偵測</text>
+  <text x="70" y="820" class="sub">• 核心流：MediaPipe 輸出 → rPPG 處理 → 疲勞判定 → 儲存</text>
+  <text x="70" y="845" class="sub">• 輸出流：rPPG 結果 → Web Dashboard 顯示；影片記錄 → Recorder 儲存</text>
+
+</svg>
