@@ -365,7 +365,6 @@ def collect_rppg_roi_sample(
     roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(transform_matrix, lm, w, h)
     roi_weights = _roi_weights_from_pose(roll_deg, yaw_deg, pitch_deg, lm, w, h, tuning)
     rgbs: list[tuple[float, float, float]] = []
-    weights: list[float] = []
     areas: list[float] = []
     effective_weights: dict[str, float] = {name: 0.0 for name, _ in ROI_SPECS}
     for name, indices in ROI_SPECS:
@@ -382,15 +381,15 @@ def collect_rppg_roi_sample(
         effective_weights[name] = float(weight)
         if val is not None and weight > 0.0:
             rgbs.append(val)
-            weights.append(weight)
     tracker.update_roi_area(areas, float(h * w), tuning)
     if not rgbs:
         return None, effective_weights, 0
-    total_w = sum(weights) or float(len(rgbs))
+    # Keep the first-version rPPG sampling behavior: valid skin ROIs are
+    # averaged equally. The pose/obstruction weights remain diagnostic only.
     sample = (
-        sum(x[0] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
-        sum(x[1] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
-        sum(x[2] * wgt for x, wgt in zip(rgbs, weights)) / total_w,
+        sum(x[0] for x in rgbs) / len(rgbs),
+        sum(x[1] for x in rgbs) / len(rgbs),
+        sum(x[2] for x in rgbs) / len(rgbs),
     )
     norm_total = sum(effective_weights.values()) or 1.0
     effective_weights = {k: float(v / norm_total) if v > 0.0 else 0.0 for k, v in effective_weights.items()}
@@ -592,35 +591,41 @@ def welch_peak_hz(
     if not _HAS_SCIPY:
         return 0.0, np.array([]), np.array([])
     n = len(sig)
-    nperseg = min(n, max(64, int(fs * 5)))
-    noverlap = min(nperseg - 1, nperseg * 3 // 4)
+    nperseg = min(256, max(32, n // 2))
     f, pxx = welch(
         sig,
         fs=fs,
         nperseg=nperseg,
-        noverlap=noverlap,
-        nfft=max(512, nperseg),
-        window="blackmanharris",
+        noverlap=nperseg // 2,
+        nfft=max(2048, nperseg * 4),
     )
     band = (f >= 0.7) & (f <= 3.5)
     if not np.any(band):
         return 0.0, f, pxx
-    ib = np.argmax(pxx[band])
-    return float(f[band][ib]), f, pxx
+    band_idx = np.flatnonzero(band)
+    peak_i = int(band_idx[np.argmax(pxx[band])])
+    peak_hz = float(f[peak_i])
+    if 0 < peak_i < len(pxx) - 1:
+        y0 = float(np.log(max(pxx[peak_i - 1], 1e-18)))
+        y1 = float(np.log(max(pxx[peak_i], 1e-18)))
+        y2 = float(np.log(max(pxx[peak_i + 1], 1e-18)))
+        denom = y0 - 2.0 * y1 + y2
+        if abs(denom) > 1e-12:
+            delta = float(np.clip(0.5 * (y0 - y2) / denom, -1.0, 1.0))
+            peak_hz = float(f[peak_i] + delta * (f[1] - f[0]))
+    return peak_hz, f, pxx
 
 
 def compute_sqi(sig: np.ndarray, fs: float) -> float:
     if not _HAS_SCIPY or len(sig) < 32:
         return 0.0
-    nperseg = min(len(sig), max(64, int(fs * 5)))
-    noverlap = min(nperseg - 1, nperseg * 3 // 4)
+    nperseg = min(256, max(32, len(sig) // 2))
     f, pxx = welch(
         sig,
         fs=fs,
         nperseg=nperseg,
-        noverlap=noverlap,
-        nfft=max(512, nperseg),
-        window="blackmanharris",
+        noverlap=nperseg // 2,
+        nfft=max(2048, nperseg * 4),
     )
     total = float(np.sum(pxx)) + 1e-12
     inband = float(np.sum(pxx[(f >= 0.6) & (f <= 4.0)]))
@@ -761,6 +766,15 @@ def ensure_face_model(
 class RppgEngine:
     """Buffer RGB samples and compute rPPG + HRV metrics on demand."""
 
+    _BPM_HISTORY_SEC = 10.0
+    _BPM_EMA_ALPHA = 0.18
+    _BPM_MIN_PLAUSIBLE = 42.0
+    _BPM_MAX_PLAUSIBLE = 210.0
+    _BPM_JUMP_CONFIRM_DELTA = 25.0
+    _BPM_JUMP_CONFIRM_SEC = 2.0
+    _BPM_JUMP_CONFIRM_COUNT = 4
+    _BPM_JUMP_CLUSTER_DELTA = 8.0
+
     def __init__(self, buffer_sec: float = 12.0, target_fps: float = 30.0) -> None:
         self.buffer_sec = buffer_sec
         self.target_fps = target_fps
@@ -772,6 +786,10 @@ class RppgEngine:
         self._prev_face_center: Optional[tuple[float, float]] = None
         self._prev_face_center_t: Optional[float] = None
         self._face_motion_speed: float = 0.0
+        self._bpm_candidates: deque[tuple[float, float]] = deque()
+        self._pending_bpm_jump: deque[tuple[float, float]] = deque()
+        self._stable_bpm: Optional[float] = None
+        self._stable_bpm_t: Optional[float] = None
 
     def reset(self) -> None:
         self._r.clear(); self._g.clear()
@@ -779,6 +797,10 @@ class RppgEngine:
         self._prev_face_center = None
         self._prev_face_center_t = None
         self._face_motion_speed = 0.0
+        self._bpm_candidates.clear()
+        self._pending_bpm_jump.clear()
+        self._stable_bpm = None
+        self._stable_bpm_t = None
 
     def push(self, t: float, r: float, g: float, b: float) -> None:
         self._r.append(r); self._g.append(g)
@@ -798,6 +820,47 @@ class RppgEngine:
             return self.target_fps
         self._last_fs = float(np.clip(1.0 / dt, 8.0, 90.0))
         return self._last_fs
+
+    def _accept_bpm_candidate(self, t_now: float, raw_bpm: float) -> float:
+        if not self._BPM_MIN_PLAUSIBLE <= raw_bpm <= self._BPM_MAX_PLAUSIBLE:
+            return float(self._stable_bpm or 0.0)
+        if self._stable_bpm is not None and abs(raw_bpm - self._stable_bpm) >= self._BPM_JUMP_CONFIRM_DELTA:
+            cutoff = t_now - self._BPM_JUMP_CONFIRM_SEC
+            while self._pending_bpm_jump and self._pending_bpm_jump[0][0] < cutoff:
+                self._pending_bpm_jump.popleft()
+            if (
+                self._pending_bpm_jump
+                and abs(raw_bpm - self._pending_bpm_jump[-1][1]) > self._BPM_JUMP_CLUSTER_DELTA
+            ):
+                self._pending_bpm_jump.clear()
+            self._pending_bpm_jump.append((t_now, float(raw_bpm)))
+            pending_vals = np.array([v for _, v in self._pending_bpm_jump], dtype=np.float64)
+            if pending_vals.size < self._BPM_JUMP_CONFIRM_COUNT:
+                return float(self._stable_bpm)
+            raw_bpm = float(np.median(pending_vals))
+        else:
+            self._pending_bpm_jump.clear()
+        self._bpm_candidates.append((t_now, float(raw_bpm)))
+        cutoff = t_now - self._BPM_HISTORY_SEC
+        while self._bpm_candidates and self._bpm_candidates[0][0] < cutoff:
+            self._bpm_candidates.popleft()
+
+        recent = np.array([v for _, v in self._bpm_candidates], dtype=np.float64)
+        candidate = float(np.median(recent)) if recent.size else float(raw_bpm)
+        if self._stable_bpm is None or self._stable_bpm_t is None:
+            self._stable_bpm = candidate
+            self._stable_bpm_t = t_now
+            return candidate
+
+        self._stable_bpm = (
+            (1.0 - self._BPM_EMA_ALPHA) * self._stable_bpm
+            + self._BPM_EMA_ALPHA * candidate
+        )
+        self._stable_bpm_t = t_now
+        return float(self._stable_bpm)
+
+    def _stabilize_bpm(self, t_now: float, raw_bpm: float) -> float:
+        return self._accept_bpm_candidate(t_now, raw_bpm)
 
     def compute(
         self,
@@ -882,7 +945,7 @@ class RppgEngine:
         raw = pos_pulse(r, g, b)
         filt = butter_bandpass(raw, fs, 0.65, 3.7)
         peak_f, freqs, pxx = welch_peak_hz(filt, fs)
-        bpm = peak_f * 60.0 if peak_f > 0 else 0.0
+        raw_bpm = peak_f * 60.0 if peak_f > 0 else 0.0
         sqi = compute_sqi(filt, fs)
 
         ibis = ibi_from_peaks(filt, fs)
@@ -910,6 +973,7 @@ class RppgEngine:
             + 0.45 * roi_area_stability
         )
         quality_score = _clamp(0.42 * quality_score + 0.38 * signal_quality + 0.20 * stability_q)
+        bpm = self._stabilize_bpm(t_now, raw_bpm)
 
         wf_n = min(160, filt.size)
         wave = filt[-wf_n:].copy()

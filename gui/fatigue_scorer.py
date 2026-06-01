@@ -1,4 +1,4 @@
-"""Fused Fatigue Scorer — combines rPPG (40 %) and behaviour alertness (60 %).
+"""Fused Fatigue Scorer — combines rPPG (15 %) and behaviour alertness (85 %).
 
 This module is pure computation: no Qt, no UI, no threads.
 It takes the latest RppgMetrics and FatigueMetrics objects, computes
@@ -14,8 +14,8 @@ Score ranges
 
 Weight split
 ------------
-rPPG pillar     : 40 %  (adjustable via FuserConfig)
-Behaviour pillar: 60 %
+    rPPG pillar     : 15 %  (adjustable via FuserConfig)
+    Behaviour pillar: 85 %
 
 Both pillars return a 0–1 normalised value; weights are applied and summed.
 When one pillar's data is unavailable or unreliable, its weight falls back
@@ -43,8 +43,8 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 @dataclass
 class FuserConfig:
     # Pillar weights (must sum to 1.0)
-    rppg_weight:      float = 0.40
-    behavior_weight:  float = 0.60
+    rppg_weight:      float = 0.15
+    behavior_weight:  float = 0.85
 
     # ── rPPG sub-weights (internal, sum = 1.0) ────────────────────────────────
     # stress_prob score
@@ -65,7 +65,9 @@ class FuserConfig:
     lfhf_max:         float = 4.0
 
     # SQI gate: below this threshold rPPG sub-score is discounted
-    sqi_min_reliable: float = 0.30
+    sqi_min_reliable: float = 0.45
+    rppg_min_quality: float = 0.55
+    rppg_min_roi_valid: int = 3
 
     # ── Behaviour sub-weights (internal, sum = 1.0) ───────────────────────────
     beh_w_perclos:    float = 0.25
@@ -115,8 +117,8 @@ class FusedFatigueScore:
     behavior_sub:  float = 0.0    # 0–1
 
     # Effective weights (may differ from config when data unavailable)
-    rppg_weight_eff:     float = 0.40
-    behavior_weight_eff: float = 0.60
+    rppg_weight_eff:     float = 0.15
+    behavior_weight_eff: float = 0.85
 
     # Trend
     trend:         float = 0.0    # delta per 30 s; positive = worsening
@@ -281,7 +283,14 @@ class FatigueFuser:
         rppg_sub     = 0.0
         stress_s = bpm_s = 0.0
 
-        if rppg is not None and rppg.face_detected and rppg.warmup_progress >= 1.0:
+        if (
+            rppg is not None
+            and rppg.face_detected
+            and rppg.warmup_progress >= 1.0
+            and rppg.sqi >= cfg.sqi_min_reliable
+            and getattr(rppg, "quality_score", 0.0) >= cfg.rppg_min_quality
+            and getattr(rppg, "roi_valid_count", 0) >= cfg.rppg_min_roi_valid
+        ):
             rppg_sub, stress_s, bpm_s, _ = self._rppg_sub_score(rppg)
             rppg_avail = True
 

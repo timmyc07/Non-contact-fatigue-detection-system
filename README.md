@@ -8,6 +8,8 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - Fatigue/behavior analysis overlays
 - Recording to SQLite (.db) and video (.mp4)
 - Web dashboard for live metrics and playback
+- rPPG BPM 估測回到第一版基準：有效 ROI 等權平均、Welch peak 直接輸出，並用峰值插值與輕量平滑補足 71/72/73 這類細節。
+- 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
 - MediaPipe 姿態補償、ROI 動態權重、遮擋降權與品質診斷
 - Blendshape 個人化 baseline 校準與跨 session 持久化
 
@@ -74,6 +76,10 @@ python -m rppg.demo_rppg_live
 ```
 
 ## MediaPipe tuning and calibration
+
+目前 `active_profile` 預設為 `stable_indoor`，提高 Face Landmarker tracking confidence 並加強 ROI polygon 平滑，目標是降低室內 webcam 下的 landmark 與 ROI 抖動。若環境偏暗或頭部動作較大，可切換 `low_light` 或 `high_motion` 後用固定錄影回放比較。
+
+rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等權平均後送入 POS、band-pass 與 Welch peak。新版只在頻譜峰值附近做插值來提升解析度，避免只跳 70、80、90、100 這類粗略數值；BPM 只排除明顯不合理的生理範圍，避免因品質 gate 太嚴而長時間顯示空白。
 
 可調參數集中在 `config/mediapipe_tuning.json`：
 
@@ -152,6 +158,20 @@ fuser /dev/video0
 - `scripts/mediapipe_profile_sweep.py`: 以錄影檔重跑 MediaPipe profiles，輸出偵測與 ROI 穩定度比較。
 - `docs/rppg_technical_report.md`: rPPG 技術、演算法、模型與系統運作說明；可用 `scripts/build_rppg_pdf.py` 產生 PDF。
 - `docs/2026-05-21-mediapipe-landmark-expansion-log.md`: 本次新增 MediaPipe 部位與精準度提升的更新紀錄。
+
+## Technical reports
+- `docs/system_overview_technical_report.md`: 系統總報告書，整合 rPPG、MediaPipe 疲勞偵測、融合分數、架構、驗證與限制。
+- `docs/rppg_technical_report_v2.md`: rPPG 子系統報告書，整理模型、演算法、input/output、架構與可信度驗證方式。
+- `docs/mediapipe_fatigue_technical_report.md`: MediaPipe 疲勞偵測子系統報告書，整理 Face Landmarker、行為疲勞演算法、融合分數與驗證方式。
+- `docs/system_overview_technical_report.pdf`: 系統總 PDF 報告。
+- `docs/rppg_technical_report_v2.pdf`: rPPG 子系統 PDF 報告。
+- `docs/mediapipe_fatigue_technical_report.pdf`: MediaPipe 疲勞偵測 PDF 報告。
+
+PDF reports can be regenerated with:
+
+```bash
+.venv/bin/python scripts/build_technical_report_pdfs.py
+```
 
 ## Notes
 - Recordings are saved under the `recordings/` folder.

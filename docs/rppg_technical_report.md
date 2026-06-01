@@ -108,7 +108,7 @@ GUI 啟動攝影機後，資料流如下：
 5. worker 將 BGR 轉 RGB，建立 `mp.Image`。
 6. Face Landmarker 回傳 478 點臉部 landmark。
 7. 程式依 landmark 定義四個 ROI：額頭、左臉頰、右臉頰、眉間。
-8. 每個 ROI 計算 RGB 平均值；多個 ROI 依姿態動態權重加權成單筆 `(R, G, B)` 時間序列樣本。
+8. 每個 ROI 計算 RGB 平均值；有效 ROI 以第一版的等權平均方式合成單筆 `(R, G, B)` 時間序列樣本。
 9. `RppgEngine` 保存最近約 12 秒樣本，估算取樣頻率。
 10. POS 演算法產生原始 pulse。
 11. Butterworth band-pass 過濾保留心率頻段。
@@ -137,22 +137,22 @@ GUI 啟動攝影機後，資料流如下：
 6. 用 mask 取平均色彩。
 7. 回傳 `(R, G, B)`，注意 OpenCV 原影像是 BGR，因此程式會把 `cv2.mean` 的結果轉成 RGB 順序。
 
-多個 ROI 不再固定平均，而是依頭部姿態動態分配權重：
+多個 ROI 的 rPPG 輸入回到第一版的固定平均：只要 ROI 通過基本遮擋/亮度檢查，就以等權平均併入 `(R, G, B)` 樣本。姿態與遮擋權重仍會保留在 diagnostics，供 GUI、Web dashboard 與 recorder 觀察，但不再直接改變 BPM 的 RGB 混合比例。
 
 - forehead：基礎權重最高，正面視角時優先。
 - 左右 cheek：依 yaw 偏向自動重新分配，較朝向鏡頭的一側權重會提高。
 - glabella：保留較低但穩定的輔助權重。
 
-這樣可以降低側頭、歪頭、局部遮擋時單一 ROI 拉偏訊號的風險。若沒有任何有效 ROI，該幀不會推入 rPPG buffer。
+這樣可以保留第一版較準的 BPM 行為，並避免過度依賴姿態權重導致 RGB 時間序列被頻繁改變。若沒有任何有效 ROI，該幀不會推入 rPPG buffer。
 
 系統也會對每個 ROI 做遮擋或異常色彩降權：
 
 - ROI 平均亮度過暗或過亮時，代表可能受陰影、曝光或反光影響。
 - 色度過低時，代表該區域可能缺乏有效皮膚顏色變化。
 - 色度過高時，代表可能有強反光、飽和色或非皮膚遮擋。
-- 遮擋分數會轉成 ROI 權重折扣，而不是直接讓整張臉失效。
+- 遮擋分數會決定該 ROI 是否進入等權平均，並同步輸出為 ROI 權重診斷。
 
-目前 transformation matrix 的幾何補償採保守策略：已落地 roll 補償與姿態導向權重，尚未導入完整 3D mesh warp。這樣做的原因是完整 warp 會改變 ROI 取樣分布與 rPPG 數值行為，仍需要固定資料集回放驗證後再擴充。
+目前 transformation matrix 的幾何補償採保守策略：已落地 roll 補償與姿態診斷，尚未導入完整 3D mesh warp。這樣做的原因是完整 warp 會改變 ROI 取樣分布與 rPPG 數值行為，仍需要固定資料集回放驗證後再擴充。
 
 ## 5. POS 脈搏波演算法
 
@@ -228,14 +228,18 @@ GUI 啟動攝影機後，資料流如下：
 BPM 由 `welch_peak_hz` 計算：
 
 1. 使用 Welch 方法估計濾波波形的 PSD。
-2. `nperseg = min(n, max(64, int(fs * 5)))`，約使用最多 5 秒 segment。
-3. overlap 為 `nperseg * 3 // 4`。
-4. `nfft=max(512, nperseg)` 增加頻率解析度。
-5. window 使用 `blackmanharris`。
+2. `nperseg = min(256, max(32, n // 2))`，保留第一版較穩定的 Welch segment 設定。
+3. overlap 為 `nperseg // 2`。
+4. `nfft=max(2048, nperseg * 4)` 增加頻率解析度。
+5. 在 PSD 主峰左右做 log-power parabolic interpolation，讓顯示可落在 71、72、73 這類細節，而不是只跳 70、80、90。
 6. 只在 `0.7 Hz` 到 `3.5 Hz` 搜尋最大功率峰。
 7. `BPM = peak_freq_hz * 60`。
 
 搜尋頻段 0.7 到 3.5 Hz 約等於 42 到 210 BPM。這比 band-pass 略窄，避免濾波邊界附近的能量成為主峰。
+
+目前 GUI 與 recorder 使用的 `bpm` 以第一版直接 Welch peak 為基準，只排除 42 到 210 BPM 外的明顯不合理值，避免品質 gate 太嚴造成長時間空白。`RppgEngine` 仍保留最近 10 秒候選值中位數與輕量 EMA，降低單幀跳動，但不再用 SQI、quality score、artifact、landmark jitter 或 FPS jitter 阻擋 BPM 顯示。
+
+為避免頻譜偶爾選到次諧波或雜訊峰，當已有穩定 BPM 時，單次超過 25 BPM 的跳動不會立刻寫入候選歷史。新的大幅跳動必須在約 2 秒內連續出現 4 次，且彼此落在 8 BPM 內，才會被視為真實趨勢並透過 EMA 慢慢更新。這主要處理 80 BPM 突然掉到 40 到 50 BPM 的偶發情況，同時保留真實心率變化的追蹤能力。
 
 ## 9. SQI 訊號品質指標
 
@@ -388,7 +392,7 @@ GUI 與 Web dashboard 顯示用資料：
 
 ## 16. rPPG 與疲勞融合
 
-融合邏輯在 `gui/fatigue_scorer.py`。rPPG 是綜合疲勞分數的 40%，行為疲勞是 60%。若其中一方不可用，另一方會承擔 100% 權重。
+融合邏輯在 `gui/fatigue_scorer.py`。目前以 MediaPipe 行為疲勞為主，rPPG 是綜合疲勞分數的 15%，行為疲勞是 85%。若其中一方不可用，另一方會承擔 100% 權重。
 
 rPPG 子分數由三部分組成：
 
@@ -402,11 +406,11 @@ LF/HF 子分數：
 
 `lfhf_score = clip((lf_hf - 1.5) / (4.0 - 1.5), 0, 1)`
 
-SQI 折扣：
+SQI 與 quality gate：
 
-`sqi_weight = clamp(sqi / 0.30)`
+`sqi_weight = clamp(sqi / 0.45)`
 
-rPPG pillar 最終會乘上 SQI 權重。也就是說，波形品質不足時，即使壓力或 BPM 子項偏高，rPPG 對綜合分數的影響也會下降。
+若 SQI 低於 0.45、quality score 低於 0.55，或四個 ROI 中少於三個可用，rPPG 會被視為不可用，不參與綜合疲勞分數。rPPG pillar 最終也會乘上 SQI 與 quality 權重；波形品質不足時，即使壓力或 BPM 子項偏高，rPPG 對綜合分數的影響也會下降或歸零。
 
 綜合分數等級：
 
