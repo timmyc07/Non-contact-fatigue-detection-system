@@ -549,17 +549,22 @@ class MainWindow(QMainWindow):
         uta_row_c.addWidget(self._lbl_utarldd_result, 2)
         uta_l.addLayout(uta_row_c)
 
+        self._frame_utarldd_preview = QFrame()
+        self._frame_utarldd_preview.setFixedHeight(360)
+        self._frame_utarldd_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._frame_utarldd_preview.setStyleSheet(
+            "background-color: #101318; border: 1px solid #2a2f38; border-radius: 8px;"
+        )
+        uta_preview_layout = QVBoxLayout(self._frame_utarldd_preview)
+        uta_preview_layout.setContentsMargins(0, 0, 0, 0)
+        uta_preview_layout.setSpacing(0)
         self._lbl_utarldd_preview = QLabel("影片預覽")
         self._lbl_utarldd_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_utarldd_preview.setMinimumHeight(260)
-        self._lbl_utarldd_preview.setMaximumHeight(460)
         self._lbl_utarldd_preview.setScaledContents(False)
         self._lbl_utarldd_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self._lbl_utarldd_preview.setStyleSheet(
-            "background-color: #101318; border: 1px solid #2a2f38; "
-            "border-radius: 8px; color: #868e96;"
-        )
-        uta_l.addWidget(self._lbl_utarldd_preview)
+        self._lbl_utarldd_preview.setStyleSheet("background-color: transparent; color: #868e96;")
+        uta_preview_layout.addWidget(self._lbl_utarldd_preview, 1)
+        uta_l.addWidget(self._frame_utarldd_preview)
 
         body_layout.addWidget(gb_utarldd)
 
@@ -1430,7 +1435,7 @@ class MainWindow(QMainWindow):
         if image.isNull():
             return
         pix = QPixmap.fromImage(image)
-        target = self._lbl_utarldd_preview.size()
+        target = self._frame_utarldd_preview.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
             target = QSize(640, 360)
         target = QSize(
@@ -1443,9 +1448,6 @@ class MainWindow(QMainWindow):
             Qt.TransformationMode.FastTransformation,
         )
         self._lbl_utarldd_preview.setPixmap(scaled)
-        self._lbl_utarldd_preview.setStyleSheet(
-            "background-color: #101318; border: 1px solid #2a2f38; border-radius: 8px;"
-        )
 
     def _on_utarldd_finished_ok(self, result: UtaRlddBatchResult) -> None:
         self._bar_utarldd_progress.setRange(0, max(result.videos_total, 1))
