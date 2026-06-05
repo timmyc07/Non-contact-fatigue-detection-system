@@ -12,7 +12,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt, QThread, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence
+from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -548,6 +548,15 @@ class MainWindow(QMainWindow):
         uta_row_c.addWidget(self._bar_utarldd_progress, 1)
         uta_row_c.addWidget(self._lbl_utarldd_result, 2)
         uta_l.addLayout(uta_row_c)
+
+        self._lbl_utarldd_preview = QLabel("影片預覽")
+        self._lbl_utarldd_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_utarldd_preview.setMinimumHeight(260)
+        self._lbl_utarldd_preview.setStyleSheet(
+            "background-color: #101318; border: 1px solid #2a2f38; "
+            "border-radius: 8px; color: #868e96;"
+        )
+        uta_l.addWidget(self._lbl_utarldd_preview)
 
         body_layout.addWidget(gb_utarldd)
 
@@ -1340,6 +1349,7 @@ class MainWindow(QMainWindow):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._on_utarldd_progress)
+        worker.preview_frame.connect(self._on_utarldd_preview_frame)
         worker.finished_ok.connect(self._on_utarldd_finished_ok)
         worker.failed.connect(self._on_utarldd_failed)
         worker.finished.connect(thread.quit)
@@ -1354,6 +1364,8 @@ class MainWindow(QMainWindow):
         self._bar_utarldd_progress.setRange(0, 0)
         self._lbl_utarldd_current.setText("目前影片：準備中")
         self._lbl_utarldd_result.setText("摘要檔：--")
+        self._lbl_utarldd_preview.clear()
+        self._lbl_utarldd_preview.setText("影片預覽載入中")
         self._append_log(f"[UTA-RLDD] 開始批次測試：{self._utarldd_dataset_dir}")
         thread.start()
 
@@ -1411,16 +1423,32 @@ class MainWindow(QMainWindow):
                     f"{summary.frames} frames"
                 )
 
+    def _on_utarldd_preview_frame(self, image: QImage) -> None:
+        if image.isNull():
+            return
+        pix = QPixmap.fromImage(image)
+        scaled = pix.scaled(
+            self._lbl_utarldd_preview.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._lbl_utarldd_preview.setPixmap(scaled)
+        self._lbl_utarldd_preview.setStyleSheet(
+            "background-color: #101318; border: 1px solid #2a2f38; border-radius: 8px;"
+        )
+
     def _on_utarldd_finished_ok(self, result: UtaRlddBatchResult) -> None:
         self._bar_utarldd_progress.setRange(0, max(result.videos_total, 1))
         self._bar_utarldd_progress.setValue(result.videos_done + result.videos_failed)
-        self._lbl_utarldd_result.setText(f"摘要檔：{result.summary_csv}")
+        self._lbl_utarldd_result.setText(
+            f"摘要檔：{result.summary_csv}\n完整欄位：{result.full_summary_csv}"
+        )
         stopped = any(summary.status == "stopped" for summary in result.summaries)
         state = "已停止" if stopped or self._utarldd_stopping else "完成"
         self._lbl_utarldd_current.setText(f"目前影片：{state}")
         self._append_log(
             f"[UTA-RLDD] {state}，完成 {result.videos_done} 支，失敗 {result.videos_failed} 支，"
-            f"輸出：{result.output_dir}"
+            f"摘要：{result.summary_csv}"
         )
 
     def _on_utarldd_failed(self, msg: str) -> None:

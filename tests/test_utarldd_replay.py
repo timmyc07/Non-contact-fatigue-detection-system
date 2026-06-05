@@ -9,6 +9,7 @@ from gui.utarldd_replay import (
     discover_utarldd_videos,
     parse_utarldd_label,
     run_replay_batch,
+    write_full_summary_csv,
     write_summary_csv,
 )
 from scripts.utarldd_replay import _split_csv
@@ -90,8 +91,28 @@ def test_write_summary_csv(tmp_path: Path) -> None:
     write_summary_csv(out, [summary])
 
     text = out.read_text(encoding="utf-8-sig")
+    assert "受試者,資料集標籤,警覺類別,快速判讀" in text
+    assert "01,0,Alert,未見明顯疲勞" in text
+
+
+def test_write_full_summary_csv_keeps_machine_readable_fields(tmp_path: Path) -> None:
+    out = tmp_path / "summary_full.csv"
+    summary = UtaRlddVideoSummary(
+        subject="01",
+        label="10",
+        label_name="Drowsy",
+        video_path="C:/video/01/10.mov",
+        frames=10,
+        face_frames=9,
+        face_rate=0.9,
+        status="done",
+    )
+
+    write_full_summary_csv(out, [summary])
+
+    text = out.read_text(encoding="utf-8-sig")
     assert "subject,label,label_name" in text
-    assert "01,0,Alert" in text
+    assert "01,10,Drowsy" in text
 
 
 def test_split_csv_accepts_repeated_and_comma_values() -> None:
@@ -132,8 +153,11 @@ def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatc
     assert result.videos_done == 1
     assert result.videos_failed == 1
     assert result.summary_csv.exists()
+    assert result.full_summary_csv.exists()
     assert result.manifest_path.exists()
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_url"] == "https://sites.google.com/view/utarldd/home"
+    assert manifest["summary_csv"] == str(result.summary_csv)
+    assert manifest["full_summary_csv"] == str(result.full_summary_csv)
     assert manifest["labels"] == {"0": "Alert", "5": "Low Vigilant", "10": "Drowsy"}
     assert len(manifest["summaries"]) == 2

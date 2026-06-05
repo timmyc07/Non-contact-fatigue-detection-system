@@ -246,8 +246,11 @@ python -m scripts.utarldd_replay <dataset_root> --max-videos 1 --max-frames 300
 輸出預設位於 `recordings/utarldd_runs/<run_timestamp>/`：
 
 - `metrics_utarldd_<subject>_<label>_<timestamp>.db`：沿用 `MetricsRecorder` schema，`camera_label` 寫入 `UTA-RLDD subject=<id> label=<0|5|10>`。
-- `utarldd_summary_<timestamp>.csv`：每支影片的 frame 數、face rate、avg/p95 fatigue score、avg/p95 fused score、PERCLOS、blink temporal、狀態分布、rPPG quality、SQI、BPM guard 次數。
+- `utarldd_summary_<timestamp>.csv`：給人工檢視的好讀摘要，使用中文欄位、百分比欄位與快速判讀。
+- `utarldd_summary_full_<timestamp>.csv`：保留每支影片的完整 summary 欄位，供後續 notebook、統計與稽核使用。
 - `utarldd_manifest_<timestamp>.json`：run metadata、來源 URL、label 對應與每支影片摘要。
 - 可選 `video_utarldd_<subject>_<label>_<timestamp>.mp4`：只有啟用 `--write-annotated-video` 或 GUI 勾選輸出標註影片時產生。
+
+GUI 版本會在批次進行時顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，讓操作者可直接確認影片是否被正確偵測，而不必等回放結束後再開標註影片。
 
 Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 replay DB 可以與一般錄影 DB 一樣被 dashboard 讀取。這項測試可補足目前無法短時間募集大量真人受試者的問題，但仍不能完全取代無人機駕駛員場域真人測試；最終門檻仍應用本場域資料做校正。

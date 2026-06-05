@@ -566,10 +566,14 @@ Behavior sub-score 權重：
 
 回放摘要會輸出：
 
+- `utarldd_summary_<timestamp>.csv`：給人工快速檢視的好讀摘要，包含中文欄位、百分比化的 face rate/PERCLOS、快速判讀、主要疲勞/rPPG 指標與狀態分布。
+- `utarldd_summary_full_<timestamp>.csv`：完整欄位版本，保留原始 summary dataclass 欄位供 notebook、統計分析與稽核。
 - 行為疲勞：`avg_fatigue_score`、`p95_fatigue_score`、`avg_perclos`、`max_perclos`、`avg_blink_temporal`、`max_blink_temporal`、`LOW_VIGILANCE/DROWSY/CRITICAL/MICROSLEEP/NO_FACE` frame counts。
 - 融合分數：`avg_fused_score`、`p95_fused_score`。
 - 可用性：frames、face_frames、face_rate、duration_sec、fps、width、height。
 - rPPG 診斷：`avg_rppg_quality`、`avg_sqi`、`avg_bpm`、`bpm_guard_count`。
+
+GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目的在於讓操作者一邊跑批次一邊確認偵測是否正常。這個預覽不改變 DB 與 CSV 的數值計算，也不會取代完整 SQLite 回放。
 
 臉部特徵疲勞基準值的決定方式維持原則：
 

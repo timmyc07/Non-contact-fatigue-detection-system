@@ -52,7 +52,8 @@ def main() -> None:
     )
     print()
     print(f"輸出目錄: {result.output_dir}")
-    print(f"摘要 CSV: {result.summary_csv}")
+    print(f"好讀摘要 CSV: {result.summary_csv}")
+    print(f"完整欄位 CSV: {result.full_summary_csv}")
     print(f"Manifest: {result.manifest_path}")
     print(f"影片總數: {result.videos_total}, 完成: {result.videos_done}, 失敗: {result.videos_failed}")
 

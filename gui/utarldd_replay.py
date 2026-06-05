@@ -19,6 +19,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtGui import QImage
 from mediapipe.tasks import python as _mp_python
 from mediapipe.tasks.python import vision as _mp_vision
 
@@ -88,6 +89,7 @@ class UtaRlddVideoSummary:
     microsleep_frames: int = 0
     no_face_frames: int = 0
     ok_frames: int = 0
+    calibrating_frames: int = 0
     status_counts_json: str = "{}"
 
 
@@ -95,6 +97,7 @@ class UtaRlddVideoSummary:
 class UtaRlddBatchResult:
     output_dir: Path
     summary_csv: Path
+    full_summary_csv: Path
     manifest_path: Path
     videos_total: int
     videos_done: int
@@ -103,6 +106,7 @@ class UtaRlddBatchResult:
 
 
 ProgressCallback = Callable[[str, int, int, UtaRlddVideoSummary | None], None]
+PreviewFrameCallback = Callable[[QImage], None]
 
 
 def parse_utarldd_label(path: Path) -> tuple[str, str]:
@@ -275,6 +279,20 @@ def _writer_for(path: Path, fps: float, width: int, height: int) -> cv2.VideoWri
     return cv2.VideoWriter(str(path), fourcc, fps if fps > 0 else 30.0, (width, height))
 
 
+def _bgr_to_qimage(bgr: np.ndarray) -> QImage:
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    rgb = np.ascontiguousarray(rgb)
+    height, width = rgb.shape[:2]
+    qimg = QImage(
+        rgb.data,
+        width,
+        height,
+        rgb.strides[0],
+        QImage.Format.Format_RGB888,
+    )
+    return qimg.copy()
+
+
 def run_replay_video(
     video: UtaRlddVideo,
     output_dir: Path,
@@ -283,6 +301,7 @@ def run_replay_video(
     max_frames: int = 0,
     write_annotated_video: bool = False,
     progress_cb: ProgressCallback | None = None,
+    preview_frame_cb: PreviewFrameCallback | None = None,
     stop_requested: Callable[[], bool] | None = None,
 ) -> UtaRlddVideoSummary:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -366,7 +385,8 @@ def run_replay_video(
                 rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
                 mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
                 result = landmarker.detect_for_video(mp_img, ts_ms)
-                annotated = bgr.copy() if writer is not None else bgr
+                annotated_needed = writer is not None or preview_frame_cb is not None
+                annotated = bgr.copy() if annotated_needed else bgr
 
                 if result.face_landmarks:
                     summary.face_frames += 1
@@ -395,7 +415,7 @@ def run_replay_video(
                     )
                     r_metrics.face_detected = True
                     fused = fuser.update(rppg=r_metrics, fatigue=f_metrics)
-                    if writer is not None:
+                    if annotated_needed:
                         annotated = draw_fatigue_annotations(annotated, lm, f_metrics)
                         draw_rois(annotated, lm, transform_matrix, roi_tracker, tuning)
                 else:
@@ -432,6 +452,8 @@ def run_replay_video(
                 summary.bpm_guard_count += int(payload["bpm_guarded"])
                 if writer is not None:
                     writer.write(annotated)
+                if preview_frame_cb and (summary.frames == 1 or summary.frames % max(1, int(fps / 8.0)) == 0):
+                    preview_frame_cb(_bgr_to_qimage(annotated))
                 if progress_cb and summary.frames % max(1, int(fps)) == 0:
                     progress_cb("frame", summary.frames, total_frames, replace(summary))
     except Exception as exc:
@@ -464,11 +486,124 @@ def run_replay_video(
     summary.critical_frames = status_counts.get("CRITICAL", 0)
     summary.microsleep_frames = status_counts.get("MICROSLEEP", 0)
     summary.no_face_frames = status_counts.get("NO_FACE", summary.no_face_frames)
+    summary.calibrating_frames = status_counts.get("CALIBRATING", 0)
     summary.status_counts_json = json.dumps(status_counts, ensure_ascii=False, sort_keys=True)
     return summary
 
 
+def _pct(value: float) -> float:
+    return round(float(value) * 100.0, 2)
+
+
+def _num(value: float, digits: int = 3) -> float:
+    return round(float(value), digits)
+
+
+def _quick_reading(summary: UtaRlddVideoSummary) -> str:
+    if summary.status == "failed":
+        return "處理失敗"
+    if summary.status == "stopped":
+        return "使用者中止"
+    if summary.frames <= 0:
+        return "沒有有效幀"
+    if summary.face_rate < 0.8:
+        return "人臉偵測不足"
+    if summary.calibrating_frames / max(summary.frames, 1) >= 0.8:
+        return "校準中，尚不足判斷"
+    drowsy_ratio = (summary.drowsy_frames + summary.critical_frames + summary.microsleep_frames) / max(summary.frames, 1)
+    low_ratio = summary.low_vigilance_frames / max(summary.frames, 1)
+    if drowsy_ratio >= 0.05 or summary.p95_fused_score >= 0.65 or summary.max_perclos >= 0.25:
+        return "高疲勞跡象"
+    if low_ratio >= 0.05 or summary.avg_fused_score >= 0.35 or summary.max_perclos >= 0.10:
+        return "可能低警覺"
+    return "未見明顯疲勞"
+
+
 def write_summary_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
+    """Write a human-readable summary for quick review in Excel/VS Code."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "受試者",
+        "資料集標籤",
+        "警覺類別",
+        "快速判讀",
+        "處理狀態",
+        "總幀數",
+        "偵測到臉幀數",
+        "人臉偵測率(%)",
+        "影片秒數",
+        "FPS",
+        "平均疲勞分數(0-1)",
+        "95分位疲勞分數(0-1)",
+        "平均融合分數(0-1)",
+        "95分位融合分數(0-1)",
+        "平均PERCLOS(%)",
+        "最高PERCLOS(%)",
+        "平均眨眼時序分數(0-1)",
+        "最高眨眼時序分數(0-1)",
+        "平均rPPG品質(0-1)",
+        "平均SQI(0-1)",
+        "平均BPM",
+        "BPM保護次數",
+        "低警覺幀數",
+        "嗜睡幀數",
+        "危急幀數",
+        "微睡幀數",
+        "無臉幀數",
+        "校準中幀數",
+        "正常幀數",
+        "狀態分布",
+        "錯誤訊息",
+        "影片路徑",
+        "SQLite資料庫",
+        "標註影片",
+    ]
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for summary in summaries:
+            writer.writerow(
+                {
+                    "受試者": summary.subject,
+                    "資料集標籤": summary.label,
+                    "警覺類別": summary.label_name,
+                    "快速判讀": _quick_reading(summary),
+                    "處理狀態": summary.status,
+                    "總幀數": summary.frames,
+                    "偵測到臉幀數": summary.face_frames,
+                    "人臉偵測率(%)": _pct(summary.face_rate),
+                    "影片秒數": _num(summary.duration_sec, 2),
+                    "FPS": _num(summary.fps, 2),
+                    "平均疲勞分數(0-1)": _num(summary.avg_fatigue_score),
+                    "95分位疲勞分數(0-1)": _num(summary.p95_fatigue_score),
+                    "平均融合分數(0-1)": _num(summary.avg_fused_score),
+                    "95分位融合分數(0-1)": _num(summary.p95_fused_score),
+                    "平均PERCLOS(%)": _pct(summary.avg_perclos),
+                    "最高PERCLOS(%)": _pct(summary.max_perclos),
+                    "平均眨眼時序分數(0-1)": _num(summary.avg_blink_temporal),
+                    "最高眨眼時序分數(0-1)": _num(summary.max_blink_temporal),
+                    "平均rPPG品質(0-1)": _num(summary.avg_rppg_quality),
+                    "平均SQI(0-1)": _num(summary.avg_sqi),
+                    "平均BPM": _num(summary.avg_bpm, 1),
+                    "BPM保護次數": summary.bpm_guard_count,
+                    "低警覺幀數": summary.low_vigilance_frames,
+                    "嗜睡幀數": summary.drowsy_frames,
+                    "危急幀數": summary.critical_frames,
+                    "微睡幀數": summary.microsleep_frames,
+                    "無臉幀數": summary.no_face_frames,
+                    "校準中幀數": summary.calibrating_frames,
+                    "正常幀數": summary.ok_frames,
+                    "狀態分布": summary.status_counts_json,
+                    "錯誤訊息": summary.error,
+                    "影片路徑": summary.video_path,
+                    "SQLite資料庫": summary.db_path,
+                    "標註影片": summary.annotated_video_path,
+                }
+            )
+
+
+def write_full_summary_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
+    """Write every summary field for downstream scripts and audits."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(asdict(UtaRlddVideoSummary(subject="", label="", label_name="", video_path="")).keys())
     with path.open("w", newline="", encoding="utf-8-sig") as fh:
@@ -488,6 +623,7 @@ def run_replay_batch(
     labels: Iterable[str] | None = None,
     write_annotated_video: bool = False,
     progress_cb: ProgressCallback | None = None,
+    preview_frame_cb: PreviewFrameCallback | None = None,
     stop_requested: Callable[[], bool] | None = None,
 ) -> UtaRlddBatchResult:
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -522,6 +658,7 @@ def run_replay_batch(
             max_frames=max_frames,
             write_annotated_video=write_annotated_video,
             progress_cb=progress_cb,
+            preview_frame_cb=preview_frame_cb,
             stop_requested=stop_requested,
         )
         summaries.append(summary)
@@ -529,11 +666,15 @@ def run_replay_batch(
             progress_cb("video_done", index, len(videos), summary)
 
     summary_csv = output_dir / f"utarldd_summary_{run_stamp}.csv"
+    full_summary_csv = output_dir / f"utarldd_summary_full_{run_stamp}.csv"
     manifest_path = output_dir / f"utarldd_manifest_{run_stamp}.json"
     write_summary_csv(summary_csv, summaries)
+    write_full_summary_csv(full_summary_csv, summaries)
     manifest = {
         "dataset_root": str(Path(root)),
         "output_dir": str(output_dir),
+        "summary_csv": str(summary_csv),
+        "full_summary_csv": str(full_summary_csv),
         "created_at": run_stamp,
         "source": "UTA-RLDD",
         "source_url": "https://sites.google.com/view/utarldd/home",
@@ -547,6 +688,7 @@ def run_replay_batch(
     return UtaRlddBatchResult(
         output_dir=output_dir,
         summary_csv=summary_csv,
+        full_summary_csv=full_summary_csv,
         manifest_path=manifest_path,
         videos_total=len(videos),
         videos_done=sum(1 for s in summaries if s.status == "done"),
@@ -557,6 +699,7 @@ def run_replay_batch(
 
 class UtaRlddReplayWorker(QObject):
     progress = Signal(str, int, int, object)
+    preview_frame = Signal(QImage)
     finished_ok = Signal(object)
     failed = Signal(str)
     finished = Signal()
@@ -584,6 +727,9 @@ class UtaRlddReplayWorker(QObject):
     def _progress_cb(self, event: str, current: int, total: int, summary: UtaRlddVideoSummary | None) -> None:
         self.progress.emit(event, current, total, summary)
 
+    def _preview_frame_cb(self, image: QImage) -> None:
+        self.preview_frame.emit(image)
+
     @Slot()
     def run(self) -> None:
         try:
@@ -594,6 +740,7 @@ class UtaRlddReplayWorker(QObject):
                 max_frames=self.max_frames,
                 write_annotated_video=self.write_annotated_video,
                 progress_cb=self._progress_cb,
+                preview_frame_cb=self._preview_frame_cb,
                 stop_requested=self._stop.is_set,
             )
             self.finished_ok.emit(result)
