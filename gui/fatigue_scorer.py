@@ -70,12 +70,13 @@ class FuserConfig:
     rppg_min_roi_valid: int = 3
 
     # ── Behaviour sub-weights (internal, sum = 1.0) ───────────────────────────
-    beh_w_perclos:    float = 0.25
-    beh_w_squint:     float = 0.20
+    beh_w_perclos:    float = 0.35
+    beh_w_blink_temporal: float = 0.25
     beh_w_microsleep: float = 0.20
-    beh_w_gaze:       float = 0.20
-    beh_w_frown:      float = 0.10
+    beh_w_gaze:       float = 0.10
+    beh_w_squint:     float = 0.05
     beh_w_yawn:       float = 0.05
+    beh_w_frown:      float = 0.00
 
     # PERCLOS tiers
     perclos_mild_th:  float = 0.10   # below = 0 score
@@ -132,6 +133,7 @@ class FusedFatigueScore:
     rppg_stress_score:  float = 0.0
     rppg_bpm_score:     float = 0.0
     beh_perclos_score:  float = 0.0
+    beh_blink_temporal_score: float = 0.0
     beh_squint_score:   float = 0.0
     beh_microsleep_score: float = 0.0
     beh_gaze_score:     float = 0.0
@@ -215,7 +217,7 @@ class FatigueFuser:
     # ── Behaviour pillar ──────────────────────────────────────────────────────
 
     def _behavior_sub_score(self, f: "FatigueMetrics") -> tuple[float, ...]:
-        """Returns (pillar_score, perclos_s, squint_s, micro_s, gaze_s, frown_s, yawn_s)."""
+        """Returns (pillar_score, perclos_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s)."""
         cfg = self.cfg
 
         # PERCLOS
@@ -232,6 +234,8 @@ class FatigueFuser:
             squint_s = _clamp(f.squint_duration / (cfg.squint_full_sec + 1e-6))
         else:
             squint_s = 0.0
+
+        blink_s = _clamp(getattr(f, "blink_temporal_score", 0.0) or 0.0)
 
         # Microsleep / pitch nod
         micro_s = _clamp(f.microsleep_count * cfg.microsleep_per_event)
@@ -260,13 +264,14 @@ class FatigueFuser:
 
         pillar = _clamp(
             cfg.beh_w_perclos    * perc_s
+            + cfg.beh_w_blink_temporal * blink_s
             + cfg.beh_w_squint   * squint_s
             + cfg.beh_w_microsleep * micro_s
             + cfg.beh_w_gaze     * gaze_s
             + cfg.beh_w_frown    * frown_s
             + cfg.beh_w_yawn     * yawn_s
         )
-        return pillar, perc_s, squint_s, micro_s, gaze_s, frown_s, yawn_s
+        return pillar, perc_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s
 
     # ── Main update ───────────────────────────────────────────────────────────
 
@@ -297,11 +302,11 @@ class FatigueFuser:
         # ── Behaviour pillar ──────────────────────────────────────────────────
         beh_avail    = False
         beh_sub      = 0.0
-        perc_s = squint_s = micro_s = gaze_s = frown_s = yawn_s = 0.0
+        perc_s = blink_s = squint_s = micro_s = gaze_s = frown_s = yawn_s = 0.0
 
         if fatigue is not None and fatigue.face_detected and fatigue.calibrated:
             out = self._behavior_sub_score(fatigue)
-            beh_sub, perc_s, squint_s, micro_s, gaze_s, frown_s, yawn_s = out
+            beh_sub, perc_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s = out
             beh_avail = True
 
         # Also use fatigue.fatigue_level as a cross-check blend
@@ -348,7 +353,8 @@ class FatigueFuser:
             trend=trend, trend_symbol=trend_sym,
             rppg_available=rppg_avail, behavior_available=beh_avail,
             rppg_stress_score=stress_s,   rppg_bpm_score=bpm_s,
-            beh_perclos_score=perc_s,     beh_squint_score=squint_s,
+            beh_perclos_score=perc_s,     beh_blink_temporal_score=blink_s,
+            beh_squint_score=squint_s,
             beh_microsleep_score=micro_s, beh_gaze_score=gaze_s,
             beh_frown_score=frown_s,      beh_yawn_score=yawn_s,
             timestamp=t_now,

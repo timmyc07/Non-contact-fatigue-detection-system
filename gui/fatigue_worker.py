@@ -71,8 +71,10 @@ _STATUS_COLOR = {
     "OK":          (0,   200,   0),
     "CALIBRATING": (180, 180,   0),
     "ALERT":       (0,   165, 255),
+    "LOW_VIGILANCE": (0, 165, 255),
     "TIRED":       (0,   165, 255),
     "DROWSY":      (0,    80, 255),
+    "CRITICAL":    (0,     0, 255),
     "MICROSLEEP":  (0,     0, 255),
     "NO_FACE":     (120, 120, 120),
 }
@@ -255,10 +257,10 @@ def draw_fatigue_annotations(
                         font, 0.40, (0, 50, 255), 1, cv2.LINE_AA)
 
     # ── 8. Microsleep / drowsy flash overlay ──────────────────────────────────
-    if metrics.status in ("MICROSLEEP", "DROWSY"):
+    if metrics.status in ("MICROSLEEP", "DROWSY", "CRITICAL"):
         overlay = out.copy()
         alpha   = 0.22 if metrics.status == "DROWSY" else 0.35
-        col     = (0, 30, 180) if metrics.status == "MICROSLEEP" else (0, 0, 160)
+        col     = (0, 30, 180) if metrics.status in ("MICROSLEEP", "CRITICAL") else (0, 0, 160)
         cv2.rectangle(overlay, (0, 0), (w, h), col, -1)
         cv2.addWeighted(overlay, alpha, out, 1 - alpha, 0, out)
 

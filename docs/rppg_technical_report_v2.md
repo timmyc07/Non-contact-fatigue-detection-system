@@ -364,3 +364,52 @@ LF/HF 或 RMSSD 不可用時輸出 `stress_prob=0.0`、`stress_status="calibrati
 14. OpenCV image filtering documentation  
     https://docs.opencv.org/4.x/d4/d86/group__imgproc__filter.html  
     本系統參考技術：Gaussian blur；本專案在 ROI mean color 前做 5x5 blur 降低 pixel noise。
+## 15. 2026-06-05 修訂：rPPG 波動保護與文獻對照
+
+使用者測試指出目前 rPPG 已接近精準，但偶爾會有大幅波動。因此本次修訂採保守策略：不替換 POS、Butterworth band-pass、Welch peak、IBI/HRV 與 stress heuristic 主流程，只新增診斷欄位與 BPM guard 狀態輸出，讓大幅波動可被記錄、回放與分析。
+
+### 15.1 本次沒有改動的核心流程
+
+- 臉部 ROI 擷取與 RGB 平均取樣方式維持既有行為。
+- POS rPPG 投影公式維持既有行為。
+- Butterworth band-pass filter 維持既有頻帶與實作。
+- Welch PSD peak 估 BPM 維持既有行為。
+- IBI peak detection、artifact ratio、RMSSD、SDNN、LF/HF 維持既有行為。
+- rPPG 在 fatigue fusion 中仍只作為生理壓力/負荷輔助，不作為疲勞主判定。
+
+### 15.2 本次新增欄位
+
+`RppgMetrics` 新增：
+
+- `raw_bpm`：Welch peak 直接推得的原始 BPM。
+- `bpm_delta`：原始 BPM 與目前穩定 BPM 的差距。
+- `bpm_guarded`：本次 BPM 是否被 guard 保護。
+- `bpm_guard_reason`：保護原因，例如 `warmup`、`implausible_range`、`transient_jump`、`confirmed_jump_smoothed`。
+
+這些欄位已串接到 GUI web metrics、SQLite recorder 與 playback API。目的是讓日後可以用固定錄影或真實量測資料，比較「原始 BPM 是否跳動」與「穩定 BPM 是否合理」，而不是只看單一輸出值。
+
+### 15.3 guard 判定方式
+
+- `warmup`：buffer 尚未達最低有效長度時，不輸出可信 BPM，只回報 warmup progress。
+- `implausible_range`：raw BPM 超出本系統設定的合理生理範圍時，保留上一個穩定 BPM。
+- `transient_jump`：raw BPM 突然與穩定 BPM 差距過大，且尚未持續足夠時間時，視為暫態波動，保留上一個穩定 BPM。
+- `confirmed_jump_smoothed`：大幅變化連續出現並通過確認後，以平滑方式逐步靠近新 BPM，避免畫面瞬間跳值。
+
+這是工程保護，不是新的心率演算法。若之後要調整 guard 門檻，必須用同一段錄影與參考心率做 A/B 回放，確認 MAE、median absolute error、95th percentile error 與跳值次數沒有退化。
+
+### 15.4 本機清華碩論採用內容
+
+王奕鈞（Yi-Chun Wang），《應用電腦視覺於臉部膚色變化與心率關係之探討》，國立清華大學碩士論文，2026。
+本系統參考內容：此論文以 MediaPipe Face Mesh 定位前額與雙頰 ROI，比較 RGB、HSV、Lab 等色彩空間，並以 GRU 與 LOSO 驗證模型泛化；論文摘要指出雙頰區域與 Lab 色彩空間在動態情境下較穩健。
+本次採用方式：僅列為後續 rPPG 優化方向，暫不將 POS 直接替換成 Lab+GRU。原因是目前專案實測 POS 已接近精準，直接改核心模型可能導致數值行為退化；應先建立固定回放資料集，再比較 ROI/color-space/model 的 A/B 結果。
+
+### 15.5 與 fatigue 系統的關係
+
+rPPG 指標可能反映壓力、生理負荷或運動狀態，但不能單獨定義疲勞。無人機駕駛情境中，短時間心率上升可能代表任務負荷、緊張、姿態變化或光線干擾，不必然代表嗜睡。因此本系統仍以 PERCLOS、眨眼時序、長閉眼、head nod、gaze dynamics 與 yawn 作為疲勞主判定，rPPG 只在品質足夠時提供 15% 輔助融合。
+
+### 15.6 後續驗證建議
+
+1. 每次調整 rPPG guard 或 ROI/color-space 前，固定使用相同錄影與參考心率回放。
+2. 同時輸出 `raw_bpm` 與 stabilized `bpm`，檢查 guard 是否只攔截 artifact，而不是壓掉真實心率變化。
+3. 將 `bpm_guard_reason` 與 `sqi`、`roi_valid_count`、`quality_score`、`landmark_jitter_norm`、`roi_area_stability` 一起分析，找出波動來源。
+4. 若要參考清華碩論導入雙頰 Lab/GRU，應先以 feature flag 或離線 replay 模式測試，通過後再考慮進入即時主流程。

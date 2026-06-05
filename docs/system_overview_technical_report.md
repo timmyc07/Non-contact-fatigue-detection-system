@@ -197,3 +197,26 @@ rPPG 生理訊號不使用心率 AI 模型，而是由訊號處理產生：
 8. OpenCV image processing documentation  
    https://docs.opencv.org/4.x/d6/d6e/group__imgproc__draw.html  
    本系統參考技術：畫面疊圖標註、ROI 繪製與影像處理工具。
+## 11. 2026-06-05 修訂：疲勞判定與 rPPG 保守更新
+
+本次修訂以「汽車駕駛疲勞偵測技術可遷移到無人機駕駛員監測」為方向，但採保守落地策略：行為疲勞作為主判定，rPPG 作為生理壓力/負荷輔助。疲勞定義為操作員警覺度下降到可能影響監控、判斷或操控反應的狀態，不作醫療診斷。
+
+### 11.1 行為疲勞新增能力
+
+- 狀態分級加入 `LOW_VIGILANCE` 與 `CRITICAL`，形成 `OK -> LOW_VIGILANCE -> DROWSY -> CRITICAL / MICROSLEEP` 的介入流程。
+- 新增眨眼時序基準：以個人前 12 次有效眨眼建立 duration / amplitude / opening velocity baseline，再用 z-score 判斷是否偏離個人清醒眨眼型態。
+- PERCLOS 改為分層解讀：`0.10` 作為低警覺工程門檻，`0.25` 作為明顯嗜睡工程門檻。這些不是論文固定值，需用本專案錄影回放持續校正。
+- 皺眉不再作為 fatigue 主權重，因無人機操作情境中皺眉更可能代表任務負荷或壓力。
+
+### 11.2 rPPG 保守更新
+
+本次未替換 rPPG 核心演算法。POS、濾波、Welch、IBI/HRV 與 stress heuristic 全部維持既有行為，只新增 `raw_bpm`、`bpm_delta`、`bpm_guarded`、`bpm_guard_reason`，讓偶發大幅波動可以被診斷與回放。
+
+### 11.3 主要參考依據
+
+- MediaPipe Face Landmarker 官方文件：採用 478 landmarks、blendshape scores 與 transformation matrix 作為臉部特徵來源。
+- Soukupová and Čech, 2016：採用 EAR 與 facial landmarks 進行眼部開合/眨眼偵測的思路。
+- PERCLOS 駕駛嗜睡研究與 NHTSA 相關報告：採用「時間窗內眼睛閉合比例」作為警覺度下降指標。
+- Ghoddoosian, 2019/2022：參考 `alert / low vigilant / drowsy` 三階段與 temporal model 思路，因此新增低警覺分級。
+- Tüfekci et al., 2022：參考以正常表徵建立 baseline、偏離正常視為 anomaly 的概念，因此採用個人化眨眼時序 baseline。
+- 王奕鈞，2026：參考 MediaPipe ROI、雙頰與 Lab 色彩空間在 rPPG 動態情境下的後續優化方向；本次未直接替換已接近精準的 POS 主流程。

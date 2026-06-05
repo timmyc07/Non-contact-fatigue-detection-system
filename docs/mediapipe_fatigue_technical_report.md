@@ -153,7 +153,7 @@ PERCLOS = window 內閉眼時間加權總和 / 有效觀察時間
 - `tired_perclos_th=0.25`
 - `long_closed_sec=1.5`
 
-PERCLOS 達門檻時狀態為 `TIRED`；連續閉眼超過 `long_closed_sec` 時狀態為 `DROWSY`。
+PERCLOS 達低警覺門檻時狀態為 `LOW_VIGILANCE`，達明顯嗜睡門檻時狀態為 `DROWSY`；連續閉眼超過 `long_closed_sec` 時狀態為 `CRITICAL`。
 
 ## 6. 瞇眼、皺眉與表情係數校準
 
@@ -278,9 +278,9 @@ Yawn 是晚期、低權重指標，以降低說話或一般張嘴造成的誤判
 - `NO_FACE`
 - `CALIBRATING`
 - `OK`
-- `ALERT`
-- `TIRED`
+- `LOW_VIGILANCE`
 - `DROWSY`
+- `CRITICAL`
 - `MICROSLEEP`
 
 `fatigue_level`：
@@ -447,7 +447,7 @@ Behavior sub-score 權重：
 
 6. National Highway Traffic Safety Administration, "Development of a Drowsy Driver Detection System", DOT HS 808 247, 1998  
    https://rosap.ntl.bts.gov/view/dot/1644  
-   本系統參考技術：PERCLOS 作為 drowsiness detection 的工程驗證概念；本專案將 PERCLOS 與長閉眼事件作為 TIRED/DROWSY 判斷依據。
+   本系統參考技術：PERCLOS 作為 drowsiness detection 的工程驗證概念；本專案將 PERCLOS 與長閉眼事件作為 LOW_VIGILANCE/DROWSY/CRITICAL 判斷依據。
 
 7. OpenCV `solvePnP` documentation  
    https://docs.opencv.org/4.x/d5/d1f/calib3d_solvePnP.html  
@@ -472,3 +472,78 @@ Behavior sub-score 權重：
 12. OpenCV drawing and image processing documentation  
     https://docs.opencv.org/4.x/d6/d6e/group__imgproc__draw.html  
     本系統參考技術：畫面疊圖標註（overlay annotation）與臉部特徵點/取樣區域（landmarks/ROI）繪製；本專案將疲勞特徵畫到 GUI preview。
+
+## 15. 2026-06-05 修訂：駕駛疲勞文獻導入與基準值定義
+
+本次修訂的目標，是把汽車駕駛疲勞偵測中較成熟的行為特徵，轉換成適合無人機駕駛員監測的即時規則式判定。重要原則如下：文獻提供「哪些特徵與疲勞/嗜睡有關」與「常見建模方向」，但本系統的實際警示門檻必須經由個人化校準、回放驗證與場域測試決定，不把論文中的資料集結果直接當成所有使用者的固定閾值。
+
+### 15.1 本次實作調整
+
+- 新增 `LOW_VIGILANCE` 低警覺狀態：在 PERCLOS 尚未達明顯嗜睡門檻前，若 PERCLOS 升高、眨眼時序異常、長時間凝視、瞇眼或其他早期訊號出現，先進入低警覺提醒。
+- 新增 `CRITICAL` 危急狀態：連續閉眼達 `long_closed_sec=1.5` 秒時，視為需要旁人即時介入的危急訊號；若同時出現 head nod / microsleep，仍由 `MICROSLEEP` 優先輸出。
+- 新增眨眼時序特徵：每次有效 blink 會記錄 `blink_duration_sec`、`blink_amplitude`、`blink_opening_velocity`，並以前 12 次有效眨眼建立個人 baseline，再計算 `blink_duration_z`、`blink_opening_velocity_z` 與 `blink_temporal_score`。
+- 融合分數調整：行為疲勞分數提高 PERCLOS 與 blink temporal 的比重，皺眉不再作為疲勞主權重；皺眉在無人機操作情境更可能代表 workload / stress，應作為輔助觀察而非疲勞主因。
+- Web dashboard、preview overlay、SQLite recorder 與 playback API 已串接新增欄位，讓門檻觸發與後續回放分析可追蹤。
+
+### 15.2 如何定義疲勞
+
+本系統把疲勞定義為「操作員警覺度下降到可能影響監控、判斷或操控反應的狀態」，而不是醫療診斷。實作上分成五個層級：
+
+| 狀態 | 本系統意義 | 主要觸發 |
+| --- | --- | --- |
+| `OK` | 目前行為特徵接近個人清醒基準 | EAR/PERCLOS/眨眼/頭部/嘴部皆未達警示 |
+| `LOW_VIGILANCE` | 早期低警覺，應觀察或口頭提醒 | PERCLOS >= 0.10、blink temporal score >= 0.45、長凝視、瞇眼等 |
+| `DROWSY` | 明顯嗜睡風險 | PERCLOS >= 0.25 |
+| `CRITICAL` | 危急閉眼事件，旁人應立即介入 | 連續閉眼 >= 1.5 秒 |
+| `MICROSLEEP` | 微睡眠/點頭事件，最高優先級 | head nod / microsleep rule 觸發 |
+
+### 15.3 臉部特徵疲勞基準值如何決定
+
+- EAR / 閉眼：本系統不使用單一固定 EAR 門檻。啟動後先取得個人開眼 EAR baseline，再由 baseline 推導 blink close/open 與閉眼判定，降低眼型、眼鏡、鏡頭角度造成的個體差異。
+- PERCLOS：參考駕駛疲勞文獻中「一段時間內眼睛高度閉合比例」的概念，本系統以 60 秒 sliding window 計算閉眼時間比例。`0.10` 是低警覺工程門檻，`0.25` 是明顯嗜睡工程門檻；它們不是論文保證值，後續必須用本專案錄影回放調整。
+- 眨眼時序：參考早期嗜睡會出現較慢、較長眼瞼閉合與開眼動態變化的概念。本系統用前 12 次有效 blink 建立個人 blink duration / amplitude / opening velocity baseline。當 duration z-score 偏高或 opening velocity z-score 偏低時，提高 `blink_temporal_score`。
+- 長閉眼與微睡眠：`long_closed_sec=1.5` 秒是本系統安全導向的危急保護門檻；微睡眠則結合 head pitch offset 與持續時間判斷，用來捕捉點頭/低頭事件。
+- Gaze / fixation：長時間凝視、低 saccade frequency 或 gaze stability 過高，可能代表警覺下降，也可能代表專注操作。因此只作為早期警示輔助，不單獨把人判成嗜睡。
+- MAR / yawn：張嘴與哈欠是疲勞常見行為訊號，但在說話、咳嗽、操作溝通時容易誤判，因此權重較低，作為 late-stage 輔助訊號。
+- Brow / frown：皺眉更接近認知負荷、壓力或操作困難，不作為 fatigue 主權重。本次融合權重已降為 0。
+
+### 15.4 本機五份論文與採用內容
+
+1. Mohamed W. Gomaa, Rasha O. Mahmoud, Amany M. Sarhan, "A CNN-LSTM-based Deep Learning Approach for Driver Drowsiness Prediction", Journal of Engineering Research, 2022.
+   網路來源：https://digitalcommons.aaru.edu.jo/erjeng/vol6/iss3/7
+   本系統參考內容：CNN 擷取影像特徵、LSTM 學習時序依賴，以及 NTHU driver drowsiness dataset 作為駕駛疲勞時序建模背景。本次沒有導入 CNN-LSTM 模型，因目前專案需要可解釋且可即時調整的規則式基準。
+
+2. Gülin Tüfekci, Alper Kayabaşi, Erdem Akagündüz, İlkay Ulusoy, "Detecting Driver Drowsiness as an Anomaly Using LSTM Autoencoders", arXiv:2209.05269, 2022.
+   網路來源：https://arxiv.org/abs/2209.05269
+   本系統參考內容：只用正常駕駛表徵建立個人/單人 baseline，將偏離正常的時序特徵視為 anomaly。這支持本系統用個人化 EAR 與 blink temporal baseline，而不是套用所有人的固定門檻。
+
+3. Reza Ghoddoosian, "Human Behavior Modeling in Long Videos: Drowsiness Detection and Action Segmentation", PhD Dissertation, University of Texas at Arlington, 2022；其中包含 "A Realistic Dataset and Baseline Temporal Model for Early Drowsiness Detection".
+   網路來源：https://mavmatrix.uta.edu/cse_dissertations/316 與 https://openaccess.thecvf.com/content_CVPRW_2019/html/AMFG/Ghoddoosian_A_Realistic_Dataset_and_Baseline_Temporal_Model_for_Early_Drowsiness_CVPRW_2019_paper.html
+   本系統參考內容：`alert / low vigilant / drowsy` 三階段概念，以及早期疲勞應重視時間序列變化而非單幀表情。本次因此新增 `LOW_VIGILANCE` 分級。
+
+4. Shirisha Vadlamudi, "Driver Drowsiness Detection on Raspberry Pi 4", California State University San Marcos, 2020.
+   網路來源：https://scholarworks.calstate.edu/concern/theses/jm214v860
+   本系統參考內容：即時邊緣裝置上的駕駛疲勞工程實作思路，包含攝影機輸入、臉部/眼部行為特徵與低延遲部署。本次保留規則式與輕量計算，避免導入高成本模型造成 GUI 延遲。
+
+5. 王奕鈞（Yi-Chun Wang），《應用電腦視覺於臉部膚色變化與心率關係之探討》，國立清華大學碩士論文，2026。
+   本系統參考內容：MediaPipe Face Mesh 定位前額與雙頰 ROI、多色彩空間比較、GRU/LOSO 驗證，以及雙頰與 Lab 色彩空間在動態情境下較穩健的結論。本次沒有替換既有 rPPG 主流程，只把它列為後續 rPPG ROI/color-space 優化方向。
+
+### 15.5 其他主要技術來源
+
+- MediaPipe Face Landmarker Python guide：https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python
+  參考 Face Landmarker 的 478 landmarks、blendshape scores、facial transformation matrix、`RunningMode.VIDEO` 與 `detect_for_video()`。
+- Tereza Soukupová and Jan Čech, "Real-Time Eye Blink Detection using Facial Landmarks", 2016：https://vision.fe.uni-lj.si/cvww2016/proceedings/papers/05.pdf
+  參考 EAR 六點眼睛比例與 blink detection 思路。
+- PERCLOS-based technologies for detecting drowsiness: current evidence and future directions, Sleep Advances, 2023：https://pmc.ncbi.nlm.nih.gov/articles/PMC10108649/
+  參考 PERCLOS 作為 established drowsiness measure，以及常見「眼睛高度閉合時間比例」定義差異。
+- National Highway Traffic Safety Administration, "Assessment of Drowsy Driver Algorithms", DOT HS 809 884：https://www-nrd.nhtsa.dot.gov/departments/Human%20Factors/810594/pages/AppC.htm
+  參考 drowsiness observer rating、長閉眼、PERCLOS 與嚴重嗜睡行為描述。
+- OpenCV `solvePnP` documentation：https://docs.opencv.org/4.x/d5/d1f/calib3d_solvePnP.html
+  參考 3D object points 與 2D image points 推估 camera pose 的技術，用於 head pitch/yaw/roll。
+
+### 15.6 現在還應該做什麼
+
+1. 建立無人機操作員專用標註資料：至少錄製清醒、長時間專注、低警覺、閉眼、打哈欠、轉頭、光線變化等情境，標註事件時間。
+2. 用 recorder 新增欄位回放比較：觀察 `perclos`、`blink_temporal_score`、`blink_duration_z`、`blink_opening_velocity_z`、`status` 與旁人標註是否一致。
+3. 以 false alarm rate per hour、低警覺提前量、危急事件 recall 作為門檻調整指標。
+4. 暫時不要把 rPPG 當疲勞主判定；rPPG 保留為生理負荷/壓力輔助，等有同步心率參考與疲勞標註後再提高權重。

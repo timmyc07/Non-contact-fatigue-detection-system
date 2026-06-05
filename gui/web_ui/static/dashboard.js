@@ -329,6 +329,8 @@ function statusColor(s) {
     if (!s) return '#f8fafc';
     const l = s.toLowerCase();
     if (l.includes('ok')||l.includes('正常')||l.includes('清醒')) return '#22c55e';
+    if (l.includes('low_vigilance')||l.includes('低警覺')) return '#f59e0b';
+    if (l.includes('critical')||l.includes('microsleep')||l.includes('危急')||l.includes('微睡眠')) return '#ef4444';
     if (l.includes('壓力')||l.includes('疲勞')||l.includes('輕度')||l.includes('tired')) return '#f59e0b';
     if (l.includes('昏睡')||l.includes('嚴重')||l.includes('危險')||l.includes('drowsy')) return '#ef4444';
     return '#f8fafc';

@@ -93,6 +93,10 @@ _MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
 @dataclass
 class RppgMetrics:
     bpm:               float = 0.0
+    raw_bpm:           float = 0.0
+    bpm_delta:         float = 0.0
+    bpm_guarded:       bool  = False
+    bpm_guard_reason:  str   = ""
     rmssd:             float = 0.0
     sdnn:              float = 0.0
     lf_hf:             float = 0.0
@@ -790,6 +794,9 @@ class RppgEngine:
         self._pending_bpm_jump: deque[tuple[float, float]] = deque()
         self._stable_bpm: Optional[float] = None
         self._stable_bpm_t: Optional[float] = None
+        self._last_bpm_guarded: bool = False
+        self._last_bpm_guard_reason: str = ""
+        self._last_bpm_delta: float = 0.0
 
     def reset(self) -> None:
         self._r.clear(); self._g.clear()
@@ -801,6 +808,9 @@ class RppgEngine:
         self._pending_bpm_jump.clear()
         self._stable_bpm = None
         self._stable_bpm_t = None
+        self._last_bpm_guarded = False
+        self._last_bpm_guard_reason = ""
+        self._last_bpm_delta = 0.0
 
     def push(self, t: float, r: float, g: float, b: float) -> None:
         self._r.append(r); self._g.append(g)
@@ -822,9 +832,16 @@ class RppgEngine:
         return self._last_fs
 
     def _accept_bpm_candidate(self, t_now: float, raw_bpm: float) -> float:
+        self._last_bpm_guarded = False
+        self._last_bpm_guard_reason = ""
+        self._last_bpm_delta = 0.0
         if not self._BPM_MIN_PLAUSIBLE <= raw_bpm <= self._BPM_MAX_PLAUSIBLE:
+            self._last_bpm_guarded = True
+            self._last_bpm_guard_reason = "implausible_range"
+            self._last_bpm_delta = float(raw_bpm - (self._stable_bpm or 0.0))
             return float(self._stable_bpm or 0.0)
         if self._stable_bpm is not None and abs(raw_bpm - self._stable_bpm) >= self._BPM_JUMP_CONFIRM_DELTA:
+            self._last_bpm_delta = float(raw_bpm - self._stable_bpm)
             cutoff = t_now - self._BPM_JUMP_CONFIRM_SEC
             while self._pending_bpm_jump and self._pending_bpm_jump[0][0] < cutoff:
                 self._pending_bpm_jump.popleft()
@@ -836,8 +853,12 @@ class RppgEngine:
             self._pending_bpm_jump.append((t_now, float(raw_bpm)))
             pending_vals = np.array([v for _, v in self._pending_bpm_jump], dtype=np.float64)
             if pending_vals.size < self._BPM_JUMP_CONFIRM_COUNT:
+                self._last_bpm_guarded = True
+                self._last_bpm_guard_reason = "transient_jump"
                 return float(self._stable_bpm)
             raw_bpm = float(np.median(pending_vals))
+            self._last_bpm_guarded = True
+            self._last_bpm_guard_reason = "confirmed_jump_smoothed"
         else:
             self._pending_bpm_jump.clear()
         self._bpm_candidates.append((t_now, float(raw_bpm)))
@@ -918,6 +939,10 @@ class RppgEngine:
                 + 0.45 * roi_area_stability
             )
             return RppgMetrics(
+                raw_bpm=0.0,
+                bpm_delta=0.0,
+                bpm_guarded=False,
+                bpm_guard_reason="warmup",
                 warmup_progress=warm,
                 frame_brightness=brightness,
                 quality_score=_clamp(0.75 * pose_quality + 0.25 * stability_q),
@@ -987,7 +1012,12 @@ class RppgEngine:
             pf, pv = pf[::step], pv[::step]
 
         return RppgMetrics(
-            bpm=float(bpm), rmssd=float(rmssd), sdnn=float(sdnn),
+            bpm=float(bpm),
+            raw_bpm=float(raw_bpm),
+            bpm_delta=float(self._last_bpm_delta),
+            bpm_guarded=bool(self._last_bpm_guarded),
+            bpm_guard_reason=str(self._last_bpm_guard_reason),
+            rmssd=float(rmssd), sdnn=float(sdnn),
             lf_hf=float(lf_hf), sqi=float(sqi),
             stress_prob=float(prob), stress_status=st,
             hrv_confidence=conf,

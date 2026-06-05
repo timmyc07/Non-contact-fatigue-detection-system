@@ -139,6 +139,22 @@ def test_fatigue_fuser_downweights_rppg_when_both_sources_available() -> None:
     assert score.behavior_weight_eff == 0.85
 
 
+def test_fatigue_fuser_uses_blink_temporal_score() -> None:
+    fuser = FatigueFuser()
+    fatigue = FatigueMetrics(
+        face_detected=True,
+        calibrated=True,
+        perclos=0.05,
+        blink_temporal_score=0.8,
+    )
+
+    score = fuser.update(rppg=None, fatigue=fatigue)
+
+    assert score.behavior_available is True
+    assert score.beh_blink_temporal_score == 0.8
+    assert score.behavior_sub > 0.0
+
+
 def test_fatigue_fuser_ignores_low_quality_rppg() -> None:
     fuser = FatigueFuser()
     rppg = RppgMetrics(
@@ -174,3 +190,7 @@ def test_metrics_recorder_migrates_mediapipe_diagnostics(tmp_path: Path) -> None
     assert "rppg_landmark_jitter_norm" in cols
     assert "rppg_roi_area_stability" in cols
     assert "rppg_canonical_roi_warp_used" in cols
+    assert "raw_bpm" in cols
+    assert "bpm_guard_reason" in cols
+    assert "blink_temporal_score" in cols
+    assert "fused_beh_blink_temporal_score" in cols

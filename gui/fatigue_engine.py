@@ -247,6 +247,7 @@ class FatigueParams:
 
     # PERCLOS
     perclos_window_sec: float  = 60.0
+    low_vigilance_perclos_th: float = 0.10
     tired_perclos_th:   float  = 0.25
     long_closed_sec:    float  = 1.5
     use_stable_face_area: bool = True
@@ -295,6 +296,11 @@ class FatigueParams:
     blend_brow_gate: float = 0.18
     blend_jaw_gate: float = 0.20
 
+    # Blink temporal baseline (duration / amplitude / opening velocity).
+    blink_feature_calib_count: int = 12
+    blink_duration_warn_z: float = 1.5
+    blink_opening_velocity_warn_z: float = -1.5
+
 
 # ── Output metrics dataclass ─────────────────────────────────────────────────
 
@@ -303,7 +309,7 @@ class FatigueMetrics:
     # Overall
     face_detected:  bool  = False
     calibrated:     bool  = False
-    status:         str   = "NO_FACE"   # NO_FACE | CALIBRATING | OK | TIRED | DROWSY | MICROSLEEP
+    status:         str   = "NO_FACE"   # NO_FACE | CALIBRATING | OK | LOW_VIGILANCE | DROWSY | MICROSLEEP
     fatigue_level:  float = 0.0         # composite 0-1
     early_warning:  bool  = False       # cognitive / micro-expression based
 
@@ -313,6 +319,13 @@ class FatigueMetrics:
     blink_count:     int   = 0
     perclos:         float = 0.0
     blink_rate_pm:   float = 0.0        # blinks per minute (60-s sliding window)
+    blink_duration_sec: float = 0.0
+    blink_duration_mean_sec: float = 0.0
+    blink_duration_z: float = 0.0
+    blink_amplitude: float = 0.0
+    blink_opening_velocity: float = 0.0
+    blink_opening_velocity_z: float = 0.0
+    blink_temporal_score: float = 0.0
 
     # V2 micro-expressions
     is_squinting:      bool  = False
@@ -392,6 +405,18 @@ class EyeCognitiveModule:
         self._blink_ok_miss     = 0
         self._blink_timestamps: deque[float] = deque()  # for per-minute rate
         self.blink_rate_pm      = 0.0
+        self._blink_ear_start   = 0.0
+        self._blink_ear_bottom  = 0.0
+        self._blink_bottom_t: Optional[float] = None
+        self._blink_feature_calib: list[tuple[float, float, float]] = []
+        self._blink_feature_baseline: Optional[dict[str, tuple[float, float]]] = None
+        self.blink_duration_sec = 0.0
+        self.blink_duration_mean_sec = 0.0
+        self.blink_duration_z = 0.0
+        self.blink_amplitude = 0.0
+        self.blink_opening_velocity = 0.0
+        self.blink_opening_velocity_z = 0.0
+        self.blink_temporal_score = 0.0
 
         # Fatigue / PERCLOS
         self._fatigue_closed    = False
@@ -467,6 +492,58 @@ class EyeCognitiveModule:
             closed += (t_now - max(self._closed_start, cutoff)) * self._closed_quality
         elapsed = max(1.0, min(t_now - self._calib_start - self.p.calib_sec, w))
         return _clamp(closed / elapsed, 0.0, 1.0)
+
+    def _z_from_baseline(self, key: str, value: float) -> float:
+        if not self._blink_feature_baseline:
+            return 0.0
+        mean, std = self._blink_feature_baseline.get(key, (0.0, 0.0))
+        if std < 1e-6:
+            return 0.0
+        return float((value - mean) / std)
+
+    def _update_blink_features(
+        self,
+        *,
+        duration: float,
+        ear_start: float,
+        ear_bottom: float,
+        ear_end: float,
+        bottom_to_end_sec: float,
+    ) -> None:
+        p = self.p
+        amplitude = max(0.0, ((ear_start + ear_end) * 0.5) - ear_bottom)
+        opening_velocity = (ear_end - ear_bottom) / max(bottom_to_end_sec, 1e-3)
+        self.blink_duration_sec = float(duration)
+        self.blink_amplitude = float(amplitude)
+        self.blink_opening_velocity = float(opening_velocity)
+
+        sample = (float(duration), float(amplitude), float(opening_velocity))
+        if self._blink_feature_baseline is None:
+            self._blink_feature_calib.append(sample)
+            if len(self._blink_feature_calib) >= p.blink_feature_calib_count:
+                arr = np.array(self._blink_feature_calib, dtype=np.float64)
+                self._blink_feature_baseline = {
+                    "duration": (float(np.mean(arr[:, 0])), float(np.std(arr[:, 0], ddof=1))),
+                    "amplitude": (float(np.mean(arr[:, 1])), float(np.std(arr[:, 1], ddof=1))),
+                    "opening_velocity": (float(np.mean(arr[:, 2])), float(np.std(arr[:, 2], ddof=1))),
+                }
+
+        if self._blink_feature_baseline:
+            self.blink_duration_mean_sec = self._blink_feature_baseline["duration"][0]
+            self.blink_duration_z = self._z_from_baseline("duration", duration)
+            self.blink_opening_velocity_z = self._z_from_baseline("opening_velocity", opening_velocity)
+            duration_score = _clamp((self.blink_duration_z - p.blink_duration_warn_z) / 1.5, 0.0, 1.0)
+            velocity_score = _clamp(
+                (p.blink_opening_velocity_warn_z - self.blink_opening_velocity_z) / 1.5,
+                0.0,
+                1.0,
+            )
+            self.blink_temporal_score = _clamp(max(duration_score, velocity_score), 0.0, 1.0)
+        else:
+            self.blink_duration_mean_sec = 0.0
+            self.blink_duration_z = 0.0
+            self.blink_opening_velocity_z = 0.0
+            self.blink_temporal_score = 0.0
 
     # ── Main per-frame step ───────────────────────────────────────────────────
 
@@ -557,7 +634,13 @@ class EyeCognitiveModule:
                     if ear < close_blink:
                         self._blink_closed  = True
                         self._blink_enter_t = t_now
+                        self._blink_ear_start = float(ear_s)
+                        self._blink_ear_bottom = float(ear)
+                        self._blink_bottom_t = t_now
                 else:
+                    if ear < self._blink_ear_bottom:
+                        self._blink_ear_bottom = float(ear)
+                        self._blink_bottom_t = t_now
                     if ear_s > open_blink:
                         self._blink_closed = False
                         if self._blink_enter_t is not None:
@@ -565,13 +648,26 @@ class EyeCognitiveModule:
                             if p.blink_min_sec <= dur <= p.blink_max_sec:
                                 self.blink_count += 1
                                 self._blink_timestamps.append(t_now)
+                                bottom_to_end = (
+                                    t_now - self._blink_bottom_t
+                                    if self._blink_bottom_t is not None else dur * 0.5
+                                )
+                                self._update_blink_features(
+                                    duration=dur,
+                                    ear_start=self._blink_ear_start,
+                                    ear_bottom=self._blink_ear_bottom,
+                                    ear_end=float(ear_s),
+                                    bottom_to_end_sec=bottom_to_end,
+                                )
                         self._blink_enter_t = None
+                        self._blink_bottom_t = None
             else:
                 if self._blink_closed:
                     self._blink_ok_miss += 1
                     if self._blink_ok_miss > p.blink_grace_frames:
                         self._blink_closed  = False
                         self._blink_enter_t = None
+                        self._blink_bottom_t = None
                         self._blink_ok_miss = 0
                 else:
                     self._blink_ok_miss = 0
@@ -1142,6 +1238,8 @@ class FatigueEngine:
             or self.eye.is_frowning
             or self.gaze.gaze_mental_fatigue
             or (self.gaze.fixation_duration > 15.0)
+            or self.eye.last_perclos >= p.low_vigilance_perclos_th
+            or self.eye.blink_temporal_score >= 0.45
             or self.eye.blend_eye_squint > p.blend_squint_gate
             or self.eye.blend_brow_down > p.blend_brow_gate
             or (
@@ -1152,14 +1250,14 @@ class FatigueEngine:
 
         status = "CALIBRATING" if not self.eye.calibrated else "OK"
         if self.eye.calibrated:
+            if early_warning:
+                status = "LOW_VIGILANCE"
             if self.eye.last_perclos >= p.tired_perclos_th:
-                status = "TIRED"
-            if self.eye.long_closed:
                 status = "DROWSY"
+            if self.eye.long_closed:
+                status = "CRITICAL"
             if microsleep_alert:
                 status = "MICROSLEEP"
-            if early_warning and status == "OK":
-                status = "ALERT"
 
         # Composite fatigue (0-1) — V2 weights
         # Pitch nod → heavy weight when it fires
@@ -1169,9 +1267,10 @@ class FatigueEngine:
         fatigue_level = _clamp(
             self.eye.last_perclos * 0.40
             + (1.0 if microsleep_alert else 0.0) * 0.30
+            + self.eye.blink_temporal_score * 0.10
             + (self.eye.squint_duration / 30.0 if self.eye.is_squinting else 0.0) * 0.15
-            + (0.15 if self.eye.is_frowning else 0.0)
-            + (0.10 if self.gaze.gaze_mental_fatigue else 0.0)
+            + (0.08 if self.eye.is_frowning else 0.0)
+            + (0.08 if self.gaze.gaze_mental_fatigue else 0.0)
             + (0.05 if self.eye.blend_eye_squint > p.blend_squint_gate else 0.0)
             + (0.05 if self.eye.blend_brow_down > p.blend_brow_gate else 0.0)
             + (self.head.yawn_count / 10.0) * 0.05,
@@ -1191,6 +1290,13 @@ class FatigueEngine:
             blink_count     = self.eye.blink_count,
             perclos         = self.eye.last_perclos,
             blink_rate_pm   = self.eye.blink_rate_pm,
+            blink_duration_sec = self.eye.blink_duration_sec,
+            blink_duration_mean_sec = self.eye.blink_duration_mean_sec,
+            blink_duration_z = self.eye.blink_duration_z,
+            blink_amplitude = self.eye.blink_amplitude,
+            blink_opening_velocity = self.eye.blink_opening_velocity,
+            blink_opening_velocity_z = self.eye.blink_opening_velocity_z,
+            blink_temporal_score = self.eye.blink_temporal_score,
             # Micro-expressions
             is_squinting    = self.eye.is_squinting,
             squint_duration = self.eye.squint_duration,

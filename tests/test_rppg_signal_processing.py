@@ -81,6 +81,9 @@ def test_bpm_stabilizer_smooths_large_transient_jump() -> None:
 
     assert stable == 72.0
     assert jumped == stable
+    assert engine._last_bpm_guarded is True
+    assert engine._last_bpm_guard_reason == "transient_jump"
+    assert engine._last_bpm_delta == 58.0
 
 
 def test_bpm_stabilizer_confirms_sustained_large_jump() -> None:
@@ -94,6 +97,8 @@ def test_bpm_stabilizer_confirms_sustained_large_jump() -> None:
 
     assert confirmed < 80.0
     assert confirmed > 70.0
+    assert engine._last_bpm_guarded is True
+    assert engine._last_bpm_guard_reason == "confirmed_jump_smoothed"
 
 
 def test_bpm_stabilizer_ignores_implausible_bpm() -> None:
@@ -102,6 +107,8 @@ def test_bpm_stabilizer_ignores_implausible_bpm() -> None:
     frozen = engine._stabilize_bpm(2.0, 250.0)
 
     assert frozen == 72.0
+    assert engine._last_bpm_guarded is True
+    assert engine._last_bpm_guard_reason == "implausible_range"
 
 
 def test_bpm_stabilizer_bootstraps_without_quality_gate() -> None:

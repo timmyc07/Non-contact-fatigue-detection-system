@@ -695,6 +695,7 @@ class PreviewOverlayWindow(QWidget):
         # Component detail — show 2 highest contributing behaviour factors
         factors: list[tuple[float, str]] = [
             (score.beh_perclos_score,     f"PERCLOS {score.beh_perclos_score*100:.0f}%"),
+            (score.beh_blink_temporal_score, f"眨眼時序 {score.beh_blink_temporal_score*100:.0f}%"),
             (score.beh_squint_score,      f"瞇眼 {score.beh_squint_score*100:.0f}%"),
             (score.beh_microsleep_score,  f"微睡眠 {score.beh_microsleep_score*100:.0f}%"),
             (score.beh_gaze_score,        f"凝視 {score.beh_gaze_score*100:.0f}%"),
@@ -722,7 +723,9 @@ class PreviewOverlayWindow(QWidget):
             "CALIBRATING": "#ffd43b",
             "ALERT":       "#74c0fc",
             "TIRED":       "#ffa94d",
+            "LOW_VIGILANCE": "#ffa94d",
             "DROWSY":      "#ff6b6b",
+            "CRITICAL":     "#e03131",
             "MICROSLEEP":  "#e03131",
             "NO_FACE":     "#868e96",
         }
@@ -730,6 +733,7 @@ class PreviewOverlayWindow(QWidget):
         status_zh = {
             "OK": "正常", "CALIBRATING": "校準中",
             "ALERT": "早期警示", "TIRED": "疲勞",
+            "LOW_VIGILANCE": "低警覺", "CRITICAL": "危急",
             "DROWSY": "嗜睡", "MICROSLEEP": "微睡眠！",
             "NO_FACE": "未偵測臉部",
         }.get(metrics.status, metrics.status)
