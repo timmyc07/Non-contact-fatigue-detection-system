@@ -220,3 +220,34 @@ rPPG 生理訊號不使用心率 AI 模型，而是由訊號處理產生：
 - Ghoddoosian, 2019/2022：參考 `alert / low vigilant / drowsy` 三階段與 temporal model 思路，因此新增低警覺分級。
 - Tüfekci et al., 2022：參考以正常表徵建立 baseline、偏離正常視為 anomaly 的概念，因此採用個人化眨眼時序 baseline。
 - 王奕鈞，2026：參考 MediaPipe ROI、雙頰與 Lab 色彩空間在 rPPG 動態情境下的後續優化方向；本次未直接替換已接近精準的 POS 主流程。
+## 12. 2026-06-06 UTA-RLDD 影片回放測試系統
+
+本次新增 `scripts/utarldd_replay.py` 與 GUI「UTA-RLDD 影片測試」入口，讓 UTA-RLDD 影片可被當作可重現的離線鏡頭輸入。此功能不改動 live camera worker；回放核心位於 `gui/utarldd_replay.py`，逐幀讀取 `.mov/.MOV/.mp4`，使用影片 FPS 產生 deterministic timestamp，再共用同一條 `FatigueEngine`、`RppgEngine`、`FatigueFuser` 與 `MetricsRecorder` 記錄流程。
+
+資料集 label 依 UTA-RLDD 官方定義：
+
+- `0 = Alert`
+- `5 = Low Vigilant`
+- `10 = Drowsy`
+
+來源與引用：
+
+- UTA-RLDD official site, https://sites.google.com/view/utarldd/home
+- Reza Ghoddoosian, Marnim Galib, Vassilis Athitsos, "A Realistic Dataset and Baseline Temporal Model for Early Drowsiness Detection", CVPR Workshops, 2019, https://openaccess.thecvf.com/content_CVPRW_2019/html/AMFG/Ghoddoosian_A_Realistic_Dataset_and_Baseline_Temporal_Model_for_Early_Drowsiness_CVPRW_2019_paper.html
+
+本專案參考上述資料的部分，是其三分類警覺度標籤與「以長影片觀察 alert / low vigilant / drowsy 時序趨勢」的驗證思路。第一版不把 label 當作逐幀 ground truth，也不自動覆寫目前工程門檻；它的定位是蒐集趨勢統計，用來比較本系統在 Alert、Low Vigilant、Drowsy 三類影片中的 `LOW_VIGILANCE/DROWSY/CRITICAL` frame ratio、PERCLOS、blink temporal score、fused score、face rate、rPPG quality、SQI 與 BPM guard 次數。
+
+CLI 範例：
+
+```bash
+python -m scripts.utarldd_replay <dataset_root> --max-videos 1 --max-frames 300
+```
+
+輸出預設位於 `recordings/utarldd_runs/<run_timestamp>/`：
+
+- `metrics_utarldd_<subject>_<label>_<timestamp>.db`：沿用 `MetricsRecorder` schema，`camera_label` 寫入 `UTA-RLDD subject=<id> label=<0|5|10>`。
+- `utarldd_summary_<timestamp>.csv`：每支影片的 frame 數、face rate、avg/p95 fatigue score、avg/p95 fused score、PERCLOS、blink temporal、狀態分布、rPPG quality、SQI、BPM guard 次數。
+- `utarldd_manifest_<timestamp>.json`：run metadata、來源 URL、label 對應與每支影片摘要。
+- 可選 `video_utarldd_<subject>_<label>_<timestamp>.mp4`：只有啟用 `--write-annotated-video` 或 GUI 勾選輸出標註影片時產生。
+
+Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 replay DB 可以與一般錄影 DB 一樣被 dashboard 讀取。這項測試可補足目前無法短時間募集大量真人受試者的問題，但仍不能完全取代無人機駕駛員場域真人測試；最終門檻仍應用本場域資料做校正。

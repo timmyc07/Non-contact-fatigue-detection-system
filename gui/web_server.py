@@ -105,6 +105,26 @@ class PlaybackManager:
         self._recordings_cache_mtime: float = 0.0
         self._RECORDINGS_CACHE_TTL: float = 60.0
 
+    def _candidate_recording_dbs(self) -> list[Path]:
+        db_files = set(self.recordings_dir.glob("metrics_*.db"))
+        db_files.update(self.recordings_dir.glob("utarldd_runs/*/metrics_*.db"))
+        return sorted(db_files, key=lambda path: path.stat().st_mtime if path.exists() else 0.0, reverse=True)
+
+    def _recordings_mtime_marker(self) -> float:
+        mtimes: list[float] = []
+        for path in (self.recordings_dir, self.recordings_dir / "utarldd_runs"):
+            if path.exists():
+                try:
+                    mtimes.append(path.stat().st_mtime)
+                except OSError:
+                    pass
+        for db_file in self._candidate_recording_dbs():
+            try:
+                mtimes.append(db_file.stat().st_mtime)
+            except OSError:
+                pass
+        return max(mtimes) if mtimes else 0.0
+
     @staticmethod
     def _parse_filename_datetime(filename: str) -> Optional[datetime]:
         m = re.match(r"metrics_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})", filename)
@@ -117,12 +137,7 @@ class PlaybackManager:
 
     def list_recordings(self) -> list[dict]:
         now = time.time()
-        dir_mtime = 0.0
-        if self.recordings_dir.exists():
-            try:
-                dir_mtime = self.recordings_dir.stat().st_mtime
-            except OSError:
-                dir_mtime = 0.0
+        dir_mtime = self._recordings_mtime_marker()
         if (
             now - self._recordings_cache_time < self._RECORDINGS_CACHE_TTL
             and self._recordings_cache
@@ -134,7 +149,7 @@ class PlaybackManager:
         if not self.recordings_dir.exists():
             return recordings
 
-        for db_file in sorted(self.recordings_dir.glob("metrics_*.db"), reverse=True):
+        for db_file in self._candidate_recording_dbs():
             try:
                 conn = sqlite3.connect(str(db_file))
                 cursor = conn.cursor()
@@ -159,14 +174,16 @@ class PlaybackManager:
                     has_video = False
                     for _ext in (".mp4", ".avi"):
                         _vn = video_stem + _ext
-                        if (self.recordings_dir / _vn).exists():
-                            video_name = _vn
+                        video_path = db_file.parent / _vn
+                        if video_path.exists():
+                            video_name = str(video_path.relative_to(self.recordings_dir).as_posix())
                             has_video = True
                             break
 
+                    filename = str(db_file.relative_to(self.recordings_dir).as_posix())
                     recordings.append(
                         {
-                            "filename": db_file.name,
+                            "filename": filename,
                             "path": str(db_file),
                             "session_name": dt.strftime("%Y/%m/%d %H:%M:%S"),
                             "created": dt.timestamp(),
@@ -437,24 +454,26 @@ def create_app(
         except Exception as e:
             return jsonify({"success": False, "error": str(e)}), 500
 
-    @app.route("/api/video/<filename>")
+    @app.route("/api/video/<path:filename>")
     def serve_video(filename):
         lan_guard = _ensure_lan_endpoint_allowed()
         if lan_guard is not None:
             return lan_guard
-        if ".." in filename or "/" in filename or "\\" in filename:
+        rel_name = str(filename or "").strip().replace("\\", "/")
+        rel_path = Path(rel_name)
+        if not rel_name or rel_path.is_absolute() or any(part in ("", ".", "..") for part in rel_path.parts):
             abort(400)
-        if not filename.lower().endswith((".mp4", ".avi")):
+        if not rel_name.lower().endswith((".mp4", ".avi")):
             abort(400)
 
-        video_path = (playback_manager.recordings_dir / filename).resolve()
+        video_path = (playback_manager.recordings_dir / rel_path).resolve()
         allowed_dir = playback_manager.recordings_dir.resolve()
         if not _is_relative_to(video_path, allowed_dir):
             abort(403)
         if not video_path.exists():
             abort(404)
 
-        mimetype = "video/mp4" if filename.lower().endswith(".mp4") else "video/x-msvideo"
+        mimetype = "video/mp4" if rel_name.lower().endswith(".mp4") else "video/x-msvideo"
         return send_file(
             str(video_path),
             mimetype=mimetype,

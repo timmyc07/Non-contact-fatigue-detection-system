@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+from pathlib import Path
+import json
+
+from gui.utarldd_replay import (
+    UtaRlddVideo,
+    UtaRlddVideoSummary,
+    discover_utarldd_videos,
+    parse_utarldd_label,
+    run_replay_batch,
+    write_summary_csv,
+)
+from scripts.utarldd_replay import _split_csv
+
+
+def test_parse_utarldd_label() -> None:
+    assert parse_utarldd_label(Path("0.mov")) == ("0", "Alert")
+    assert parse_utarldd_label(Path("5.MOV")) == ("5", "Low Vigilant")
+    assert parse_utarldd_label(Path("10.mp4")) == ("10", "Drowsy")
+
+
+def test_parse_utarldd_label_rejects_unknown_label() -> None:
+    try:
+        parse_utarldd_label(Path("1.mov"))
+    except ValueError as exc:
+        assert "UTA-RLDD" in str(exc)
+    else:
+        raise AssertionError("unknown UTA-RLDD label should raise ValueError")
+
+
+def test_discover_utarldd_videos_handles_case_insensitive_extensions(tmp_path: Path) -> None:
+    for name in ("0.mov", "5.mov", "10.MOV", "note.txt"):
+        p = tmp_path / "01" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"stub")
+    p = tmp_path / "02" / "0.mp4"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"stub")
+
+    videos = discover_utarldd_videos(tmp_path)
+
+    assert [(v.subject, v.label, v.path.name) for v in videos] == [
+        ("01", "0", "0.mov"),
+        ("01", "5", "5.mov"),
+        ("01", "10", "10.MOV"),
+        ("02", "0", "0.mp4"),
+    ]
+
+
+def test_discover_utarldd_videos_filters_subject_and_label(tmp_path: Path) -> None:
+    for subject in ("01", "02"):
+        for label in ("0", "5", "10"):
+            p = tmp_path / subject / f"{label}.mov"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"stub")
+
+    videos = discover_utarldd_videos(tmp_path, subjects=["02"], labels=["10"])
+
+    assert len(videos) == 1
+    assert videos[0].subject == "02"
+    assert videos[0].label == "10"
+    assert videos[0].label_name == "Drowsy"
+
+
+def test_discover_utarldd_videos_missing_root_raises(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+
+    try:
+        discover_utarldd_videos(missing)
+    except FileNotFoundError as exc:
+        assert str(missing) in str(exc)
+    else:
+        raise AssertionError("missing root should raise FileNotFoundError")
+
+
+def test_write_summary_csv(tmp_path: Path) -> None:
+    out = tmp_path / "summary.csv"
+    summary = UtaRlddVideoSummary(
+        subject="01",
+        label="0",
+        label_name="Alert",
+        video_path="C:/video/01/0.mov",
+        frames=10,
+        face_frames=9,
+        face_rate=0.9,
+        status="done",
+    )
+
+    write_summary_csv(out, [summary])
+
+    text = out.read_text(encoding="utf-8-sig")
+    assert "subject,label,label_name" in text
+    assert "01,0,Alert" in text
+
+
+def test_split_csv_accepts_repeated_and_comma_values() -> None:
+    assert _split_csv(["01, 02", "03"]) == ["01", "02", "03"]
+    assert _split_csv(["", "  "]) is None
+    assert _split_csv(None) is None
+
+
+def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatch) -> None:
+    videos = [
+        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        UtaRlddVideo("01", "10", "Drowsy", tmp_path / "01" / "10.MOV"),
+    ]
+
+    def fake_discover(root, *, subjects=None, labels=None):
+        assert root == tmp_path / "dataset"
+        return videos
+
+    def fake_replay(video, output_dir, run_stamp, **kwargs):
+        return UtaRlddVideoSummary(
+            subject=video.subject,
+            label=video.label,
+            label_name=video.label_name,
+            video_path=str(video.path),
+            db_path=str(output_dir / f"metrics_utarldd_{video.subject}_{video.label}_{run_stamp}.db"),
+            status="done" if video.label == "0" else "failed",
+            frames=10,
+            face_frames=8,
+            face_rate=0.8,
+        )
+
+    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.utarldd_replay.run_replay_video", fake_replay)
+
+    result = run_replay_batch(tmp_path / "dataset", output_dir=tmp_path / "out", max_videos=2)
+
+    assert result.videos_total == 2
+    assert result.videos_done == 1
+    assert result.videos_failed == 1
+    assert result.summary_csv.exists()
+    assert result.manifest_path.exists()
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["source_url"] == "https://sites.google.com/view/utarldd/home"
+    assert manifest["labels"] == {"0": "Alert", "5": "Low Vigilant", "10": "Drowsy"}
+    assert len(manifest["summaries"]) == 2

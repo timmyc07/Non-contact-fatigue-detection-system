@@ -16,12 +16,14 @@ from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -37,6 +39,7 @@ from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserPro
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
 from gui.preview_overlay_window import PreviewOverlayWindow
+from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
 from rppg.rppg_worker import RppgWorker
 from gui.video_recorder import VideoRecorderWorker
 from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread
@@ -251,6 +254,11 @@ class MainWindow(QMainWindow):
         self._web_frame_interval = 0.2
         self._web_last_emit = 0.0
         self._web_last_frame_emit = 0.0
+        self._utarldd_thread: QThread | None = None
+        self._utarldd_worker: UtaRlddReplayWorker | None = None
+        self._utarldd_dataset_dir: Path | None = None
+        self._utarldd_stopping = False
+        self._close_after_utarldd = False
 
         self._build_menu()
         self._build_central()
@@ -498,6 +506,50 @@ class MainWindow(QMainWindow):
         self._chk_stress.toggled.connect(self._on_stress_toggled)
 
         body_layout.addWidget(gb_ctl)
+
+        # --- UTA-RLDD replay test ---
+        gb_utarldd = QGroupBox("UTA-RLDD 影片測試")
+        uta_l = QVBoxLayout(gb_utarldd)
+
+        uta_row_a = QHBoxLayout()
+        self._btn_utarldd_choose = QPushButton("選擇資料夾")
+        self._btn_utarldd_choose.clicked.connect(self._choose_utarldd_dir)
+        self._lbl_utarldd_dir = QLabel("尚未選擇資料夾")
+        self._lbl_utarldd_dir.setObjectName("hintLabel")
+        self._lbl_utarldd_dir.setWordWrap(True)
+        uta_row_a.addWidget(self._btn_utarldd_choose)
+        uta_row_a.addWidget(self._lbl_utarldd_dir, 1)
+        uta_l.addLayout(uta_row_a)
+
+        uta_row_b = QHBoxLayout()
+        self._btn_utarldd_start = QPushButton("開始批次")
+        self._btn_utarldd_start.setObjectName("primaryButton")
+        self._btn_utarldd_start.clicked.connect(self._start_utarldd_replay)
+        self._btn_utarldd_stop = QPushButton("停止")
+        self._btn_utarldd_stop.setObjectName("dangerButton")
+        self._btn_utarldd_stop.setEnabled(False)
+        self._btn_utarldd_stop.clicked.connect(self._stop_utarldd_replay)
+        self._chk_utarldd_annotated = QCheckBox("輸出標註影片")
+        self._lbl_utarldd_current = QLabel("目前影片：--")
+        self._lbl_utarldd_current.setObjectName("hintLabel")
+        uta_row_b.addWidget(self._btn_utarldd_start)
+        uta_row_b.addWidget(self._btn_utarldd_stop)
+        uta_row_b.addWidget(self._chk_utarldd_annotated)
+        uta_row_b.addWidget(self._lbl_utarldd_current, 1)
+        uta_l.addLayout(uta_row_b)
+
+        uta_row_c = QHBoxLayout()
+        self._bar_utarldd_progress = QProgressBar()
+        self._bar_utarldd_progress.setRange(0, 1)
+        self._bar_utarldd_progress.setValue(0)
+        self._lbl_utarldd_result = QLabel("摘要檔：--")
+        self._lbl_utarldd_result.setObjectName("hintLabel")
+        self._lbl_utarldd_result.setWordWrap(True)
+        uta_row_c.addWidget(self._bar_utarldd_progress, 1)
+        uta_row_c.addWidget(self._lbl_utarldd_result, 2)
+        uta_l.addLayout(uta_row_c)
+
+        body_layout.addWidget(gb_utarldd)
 
         # --- Status strip ---
         stat = QFrame()
@@ -1251,6 +1303,140 @@ class MainWindow(QMainWindow):
         self._log.append(msg)
         self.statusBar().showMessage(msg, 4000)
 
+    def _choose_utarldd_dir(self) -> None:
+        start_dir = Path.home()
+        candidate = Path.home() / "Downloads" / "Fold1_part1"
+        if self._utarldd_dataset_dir is not None:
+            start_dir = self._utarldd_dataset_dir
+        elif candidate.exists():
+            start_dir = candidate
+
+        selected = QFileDialog.getExistingDirectory(self, "選擇 UTA-RLDD 資料夾", str(start_dir))
+        if not selected:
+            return
+        self._utarldd_dataset_dir = Path(selected)
+        self._lbl_utarldd_dir.setText(str(self._utarldd_dataset_dir))
+        self._append_log(f"[UTA-RLDD] 已選擇資料夾：{self._utarldd_dataset_dir}")
+
+    def _start_utarldd_replay(self) -> None:
+        if self._utarldd_thread is not None:
+            return
+        if self._pipeline_running or self._recording:
+            QMessageBox.information(self, "UTA-RLDD 影片測試", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。")
+            return
+        if self._utarldd_dataset_dir is None:
+            self._choose_utarldd_dir()
+            if self._utarldd_dataset_dir is None:
+                return
+        if not self._utarldd_dataset_dir.exists():
+            QMessageBox.warning(self, "UTA-RLDD 影片測試", f"找不到資料夾：\n{self._utarldd_dataset_dir}")
+            return
+
+        thread = QThread(self)
+        worker = UtaRlddReplayWorker(
+            self._utarldd_dataset_dir,
+            write_annotated_video=self._chk_utarldd_annotated.isChecked(),
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_utarldd_progress)
+        worker.finished_ok.connect(self._on_utarldd_finished_ok)
+        worker.failed.connect(self._on_utarldd_failed)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_utarldd_thread_finished)
+
+        self._utarldd_thread = thread
+        self._utarldd_worker = worker
+        self._utarldd_stopping = False
+        self._set_utarldd_controls_running(True)
+        self._bar_utarldd_progress.setRange(0, 0)
+        self._lbl_utarldd_current.setText("目前影片：準備中")
+        self._lbl_utarldd_result.setText("摘要檔：--")
+        self._append_log(f"[UTA-RLDD] 開始批次測試：{self._utarldd_dataset_dir}")
+        thread.start()
+
+    def _stop_utarldd_replay(self) -> None:
+        if self._utarldd_worker is None:
+            return
+        self._utarldd_stopping = True
+        self._utarldd_worker.request_stop()
+        self._btn_utarldd_stop.setEnabled(False)
+        self._btn_utarldd_stop.setText("停止中")
+        self._lbl_utarldd_current.setText("目前影片：正在停止，請稍候")
+        self._append_log("[UTA-RLDD] 已送出停止請求，等待目前 frame 安全收尾")
+
+    def _set_utarldd_controls_running(self, running: bool) -> None:
+        self._btn_utarldd_choose.setEnabled(not running)
+        self._btn_utarldd_start.setEnabled(not running)
+        self._btn_utarldd_stop.setEnabled(running)
+        self._btn_utarldd_stop.setText("停止")
+        self._chk_utarldd_annotated.setEnabled(not running)
+
+    def _on_utarldd_progress(
+        self,
+        event: str,
+        current: int,
+        total: int,
+        summary: UtaRlddVideoSummary | None,
+    ) -> None:
+        if event == "video_start":
+            self._bar_utarldd_progress.setRange(0, max(total, 1))
+            self._bar_utarldd_progress.setValue(max(current - 1, 0))
+            if summary is not None:
+                self._lbl_utarldd_current.setText(
+                    f"目前影片：subject {summary.subject} / label {summary.label} {summary.label_name}"
+                )
+            else:
+                self._lbl_utarldd_current.setText(f"目前影片：{current}/{total}")
+        elif event == "video_done":
+            self._bar_utarldd_progress.setRange(0, max(total, 1))
+            self._bar_utarldd_progress.setValue(current)
+            if summary is not None:
+                self._append_log(
+                    "[UTA-RLDD] 完成 "
+                    f"subject {summary.subject} label {summary.label} "
+                    f"frames={summary.frames} face_rate={summary.face_rate:.2%} status={summary.status}"
+                )
+        elif event == "frame" and summary is not None:
+            if total > 0:
+                self._lbl_utarldd_current.setText(
+                    f"目前影片：subject {summary.subject} / label {summary.label} "
+                    f"{summary.frames}/{total} frames"
+                )
+            else:
+                self._lbl_utarldd_current.setText(
+                    f"目前影片：subject {summary.subject} / label {summary.label} "
+                    f"{summary.frames} frames"
+                )
+
+    def _on_utarldd_finished_ok(self, result: UtaRlddBatchResult) -> None:
+        self._bar_utarldd_progress.setRange(0, max(result.videos_total, 1))
+        self._bar_utarldd_progress.setValue(result.videos_done + result.videos_failed)
+        self._lbl_utarldd_result.setText(f"摘要檔：{result.summary_csv}")
+        stopped = any(summary.status == "stopped" for summary in result.summaries)
+        state = "已停止" if stopped or self._utarldd_stopping else "完成"
+        self._lbl_utarldd_current.setText(f"目前影片：{state}")
+        self._append_log(
+            f"[UTA-RLDD] {state}，完成 {result.videos_done} 支，失敗 {result.videos_failed} 支，"
+            f"輸出：{result.output_dir}"
+        )
+
+    def _on_utarldd_failed(self, msg: str) -> None:
+        self._lbl_utarldd_current.setText("目前影片：批次失敗")
+        self._append_log(f"[UTA-RLDD] 批次失敗：{msg}")
+        QMessageBox.warning(self, "UTA-RLDD 影片測試", msg)
+
+    def _on_utarldd_thread_finished(self) -> None:
+        self._utarldd_thread = None
+        self._utarldd_worker = None
+        self._utarldd_stopping = False
+        self._set_utarldd_controls_running(False)
+        if self._close_after_utarldd:
+            self._close_after_utarldd = False
+            self.close()
+
     def _on_toggle_all(self, checked: bool) -> None:
         for chk in (self._chk_metrics, self._chk_preview):
             chk.blockSignals(True)
@@ -1893,6 +2079,11 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._utarldd_thread is not None:
+            self._close_after_utarldd = True
+            self._stop_utarldd_replay()
+            event.ignore()
+            return
         self._unregister_global_hotkeys()
         self._stop_web_server()
         self._stop_recording()

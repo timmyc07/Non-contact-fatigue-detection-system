@@ -75,6 +75,25 @@ Optional demo:
 python -m rppg.demo_rppg_live
 ```
 
+## UTA-RLDD replay
+
+本專案可把 UTA-RLDD 影片當作可重現的「離線鏡頭」來批次測試，不會改動即時攝影機 worker。UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：https://sites.google.com/view/utarldd/home。
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_replay "%USERPROFILE%\Downloads\Fold1_part1" --max-videos 1 --max-frames 300
+```
+
+常用參數：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_replay "%USERPROFILE%\Downloads\Fold1_part1" --subject 01,02 --label 0,5,10
+.\.venv\Scripts\python.exe -m scripts.utarldd_replay "%USERPROFILE%\Downloads\Fold1_part1" --output-dir recordings\utarldd_runs\test --write-annotated-video
+```
+
+預設輸出到 `recordings/utarldd_runs/<timestamp>/`：每支影片一個 `metrics_utarldd_<subject>_<label>_<timestamp>.db`，整批一份 `utarldd_summary_<timestamp>.csv` 與 `utarldd_manifest_<timestamp>.json`。只有指定 `--write-annotated-video` 才會輸出標註影片，避免容量暴增。
+
+桌面 GUI 也提供「UTA-RLDD 影片測試」區塊，可選資料夾、開始/停止批次、顯示目前 subject/label/video 進度與摘要檔路徑。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
+
 ## MediaPipe tuning and calibration
 
 目前 `active_profile` 預設為 `stable_indoor`，提高 Face Landmarker tracking confidence 並加強 ROI polygon 平滑，目標是降低室內 webcam 下的 landmark 與 ROI 抖動。若環境偏暗或頭部動作較大，可切換 `low_light` 或 `high_motion` 後用固定錄影回放比較。
@@ -158,6 +177,8 @@ fuser /dev/video0
 - `scripts/mediapipe_profile_sweep.py`: 以錄影檔重跑 MediaPipe profiles，輸出偵測與 ROI 穩定度比較。
 - `docs/rppg_technical_report.md`: rPPG 技術、演算法、模型與系統運作說明；可用 `scripts/build_rppg_pdf.py` 產生 PDF。
 - `docs/2026-05-21-mediapipe-landmark-expansion-log.md`: 本次新增 MediaPipe 部位與精準度提升的更新紀錄。
+
+- `scripts/utarldd_replay.py`: UTA-RLDD 影片批次回放測試，輸出 SQLite、CSV summary 與 manifest。
 
 ## Technical reports
 - `docs/system_overview_technical_report.md`: 系統總報告書，整合 rPPG、MediaPipe 疲勞偵測、融合分數、架構、驗證與限制。

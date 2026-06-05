@@ -547,3 +547,35 @@ Behavior sub-score 權重：
 2. 用 recorder 新增欄位回放比較：觀察 `perclos`、`blink_temporal_score`、`blink_duration_z`、`blink_opening_velocity_z`、`status` 與旁人標註是否一致。
 3. 以 false alarm rate per hour、低警覺提前量、危急事件 recall 作為門檻調整指標。
 4. 暫時不要把 rPPG 當疲勞主判定；rPPG 保留為生理負荷/壓力輔助，等有同步心率參考與疲勞標註後再提高權重。
+## 16. 2026-06-06 UTA-RLDD 回放驗證與門檻校正資料
+
+本次新增 UTA-RLDD 影片回放測試，實作檔案為 `gui/utarldd_replay.py` 與 `scripts/utarldd_replay.py`，GUI 入口位於主視窗「UTA-RLDD 影片測試」區塊。它把資料集影片當作離線鏡頭逐幀餵入 MediaPipe Face Landmarker，再依序產生疲勞行為特徵、rPPG 指標與 fused score。此流程不改 live camera worker，也不直接更動現有疲勞門檻。
+
+資料集標籤依 UTA-RLDD 官方定義：
+
+- `0 = Alert`
+- `5 = Low Vigilant`
+- `10 = Drowsy`
+
+出處：
+
+- UTA-RLDD official site, https://sites.google.com/view/utarldd/home
+- Reza Ghoddoosian, Marnim Galib, Vassilis Athitsos, "A Realistic Dataset and Baseline Temporal Model for Early Drowsiness Detection", CVPR Workshops, 2019, https://openaccess.thecvf.com/content_CVPRW_2019/html/AMFG/Ghoddoosian_A_Realistic_Dataset_and_Baseline_Temporal_Model_for_Early_Drowsiness_CVPRW_2019_paper.html
+
+本專案參考此資料集與論文的部分，是 `alert / low vigilant / drowsy` 三階段警覺度標籤、長影片時序驗證思路，以及用資料集影片比較疲勞趨勢的做法。第一版不把 UTA-RLDD label 當逐幀 ground truth；同一支影片只視為整段類別，用於檢查本系統在三種警覺度影片中的統計趨勢是否合理。
+
+回放摘要會輸出：
+
+- 行為疲勞：`avg_fatigue_score`、`p95_fatigue_score`、`avg_perclos`、`max_perclos`、`avg_blink_temporal`、`max_blink_temporal`、`LOW_VIGILANCE/DROWSY/CRITICAL/MICROSLEEP/NO_FACE` frame counts。
+- 融合分數：`avg_fused_score`、`p95_fused_score`。
+- 可用性：frames、face_frames、face_rate、duration_sec、fps、width、height。
+- rPPG 診斷：`avg_rppg_quality`、`avg_sqi`、`avg_bpm`、`bpm_guard_count`。
+
+臉部特徵疲勞基準值的決定方式維持原則：
+
+1. 文獻與資料集提供「哪些特徵應該看」以及分類趨勢，例如 PERCLOS、EAR/閉眼時間、blink temporal、gaze、head pose、yawn 與 low vigilant/drowsy 分層。
+2. 系統目前的工程門檻仍保守維持，不因 UTA-RLDD 單一資料集自動覆蓋。
+3. 使用 UTA-RLDD replay 後，先比較 `0/5/10` 三類影片的分布：Drowsy 影片理論上應有較高 `p95_fatigue_score`、PERCLOS、blink temporal score 與 drowsy/critical frame ratio；Alert 影片應有較低比例。
+4. 若統計趨勢不符合預期，再回到固定錄影與真人標註做 A/B 校正，門檻調整需同時檢查 false alarm rate、miss rate 與 no-face/low-quality 占比。
+
+因此，本次新增的是「校正與驗證資料管線」，不是新的疲勞判定門檻。它能補足受試者不足時的早期測試，但最終仍需無人機駕駛員現場資料確認。

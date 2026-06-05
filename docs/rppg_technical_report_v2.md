@@ -413,3 +413,22 @@ rPPG 指標可能反映壓力、生理負荷或運動狀態，但不能單獨定
 2. 同時輸出 `raw_bpm` 與 stabilized `bpm`，檢查 guard 是否只攔截 artifact，而不是壓掉真實心率變化。
 3. 將 `bpm_guard_reason` 與 `sqi`、`roi_valid_count`、`quality_score`、`landmark_jitter_norm`、`roi_area_stability` 一起分析，找出波動來源。
 4. 若要參考清華碩論導入雙頰 Lab/GRU，應先以 feature flag 或離線 replay 模式測試，通過後再考慮進入即時主流程。
+## 16. 2026-06-06 UTA-RLDD replay 對 rPPG 的使用界線
+
+本次新增的 UTA-RLDD replay 會在離線影片上同步執行 fatigue、rPPG 與 fused score，輸出 SQLite、CSV summary 與 manifest。rPPG 主流程仍維持既有 POS、Butterworth band-pass、Welch peak、IBI/HRV 與 BPM guard，不因資料集回放而替換演算法，避免使用者已測得「接近精準」的 rPPG 行為被不必要改壞。
+
+資料集來源：
+
+- UTA-RLDD official site, https://sites.google.com/view/utarldd/home
+- Reza Ghoddoosian, Marnim Galib, Vassilis Athitsos, "A Realistic Dataset and Baseline Temporal Model for Early Drowsiness Detection", CVPR Workshops, 2019, https://openaccess.thecvf.com/content_CVPRW_2019/html/AMFG/Ghoddoosian_A_Realistic_Dataset_and_Baseline_Temporal_Model_for_Early_Drowsiness_CVPRW_2019_paper.html
+
+UTA-RLDD 官方 label 為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`。本專案使用它來觀察不同警覺度影片中的 rPPG 可用率與穩定度，而不是用來驗證 BPM 絕對準確率。原因是 UTA-RLDD 是駕駛警覺/疲勞影片資料集，並非每支影片都有同步 PPG/ECG 心率 ground truth；因此 report 中只能比較下列診斷欄位：
+
+- `avg_rppg_quality`
+- `avg_sqi`
+- `avg_bpm`
+- `bpm_guard_count`
+- `face_rate`
+- `roi_valid_count`、landmark jitter、ROI area stability 等 DB playback 欄位
+
+若後續要調整 rPPG guard、ROI、color-space 或模型，仍需使用有參考心率的資料或現場量測，並以 MAE、median absolute error、95th percentile error、跳值次數與 guard 次數做 A/B replay。UTA-RLDD replay 的價值在於讓我們確認「疲勞影片中 rPPG 是否仍維持足夠品質」以及「BPM guard 是否有把大幅波動記錄下來」，而不是宣稱心率準確度。
