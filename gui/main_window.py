@@ -11,7 +11,7 @@ from typing import Any, cast
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt, QThread, QTimer, QUrl
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt, QThread, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -552,6 +552,9 @@ class MainWindow(QMainWindow):
         self._lbl_utarldd_preview = QLabel("影片預覽")
         self._lbl_utarldd_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_utarldd_preview.setMinimumHeight(260)
+        self._lbl_utarldd_preview.setMaximumHeight(460)
+        self._lbl_utarldd_preview.setScaledContents(False)
+        self._lbl_utarldd_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._lbl_utarldd_preview.setStyleSheet(
             "background-color: #101318; border: 1px solid #2a2f38; "
             "border-radius: 8px; color: #868e96;"
@@ -1427,8 +1430,15 @@ class MainWindow(QMainWindow):
         if image.isNull():
             return
         pix = QPixmap.fromImage(image)
+        target = self._lbl_utarldd_preview.size()
+        if target.width() <= 0 or target.height() <= 0:
+            target = QSize(640, 360)
+        target = QSize(
+            min(target.width(), 960),
+            min(target.height(), 440),
+        )
         scaled = pix.scaled(
-            self._lbl_utarldd_preview.size(),
+            target,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
