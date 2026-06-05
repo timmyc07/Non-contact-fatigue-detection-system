@@ -3,9 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
+import numpy as np
+
 from gui.utarldd_replay import (
     UtaRlddVideo,
     UtaRlddVideoSummary,
+    _bgr_to_qimage,
     discover_utarldd_videos,
     parse_utarldd_label,
     run_replay_batch,
@@ -119,6 +122,15 @@ def test_split_csv_accepts_repeated_and_comma_values() -> None:
     assert _split_csv(["01, 02", "03"]) == ["01", "02", "03"]
     assert _split_csv(["", "  "]) is None
     assert _split_csv(None) is None
+
+
+def test_bgr_to_qimage_resizes_preview_with_aspect_ratio() -> None:
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+    image = _bgr_to_qimage(frame, max_width=960, max_height=540)
+
+    assert image.width() == 960
+    assert image.height() == 540
 
 
 def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatch) -> None:

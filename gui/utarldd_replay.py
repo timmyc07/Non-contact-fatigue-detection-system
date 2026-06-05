@@ -107,6 +107,9 @@ class UtaRlddBatchResult:
 
 ProgressCallback = Callable[[str, int, int, UtaRlddVideoSummary | None], None]
 PreviewFrameCallback = Callable[[QImage], None]
+_PREVIEW_TARGET_FPS = 20.0
+_PREVIEW_MAX_WIDTH = 960
+_PREVIEW_MAX_HEIGHT = 540
 
 
 def parse_utarldd_label(path: Path) -> tuple[str, str]:
@@ -279,7 +282,18 @@ def _writer_for(path: Path, fps: float, width: int, height: int) -> cv2.VideoWri
     return cv2.VideoWriter(str(path), fourcc, fps if fps > 0 else 30.0, (width, height))
 
 
-def _bgr_to_qimage(bgr: np.ndarray) -> QImage:
+def _bgr_to_qimage(bgr: np.ndarray, *, max_width: int = 0, max_height: int = 0) -> QImage:
+    if max_width > 0 or max_height > 0:
+        height, width = bgr.shape[:2]
+        scale_w = (max_width / width) if max_width > 0 and width > 0 else 1.0
+        scale_h = (max_height / height) if max_height > 0 and height > 0 else 1.0
+        scale = min(scale_w, scale_h, 1.0)
+        if scale < 1.0:
+            bgr = cv2.resize(
+                bgr,
+                (max(1, int(width * scale)), max(1, int(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     rgb = np.ascontiguousarray(rgb)
     height, width = rgb.shape[:2]
@@ -364,6 +378,8 @@ def run_replay_video(
     status_counts: dict[str, int] = {}
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     ts_ms_prev = 0
+    preview_interval_sec = 1.0 / min(max(fps, 1.0), _PREVIEW_TARGET_FPS)
+    next_preview_ts = 0.0
 
     try:
         with _mp_vision.FaceLandmarker.create_from_options(options) as landmarker:
@@ -452,8 +468,16 @@ def run_replay_video(
                 summary.bpm_guard_count += int(payload["bpm_guarded"])
                 if writer is not None:
                     writer.write(annotated)
-                if preview_frame_cb and (summary.frames == 1 or summary.frames % max(1, int(fps / 8.0)) == 0):
-                    preview_frame_cb(_bgr_to_qimage(annotated))
+                if preview_frame_cb and (summary.frames == 1 or timestamp + 1e-9 >= next_preview_ts):
+                    preview_frame_cb(
+                        _bgr_to_qimage(
+                            annotated,
+                            max_width=_PREVIEW_MAX_WIDTH,
+                            max_height=_PREVIEW_MAX_HEIGHT,
+                        )
+                    )
+                    while next_preview_ts <= timestamp + 1e-9:
+                        next_preview_ts += preview_interval_sec
                 if progress_cb and summary.frames % max(1, int(fps)) == 0:
                     progress_cb("frame", summary.frames, total_frames, replace(summary))
     except Exception as exc:

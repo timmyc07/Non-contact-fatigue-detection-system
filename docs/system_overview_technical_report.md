@@ -251,6 +251,6 @@ python -m scripts.utarldd_replay <dataset_root> --max-videos 1 --max-frames 300
 - `utarldd_manifest_<timestamp>.json`：run metadata、來源 URL、label 對應與每支影片摘要。
 - 可選 `video_utarldd_<subject>_<label>_<timestamp>.mp4`：只有啟用 `--write-annotated-video` 或 GUI 勾選輸出標註影片時產生。
 
-GUI 版本會在批次進行時顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，讓操作者可直接確認影片是否被正確偵測，而不必等回放結束後再開標註影片。
+GUI 版本會在批次進行時顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，讓操作者可直接確認影片是否被正確偵測，而不必等回放結束後再開標註影片。為避免主視窗卡頓，預覽會限制影像尺寸並以最高約 20 FPS 顯示；完整 SQLite、CSV 與 manifest 仍保留逐幀分析結果。
 
 Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 replay DB 可以與一般錄影 DB 一樣被 dashboard 讀取。這項測試可補足目前無法短時間募集大量真人受試者的問題，但仍不能完全取代無人機駕駛員場域真人測試；最終門檻仍應用本場域資料做校正。

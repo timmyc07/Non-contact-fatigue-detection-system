@@ -1440,7 +1440,7 @@ class MainWindow(QMainWindow):
         scaled = pix.scaled(
             target,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self._lbl_utarldd_preview.setPixmap(scaled)
         self._lbl_utarldd_preview.setStyleSheet(

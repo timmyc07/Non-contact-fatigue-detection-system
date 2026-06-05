@@ -573,7 +573,7 @@ Behavior sub-score 權重：
 - 可用性：frames、face_frames、face_rate、duration_sec、fps、width、height。
 - rPPG 診斷：`avg_rppg_quality`、`avg_sqi`、`avg_bpm`、`bpm_guard_count`。
 
-GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目的在於讓操作者一邊跑批次一邊確認偵測是否正常。這個預覽不改變 DB 與 CSV 的數值計算，也不會取代完整 SQLite 回放。
+GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目的在於讓操作者一邊跑批次一邊確認偵測是否正常。預覽影像會限制尺寸並以最高約 20 FPS 顯示，降低 GUI 主執行緒負擔；這個預覽不改變 DB 與 CSV 的逐幀數值計算，也不會取代完整 SQLite 回放。
 
 臉部特徵疲勞基準值的決定方式維持原則：
 
