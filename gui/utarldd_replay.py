@@ -284,7 +284,8 @@ def _make_record_payload(
 
 
 def _writer_for(path: Path, fps: float, width: int, height: int) -> cv2.VideoWriter:
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc_fn = getattr(cv2, "VideoWriter_fourcc")
+    fourcc = fourcc_fn(*"mp4v")
     return cv2.VideoWriter(str(path), fourcc, fps if fps > 0 else 30.0, (width, height))
 
 
