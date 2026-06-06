@@ -253,6 +253,6 @@ python -m scripts.utarldd_replay <dataset_root> --max-videos 1 --max-frames 300
 
 GUI 版本會在批次進行時顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，讓操作者可直接確認影片是否被正確偵測，而不必等回放結束後再開標註影片。為避免主視窗卡頓，預覽會限制影像尺寸並以最高約 20 FPS 顯示；完整 SQLite、CSV 與 manifest 仍保留逐幀分析結果。
 
-為了提高大量驗證效率，CLI 支援 `--jobs N` 以 `ProcessPoolExecutor` 平行處理多支影片。平行化單位是「影片」，不是「影格」：同一支影片仍依序送入 MediaPipe VIDEO mode，以維持遞增 timestamp 與 tracking 行為；不同影片則由不同 process 各自建立 Face Landmarker、FatigueEngine、RppgEngine 與 SQLite 輸出。建議完整資料集驗證先以 `--jobs 2` smoke test，再依主機 CPU、記憶體與散熱提高到 `--jobs 4`。
+為了提高大量驗證效率，CLI 支援 `--jobs N` 以 `ProcessPoolExecutor` 平行處理多支影片，GUI 也新增「平行驗證」按鈕與「平行數」設定。平行化單位是「影片」，不是「影格」：同一支影片仍依序送入 MediaPipe VIDEO mode，以維持遞增 timestamp 與 tracking 行為；不同影片則由不同 process 各自建立 Face Landmarker、FatigueEngine、RppgEngine 與 SQLite 輸出。GUI 的「開始批次」保留單工標註預覽，適合抽查；「平行驗證」停用預覽、使用多進程，適合完整資料集驗證。建議先以平行數 2 smoke test，再依主機 CPU、記憶體與散熱提高到平行數 4。
 
 Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 replay DB 可以與一般錄影 DB 一樣被 dashboard 讀取。這項測試可補足目前無法短時間募集大量真人受試者的問題，但仍不能完全取代無人機駕駛員場域真人測試；最終門檻仍應用本場域資料做校正。

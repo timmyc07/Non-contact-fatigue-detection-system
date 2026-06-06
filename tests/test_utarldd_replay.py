@@ -223,7 +223,7 @@ def test_run_replay_batch_parallel_keeps_video_order(tmp_path: Path, monkeypatch
     monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
     monkeypatch.setattr("gui.utarldd_replay._run_replay_video_process_job", fake_process_job)
     monkeypatch.setattr("gui.utarldd_replay.ProcessPoolExecutor", FakeExecutor)
-    monkeypatch.setattr("gui.utarldd_replay.as_completed", lambda futures: reversed(list(futures)))
+    monkeypatch.setattr("gui.utarldd_replay.wait", lambda futures, timeout, return_when: (set(futures), set()))
 
     result = run_replay_batch(tmp_path / "dataset", output_dir=tmp_path / "out", jobs=2)
 

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -259,6 +260,7 @@ class MainWindow(QMainWindow):
         self._utarldd_dataset_dir: Path | None = None
         self._utarldd_stopping = False
         self._close_after_utarldd = False
+        self._utarldd_mode_label = "回放中"
 
         self._build_menu()
         self._build_central()
@@ -525,15 +527,23 @@ class MainWindow(QMainWindow):
         self._btn_utarldd_start = QPushButton("開始批次")
         self._btn_utarldd_start.setObjectName("primaryButton")
         self._btn_utarldd_start.clicked.connect(self._start_utarldd_replay)
+        self._btn_utarldd_parallel = QPushButton("平行驗證")
+        self._btn_utarldd_parallel.clicked.connect(self._start_utarldd_parallel_replay)
         self._btn_utarldd_stop = QPushButton("停止")
         self._btn_utarldd_stop.setObjectName("dangerButton")
         self._btn_utarldd_stop.setEnabled(False)
         self._btn_utarldd_stop.clicked.connect(self._stop_utarldd_replay)
+        self._spn_utarldd_jobs = QSpinBox()
+        self._spn_utarldd_jobs.setRange(1, 8)
+        self._spn_utarldd_jobs.setValue(2)
+        self._spn_utarldd_jobs.setPrefix("平行數 ")
         self._chk_utarldd_annotated = QCheckBox("輸出標註影片")
         self._lbl_utarldd_current = QLabel("目前影片：--")
         self._lbl_utarldd_current.setObjectName("hintLabel")
         uta_row_b.addWidget(self._btn_utarldd_start)
+        uta_row_b.addWidget(self._btn_utarldd_parallel)
         uta_row_b.addWidget(self._btn_utarldd_stop)
+        uta_row_b.addWidget(self._spn_utarldd_jobs)
         uta_row_b.addWidget(self._chk_utarldd_annotated)
         uta_row_b.addWidget(self._lbl_utarldd_current, 1)
         uta_l.addLayout(uta_row_b)
@@ -1336,6 +1346,13 @@ class MainWindow(QMainWindow):
         self._append_log(f"[UTA-RLDD] 已選擇資料夾：{self._utarldd_dataset_dir}")
 
     def _start_utarldd_replay(self) -> None:
+        self._start_utarldd_run(jobs=1, preview_enabled=True, mode_label="回放中")
+
+    def _start_utarldd_parallel_replay(self) -> None:
+        jobs = max(1, int(self._spn_utarldd_jobs.value()))
+        self._start_utarldd_run(jobs=jobs, preview_enabled=False, mode_label=f"平行驗證中 x{jobs}")
+
+    def _start_utarldd_run(self, *, jobs: int, preview_enabled: bool, mode_label: str) -> None:
         if self._utarldd_thread is not None:
             return
         if self._pipeline_running or self._recording:
@@ -1353,11 +1370,14 @@ class MainWindow(QMainWindow):
         worker = UtaRlddReplayWorker(
             self._utarldd_dataset_dir,
             write_annotated_video=self._chk_utarldd_annotated.isChecked(),
+            jobs=jobs,
+            preview_enabled=preview_enabled,
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._on_utarldd_progress)
-        worker.preview_frame.connect(self._on_utarldd_preview_frame)
+        if preview_enabled:
+            worker.preview_frame.connect(self._on_utarldd_preview_frame)
         worker.finished_ok.connect(self._on_utarldd_finished_ok)
         worker.failed.connect(self._on_utarldd_failed)
         worker.finished.connect(thread.quit)
@@ -1368,18 +1388,25 @@ class MainWindow(QMainWindow):
         self._utarldd_thread = thread
         self._utarldd_worker = worker
         self._utarldd_stopping = False
+        self._utarldd_mode_label = mode_label
         self._set_utarldd_controls_running(True)
         self._bar_utarldd_progress.setRange(0, 0)
         self._lbl_utarldd_current.setText("目前影片：準備中")
         self._lbl_utarldd_result.setText("摘要檔：--")
         self._lbl_utarldd_preview.clear()
-        self._lbl_utarldd_preview.setText("影片預覽載入中")
-        self._lbl_pipeline.setText("管線：UTA-RLDD 回放中")
+        if preview_enabled:
+            self._lbl_utarldd_preview.setText("影片預覽載入中")
+        else:
+            self._lbl_utarldd_preview.setText("平行驗證中：預覽停用，以提升批次速度")
+        self._lbl_pipeline.setText(f"管線：UTA-RLDD {mode_label}")
         self._lbl_camera.setText("影片：準備中")
         self._lbl_face.setText("臉部：統計中")
         self._lbl_fps.setText("FPS：—")
         self._lbl_codec.setText("解析度：—")
-        self._append_log(f"[UTA-RLDD] 開始批次測試：{self._utarldd_dataset_dir}")
+        self._append_log(
+            f"[UTA-RLDD] 開始{mode_label}：{self._utarldd_dataset_dir} "
+            f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
+        )
         thread.start()
 
     def _stop_utarldd_replay(self) -> None:
@@ -1396,8 +1423,10 @@ class MainWindow(QMainWindow):
     def _set_utarldd_controls_running(self, running: bool) -> None:
         self._btn_utarldd_choose.setEnabled(not running)
         self._btn_utarldd_start.setEnabled(not running)
+        self._btn_utarldd_parallel.setEnabled(not running)
         self._btn_utarldd_stop.setEnabled(running)
         self._btn_utarldd_stop.setText("停止")
+        self._spn_utarldd_jobs.setEnabled(not running)
         self._chk_utarldd_annotated.setEnabled(not running)
 
     def _on_utarldd_progress(
@@ -1414,14 +1443,14 @@ class MainWindow(QMainWindow):
                 self._lbl_utarldd_current.setText(
                     f"目前影片：subject {summary.subject} / label {summary.label} {summary.label_name}"
                 )
-                self._update_utarldd_status_strip(summary, prefix="UTA-RLDD 回放中")
+                self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
             else:
                 self._lbl_utarldd_current.setText(f"目前影片：{current}/{total}")
         elif event == "video_done":
             self._bar_utarldd_progress.setRange(0, max(total, 1))
             self._bar_utarldd_progress.setValue(current)
             if summary is not None:
-                self._update_utarldd_status_strip(summary, prefix="UTA-RLDD 回放中")
+                self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
                 self._append_log(
                     "[UTA-RLDD] 完成 "
                     f"subject {summary.subject} label {summary.label} "
@@ -1438,7 +1467,7 @@ class MainWindow(QMainWindow):
                     f"目前影片：subject {summary.subject} / label {summary.label} "
                     f"{summary.frames} frames"
                 )
-            self._update_utarldd_status_strip(summary, prefix="UTA-RLDD 回放中")
+            self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
 
     def _update_utarldd_status_strip(self, summary: UtaRlddVideoSummary, *, prefix: str) -> None:
         self._lbl_pipeline.setText(f"管線：{prefix}")
@@ -1503,6 +1532,7 @@ class MainWindow(QMainWindow):
         self._utarldd_thread = None
         self._utarldd_worker = None
         self._utarldd_stopping = False
+        self._utarldd_mode_label = "回放中"
         self._set_utarldd_controls_running(False)
         if self._close_after_utarldd:
             self._close_after_utarldd = False

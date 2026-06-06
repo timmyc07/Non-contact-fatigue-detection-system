@@ -93,7 +93,7 @@ python -m rppg.demo_rppg_live
 
 預設輸出到 `recordings/utarldd_runs/<timestamp>/`：每支影片一個 `metrics_utarldd_<subject>_<label>_<timestamp>.db`，整批會輸出好讀摘要 `utarldd_summary_<timestamp>.csv`、完整欄位 `utarldd_summary_full_<timestamp>.csv` 與 `utarldd_manifest_<timestamp>.json`。只有指定 `--write-annotated-video` 才會輸出標註影片，避免容量暴增。
 
-CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。桌面 GUI 也提供「UTA-RLDD 影片測試」區塊，可選資料夾、開始/停止批次、顯示目前 subject/label/video 進度、MediaPipe 人臉特徵與 ROI 標註預覽，以及摘要檔路徑。GUI 預覽為了保持主視窗流暢，會以最高約 20 FPS 顯示並限制預覽影像尺寸；這只影響螢幕顯示，不影響 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
+CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。桌面 GUI 也提供「UTA-RLDD 影片測試」區塊，可選資料夾、開始/停止批次、顯示目前 subject/label/video 進度、MediaPipe 人臉特徵與 ROI 標註預覽，以及摘要檔路徑。`開始批次` 會啟用單工預覽，適合抽查偵測畫面；`平行驗證` 會依 GUI 的「平行數」設定使用多進程、停用預覽，適合正式大量驗證。GUI 預覽為了保持主視窗流暢，會以最高約 20 FPS 顯示並限制預覽影像尺寸；這只影響螢幕顯示，不影響 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
 
 ## MediaPipe tuning and calibration
 
