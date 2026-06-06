@@ -11,6 +11,7 @@ import json
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -111,6 +112,10 @@ PreviewFrameCallback = Callable[[QImage], None]
 _PREVIEW_TARGET_FPS = 20.0
 _PREVIEW_MAX_WIDTH = 960
 _PREVIEW_MAX_HEIGHT = 540
+_BROKEN_POOL_MESSAGE = (
+    "平行處理子行程異常中止。常見原因是平行數過高、同時輸出標註影片造成記憶體/編碼器壓力，"
+    "或特定影片 codec 讓 OpenCV/MediaPipe 子行程崩潰。請先關閉輸出標註影片，並把平行數降到 2-4 後重跑。"
+)
 
 
 def parse_utarldd_label(path: Path) -> tuple[str, str]:
@@ -527,6 +532,24 @@ def _run_replay_video_process_job(args: tuple[UtaRlddVideo, str, str, int, bool]
     )
 
 
+def _failed_replay_summary(video: UtaRlddVideo, error: str) -> UtaRlddVideoSummary:
+    return UtaRlddVideoSummary(
+        subject=video.subject,
+        label=video.label,
+        label_name=video.label_name,
+        video_path=str(video.path),
+        status="failed",
+        error=error,
+    )
+
+
+def _broken_pool_error(exc: BaseException) -> str:
+    detail = str(exc).strip()
+    if detail:
+        return f"{_BROKEN_POOL_MESSAGE} 原始錯誤：{detail}"
+    return _BROKEN_POOL_MESSAGE
+
+
 def _pct(value: float) -> float:
     return round(float(value) * 100.0, 2)
 
@@ -676,6 +699,9 @@ def run_replay_batch(
     effective_jobs = max(1, int(jobs or 1))
     if preview_frame_cb is not None:
         effective_jobs = 1
+    write_annotated_video_effective = bool(write_annotated_video)
+    if effective_jobs > 1:
+        write_annotated_video_effective = False
 
     if effective_jobs <= 1 or len(videos) <= 1:
         for index, video in enumerate(videos, start=1):
@@ -698,7 +724,7 @@ def run_replay_batch(
                 output_dir,
                 run_stamp,
                 max_frames=max_frames,
-                write_annotated_video=write_annotated_video,
+                write_annotated_video=write_annotated_video_effective,
                 progress_cb=progress_cb,
                 preview_frame_cb=preview_frame_cb,
                 stop_requested=stop_requested,
@@ -710,13 +736,25 @@ def run_replay_batch(
         indexed: list[tuple[int, UtaRlddVideo]] = list(enumerate(videos, start=1))
         summary_by_index: dict[int, UtaRlddVideoSummary] = {}
         max_workers = min(effective_jobs, len(indexed))
+        pool_error: str | None = None
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             pending_items = indexed.copy()
             future_to_index = {}
             running = set()
             done_count = 0
 
+            def mark_failed(index: int, video: UtaRlddVideo, error: str) -> None:
+                nonlocal done_count
+                if index in summary_by_index:
+                    return
+                summary = _failed_replay_summary(video, error)
+                summary_by_index[index] = summary
+                done_count += 1
+                if progress_cb:
+                    progress_cb("video_done", done_count, len(videos), summary)
+
             def submit_next() -> bool:
+                nonlocal pool_error
                 if not pending_items:
                     return False
                 if stop_requested is not None and stop_requested():
@@ -734,10 +772,15 @@ def run_replay_batch(
                             video_path=str(video.path),
                         ),
                     )
-                future = executor.submit(
-                    _run_replay_video_process_job,
-                    (video, str(output_dir), run_stamp, max_frames, write_annotated_video),
-                )
+                try:
+                    future = executor.submit(
+                        _run_replay_video_process_job,
+                        (video, str(output_dir), run_stamp, max_frames, write_annotated_video_effective),
+                    )
+                except BrokenProcessPool as exc:
+                    pool_error = _broken_pool_error(exc)
+                    mark_failed(index, video, pool_error)
+                    return False
                 future_to_index[future] = (index, video)
                 running.add(future)
                 return True
@@ -746,6 +789,10 @@ def run_replay_batch(
                 submit_next()
 
             while running:
+                if pool_error is not None:
+                    for future in list(running):
+                        future.cancel()
+                    break
                 if stop_requested is not None and stop_requested():
                     pending_items.clear()
                     for future in list(running):
@@ -756,20 +803,26 @@ def run_replay_batch(
                     done_count += 1
                     try:
                         summary = future.result()
+                    except BrokenProcessPool as exc:
+                        pool_error = _broken_pool_error(exc)
+                        summary = _failed_replay_summary(video, pool_error)
                     except Exception as exc:
-                        summary = UtaRlddVideoSummary(
-                            subject=video.subject,
-                            label=video.label,
-                            label_name=video.label_name,
-                            video_path=str(video.path),
-                            status="failed",
-                            error=str(exc),
-                        )
+                        summary = _failed_replay_summary(video, str(exc))
                     summary_by_index[index] = summary
                     if progress_cb:
                         progress_cb("video_done", done_count, len(videos), summary)
+                    if pool_error is not None:
+                        for future_left in list(running):
+                            future_left.cancel()
+                        break
+                if pool_error is not None:
+                    break
                 while len(running) < max_workers and submit_next():
                     pass
+        if pool_error is not None:
+            for index, video in indexed:
+                if index not in summary_by_index:
+                    summary_by_index[index] = _failed_replay_summary(video, pool_error)
         summaries = [summary_by_index[index] for index, _video in indexed if index in summary_by_index]
 
     summary_csv = output_dir / f"utarldd_summary_{run_stamp}.csv"
@@ -786,6 +839,10 @@ def run_replay_batch(
         "source": "UTA-RLDD",
         "source_url": "https://sites.google.com/view/utarldd/home",
         "labels": UTARLDD_LABELS,
+        "jobs_requested": int(jobs or 1),
+        "jobs_effective": effective_jobs,
+        "write_annotated_video_requested": bool(write_annotated_video),
+        "write_annotated_video_effective": write_annotated_video_effective,
         "videos_total": len(videos),
         "videos_done": sum(1 for s in summaries if s.status == "done"),
         "videos_failed": sum(1 for s in summaries if s.status == "failed"),

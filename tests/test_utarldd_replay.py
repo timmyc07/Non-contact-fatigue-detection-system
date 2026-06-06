@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 import json
 
@@ -234,3 +235,128 @@ def test_run_replay_batch_parallel_keeps_video_order(tmp_path: Path, monkeypatch
     ]
     assert result.videos_total == 3
     assert result.videos_done == 3
+
+
+def test_run_replay_batch_parallel_handles_broken_process_pool(tmp_path: Path, monkeypatch) -> None:
+    videos = [
+        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        UtaRlddVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
+        UtaRlddVideo("01", "10", "Drowsy", tmp_path / "01" / "10.mov"),
+    ]
+    events = []
+
+    def fake_discover(root, *, subjects=None, labels=None):
+        return videos
+
+    class BrokenFuture:
+        def result(self):
+            raise BrokenProcessPool("worker died")
+
+        def cancel(self):
+            return True
+
+    class FakeExecutor:
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, args):
+            return BrokenFuture()
+
+    def fake_wait(futures, timeout, return_when):
+        first = next(iter(futures))
+        remaining = set(futures)
+        remaining.remove(first)
+        return {first}, remaining
+
+    def progress(event, current, total, summary):
+        if event == "video_done" and summary is not None:
+            events.append((current, total, summary.subject, summary.label, summary.status, summary.error))
+
+    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.utarldd_replay.ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr("gui.utarldd_replay.wait", fake_wait)
+
+    result = run_replay_batch(
+        tmp_path / "dataset",
+        output_dir=tmp_path / "out",
+        jobs=2,
+        progress_cb=progress,
+    )
+
+    assert result.videos_total == 3
+    assert result.videos_done == 0
+    assert result.videos_failed == 3
+    assert all(summary.status == "failed" for summary in result.summaries)
+    assert all("平行處理子行程異常中止" in summary.error for summary in result.summaries)
+    assert result.summary_csv.exists()
+    assert result.full_summary_csv.exists()
+    assert result.manifest_path.exists()
+    assert events
+
+
+def test_run_replay_batch_parallel_disables_annotated_video(tmp_path: Path, monkeypatch) -> None:
+    videos = [
+        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        UtaRlddVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
+    ]
+    annotated_flags = []
+
+    def fake_discover(root, *, subjects=None, labels=None):
+        return videos
+
+    def fake_process_job(args):
+        video, output_dir, run_stamp, _max_frames, write_annotated_video = args
+        annotated_flags.append(write_annotated_video)
+        return UtaRlddVideoSummary(
+            subject=video.subject,
+            label=video.label,
+            label_name=video.label_name,
+            video_path=str(video.path),
+            db_path=str(Path(output_dir) / f"metrics_utarldd_{video.subject}_{video.label}_{run_stamp}.db"),
+            status="done",
+            frames=10,
+        )
+
+    class FakeFuture:
+        def __init__(self, value):
+            self._value = value
+
+        def result(self):
+            return self._value
+
+    class FakeExecutor:
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, args):
+            return FakeFuture(fn(args))
+
+    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.utarldd_replay._run_replay_video_process_job", fake_process_job)
+    monkeypatch.setattr("gui.utarldd_replay.ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr("gui.utarldd_replay.wait", lambda futures, timeout, return_when: (set(futures), set()))
+
+    result = run_replay_batch(
+        tmp_path / "dataset",
+        output_dir=tmp_path / "out",
+        jobs=2,
+        write_annotated_video=True,
+    )
+
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert result.videos_done == 2
+    assert annotated_flags == [False, False]
+    assert manifest["write_annotated_video_requested"] is True
+    assert manifest["write_annotated_video_effective"] is False

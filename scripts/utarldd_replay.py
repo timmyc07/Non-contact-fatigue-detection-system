@@ -24,7 +24,11 @@ def main() -> None:
     parser.add_argument("--subject", action="append", help="只處理指定受試者，可重複或用逗號分隔，例如 01,02")
     parser.add_argument("--label", action="append", help="只處理指定 label，可重複或用逗號分隔，例如 0,5,10")
     parser.add_argument("--jobs", type=int, default=1, help="平行處理影片數，建議 2-4；預設 1")
-    parser.add_argument("--write-annotated-video", action="store_true", help="額外輸出標註後 mp4，預設關閉")
+    parser.add_argument(
+        "--write-annotated-video",
+        action="store_true",
+        help="額外輸出標註後 mp4，預設關閉；jobs > 1 時會自動停用以降低多進程資源壓力",
+    )
     args = parser.parse_args()
 
     def progress(event: str, current: int, total: int, summary) -> None:

@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         self._btn_utarldd_stop.setEnabled(False)
         self._btn_utarldd_stop.clicked.connect(self._stop_utarldd_replay)
         self._spn_utarldd_jobs = QSpinBox()
-        self._spn_utarldd_jobs.setRange(1, 8)
+        self._spn_utarldd_jobs.setRange(1, 4)
         self._spn_utarldd_jobs.setValue(2)
         self._spn_utarldd_jobs.setPrefix("平行數 ")
         self._chk_utarldd_annotated = QCheckBox("輸出標註影片")
@@ -1359,6 +1359,19 @@ class MainWindow(QMainWindow):
 
     def _start_utarldd_parallel_replay(self) -> None:
         jobs = max(1, int(self._spn_utarldd_jobs.value()))
+        if jobs > 4:
+            jobs = 4
+            self._spn_utarldd_jobs.setValue(jobs)
+            self._append_log("[UTA-RLDD] 平行數已自動降為 4，避免 Windows 多進程與 MediaPipe/影片編碼器資源壓力過高")
+        if self._chk_utarldd_annotated.isChecked():
+            self._chk_utarldd_annotated.setChecked(False)
+            self._append_log("[UTA-RLDD] 平行驗證已自動關閉輸出標註影片；需要標註畫面請用「開始批次」單工模式")
+            QMessageBox.information(
+                self,
+                "UTA-RLDD 平行驗證",
+                "平行驗證會同時啟動多個 MediaPipe/影片解碼流程。為避免子行程崩潰，已自動關閉「輸出標註影片」。\n\n"
+                "需要標註影片時，請改用「開始批次」單工模式。正式大量驗證建議平行數 2-4。",
+            )
         self._start_utarldd_run(jobs=jobs, preview_enabled=False, mode_label=f"平行驗證中 x{jobs}")
 
     def _start_utarldd_run(self, *, jobs: int, preview_enabled: bool, mode_label: str) -> None:
@@ -1577,7 +1590,12 @@ class MainWindow(QMainWindow):
             f"摘要檔：{result.summary_csv}\n完整欄位：{result.full_summary_csv}"
         )
         stopped = any(summary.status == "stopped" for summary in result.summaries)
-        state = "已停止" if stopped or self._utarldd_stopping else "完成"
+        if stopped or self._utarldd_stopping:
+            state = "已停止"
+        elif result.videos_failed > 0:
+            state = "完成但有失敗"
+        else:
+            state = "完成"
         self._lbl_utarldd_current.setText(f"目前影片：{state}")
         self._utarldd_done_count = result.videos_done + result.videos_failed
         self._utarldd_total_count = result.videos_total
