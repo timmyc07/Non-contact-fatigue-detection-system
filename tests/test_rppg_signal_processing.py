@@ -12,7 +12,9 @@ if str(ROOT) not in sys.path:
 from rppg.rppg_worker import (  # noqa: E402
     RppgEngine,
     butter_bandpass,
+    compute_sqi,
     ibi_artifact_ratio,
+    lf_hf_from_tachogram,
     validate_ibi_intervals,
     welch_peak_hz,
 )
@@ -40,6 +42,19 @@ def test_welch_peak_keeps_sub_10_bpm_detail() -> None:
     peak_hz, _, _ = welch_peak_hz(filtered, fs)
 
     assert abs(peak_hz * 60.0 - 73.0) < 2.0
+
+
+def test_welch_helpers_handle_short_signal_without_overlap_error() -> None:
+    short = np.sin(np.linspace(0.0, np.pi, 16))
+
+    peak_hz, freqs, pxx = welch_peak_hz(short, 30.0)
+    sqi = compute_sqi(short, 30.0)
+    lf_hf = lf_hf_from_tachogram(np.full(8, 800.0))
+
+    assert peak_hz >= 0.0
+    assert freqs.size == pxx.size
+    assert sqi == 0.0
+    assert lf_hf >= 0.0
 
 
 def test_validate_ibi_removes_local_outlier() -> None:

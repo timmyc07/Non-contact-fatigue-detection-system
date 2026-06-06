@@ -100,6 +100,7 @@ class UtaRlddBatchResult:
     output_dir: Path
     summary_csv: Path
     full_summary_csv: Path
+    validation_report_csv: Path
     manifest_path: Path
     videos_total: int
     videos_done: int
@@ -673,6 +674,177 @@ def write_full_summary_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> 
             writer.writerow(asdict(summary))
 
 
+def _ratio(numerator: int | float, denominator: int | float) -> float:
+    return float(numerator) / max(float(denominator), 1.0)
+
+
+def _mean(values: list[float]) -> float:
+    return float(sum(values) / len(values)) if values else 0.0
+
+
+def _validation_score(summary: UtaRlddVideoSummary) -> float:
+    drowsy_ratio = _ratio(
+        summary.drowsy_frames + summary.critical_frames + summary.microsleep_frames,
+        summary.frames,
+    )
+    low_ratio = _ratio(summary.low_vigilance_frames, summary.frames)
+    return float(
+        0.35 * summary.p95_fused_score
+        + 0.25 * summary.p95_fatigue_score
+        + 0.25 * drowsy_ratio
+        + 0.10 * low_ratio
+        + 0.05 * summary.max_perclos
+    )
+
+
+def _trend_label(v0: float, v5: float, v10: float, *, epsilon: float) -> str:
+    if v0 + epsilon <= v5 and v5 + epsilon <= v10:
+        return "完整上升"
+    if v0 + epsilon <= v10:
+        return "Drowsy高於Alert"
+    if v10 + epsilon < v0:
+        return "反向"
+    return "趨勢不明"
+
+
+def _validation_conclusion(rows_done: int, rows_failed: int, monotonic_rate: float, drowsy_gt_alert_rate: float) -> str:
+    if rows_done == 0:
+        return "無有效完成影片，不能驗證"
+    if rows_failed > 0:
+        base = "部分影片失敗，僅能作初步趨勢"
+    else:
+        base = "資料完整"
+    if drowsy_gt_alert_rate >= 0.75 and monotonic_rate >= 0.50:
+        return f"{base}；趨勢支持系統"
+    if drowsy_gt_alert_rate >= 0.50:
+        return f"{base}；部分支持但需校正門檻"
+    return f"{base}；目前不支持分類有效"
+
+
+def write_validation_report_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
+    """Write validation-oriented label/subject trend checks for UTA-RLDD."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    done = [s for s in summaries if s.status == "done"]
+    failed = [s for s in summaries if s.status == "failed"]
+    fieldnames = [
+        "列類型",
+        "受試者",
+        "資料集標籤",
+        "警覺類別",
+        "完成影片數",
+        "失敗影片數",
+        "人臉偵測率平均(%)",
+        "平均疲勞分數",
+        "95分位疲勞分數",
+        "平均融合分數",
+        "95分位融合分數",
+        "平均PERCLOS(%)",
+        "最高PERCLOS平均(%)",
+        "低警覺比例(%)",
+        "嗜睡危急比例(%)",
+        "驗證綜合分數",
+        "趨勢判定",
+        "結論",
+        "備註",
+    ]
+    by_subject: dict[str, dict[str, UtaRlddVideoSummary]] = {}
+    for summary in done:
+        by_subject.setdefault(summary.subject, {})[summary.label] = summary
+
+    subject_trends: list[str] = []
+    for label_map in by_subject.values():
+        if {"0", "5", "10"}.issubset(label_map):
+            s0 = _validation_score(label_map["0"])
+            s5 = _validation_score(label_map["5"])
+            s10 = _validation_score(label_map["10"])
+            subject_trends.append(_trend_label(s0, s5, s10, epsilon=0.005))
+    monotonic_rate = _ratio(subject_trends.count("完整上升"), len(subject_trends))
+    drowsy_gt_alert_rate = _ratio(
+        sum(1 for trend in subject_trends if trend in {"完整上升", "Drowsy高於Alert"}),
+        len(subject_trends),
+    )
+    conclusion = _validation_conclusion(len(done), len(failed), monotonic_rate, drowsy_gt_alert_rate)
+
+    def aggregate_row(label: str) -> dict[str, object]:
+        group = [s for s in done if s.label == label]
+        frames = sum(s.frames for s in group)
+        low = sum(s.low_vigilance_frames for s in group)
+        drowsy = sum(s.drowsy_frames + s.critical_frames + s.microsleep_frames for s in group)
+        return {
+            "列類型": "label_summary",
+            "受試者": "ALL",
+            "資料集標籤": label,
+            "警覺類別": UTARLDD_LABELS.get(label, ""),
+            "完成影片數": len(group),
+            "失敗影片數": sum(1 for s in failed if s.label == label),
+            "人臉偵測率平均(%)": _pct(_mean([s.face_rate for s in group])),
+            "平均疲勞分數": _num(_mean([s.avg_fatigue_score for s in group])),
+            "95分位疲勞分數": _num(_mean([s.p95_fatigue_score for s in group])),
+            "平均融合分數": _num(_mean([s.avg_fused_score for s in group])),
+            "95分位融合分數": _num(_mean([s.p95_fused_score for s in group])),
+            "平均PERCLOS(%)": _pct(_mean([s.avg_perclos for s in group])),
+            "最高PERCLOS平均(%)": _pct(_mean([s.max_perclos for s in group])),
+            "低警覺比例(%)": _pct(_ratio(low, frames)),
+            "嗜睡危急比例(%)": _pct(_ratio(drowsy, frames)),
+            "驗證綜合分數": _num(_mean([_validation_score(s) for s in group])),
+            "趨勢判定": "",
+            "結論": conclusion,
+            "備註": "依完成影片統計；failed 影片不納入均值",
+        }
+
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "列類型": "run_summary",
+                "受試者": "ALL",
+                "完成影片數": len(done),
+                "失敗影片數": len(failed),
+                "趨勢判定": f"完整上升 {subject_trends.count('完整上升')}/{len(subject_trends)}；Drowsy高於Alert {sum(1 for t in subject_trends if t in {'完整上升', 'Drowsy高於Alert'})}/{len(subject_trends)}",
+                "結論": conclusion,
+                "備註": "UTA-RLDD label 為整段影片類別；此報表檢查趨勢支持度，不代表逐幀 ground truth",
+            }
+        )
+        for label in ("0", "5", "10"):
+            writer.writerow(aggregate_row(label))
+        for subject in sorted(by_subject):
+            label_map = by_subject[subject]
+            if not {"0", "5", "10"}.issubset(label_map):
+                writer.writerow(
+                    {
+                        "列類型": "subject_trend",
+                        "受試者": subject,
+                        "完成影片數": len(label_map),
+                        "失敗影片數": sum(1 for s in failed if s.subject == subject),
+                        "趨勢判定": "影片不完整",
+                        "結論": "不納入趨勢",
+                        "備註": "需同一受試者同時有 0/5/10 三段完成影片",
+                    }
+                )
+                continue
+            score0 = _validation_score(label_map["0"])
+            score5 = _validation_score(label_map["5"])
+            score10 = _validation_score(label_map["10"])
+            trend = _trend_label(score0, score5, score10, epsilon=0.005)
+            writer.writerow(
+                {
+                    "列類型": "subject_trend",
+                    "受試者": subject,
+                    "完成影片數": 3,
+                    "失敗影片數": sum(1 for s in failed if s.subject == subject),
+                    "驗證綜合分數": f"0={_num(score0)};5={_num(score5)};10={_num(score10)}",
+                    "趨勢判定": trend,
+                    "結論": "支持" if trend in {"完整上升", "Drowsy高於Alert"} else "不支持",
+                    "備註": (
+                        f"p95_fused 0={_num(label_map['0'].p95_fused_score)} "
+                        f"5={_num(label_map['5'].p95_fused_score)} "
+                        f"10={_num(label_map['10'].p95_fused_score)}"
+                    ),
+                }
+            )
+
+
 def run_replay_batch(
     root: Path,
     *,
@@ -828,14 +1000,17 @@ def run_replay_batch(
 
     summary_csv = output_dir / f"utarldd_summary_{run_stamp}.csv"
     full_summary_csv = output_dir / f"utarldd_summary_full_{run_stamp}.csv"
+    validation_report_csv = output_dir / f"utarldd_validation_report_{run_stamp}.csv"
     manifest_path = output_dir / f"utarldd_manifest_{run_stamp}.json"
     write_summary_csv(summary_csv, summaries)
     write_full_summary_csv(full_summary_csv, summaries)
+    write_validation_report_csv(validation_report_csv, summaries)
     manifest = {
         "dataset_root": str(Path(root)),
         "output_dir": str(output_dir),
         "summary_csv": str(summary_csv),
         "full_summary_csv": str(full_summary_csv),
+        "validation_report_csv": str(validation_report_csv),
         "created_at": run_stamp,
         "source": "UTA-RLDD",
         "source_url": "https://sites.google.com/view/utarldd/home",
@@ -854,6 +1029,7 @@ def run_replay_batch(
         output_dir=output_dir,
         summary_csv=summary_csv,
         full_summary_csv=full_summary_csv,
+        validation_report_csv=validation_report_csv,
         manifest_path=manifest_path,
         videos_total=len(videos),
         videos_done=sum(1 for s in summaries if s.status == "done"),

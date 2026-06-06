@@ -567,6 +567,7 @@ Behavior sub-score 權重：
 回放摘要會輸出：
 
 - `utarldd_summary_<timestamp>.csv`：給人工快速檢視的好讀摘要，包含中文欄位、百分比化的 face rate/PERCLOS、快速判讀、主要疲勞/rPPG 指標與狀態分布。
+- `utarldd_validation_report_<timestamp>.csv`：整批驗證趨勢報表，包含 `label_summary` 與 `subject_trend`，用於檢查 label 0/5/10 是否呈現疲勞趨勢上升；此報表比逐支影片摘要更適合回答「這批資料是否支持系統」。
 - `utarldd_summary_full_<timestamp>.csv`：完整欄位版本，保留原始 summary dataclass 欄位供 notebook、統計分析與稽核。
 - 行為疲勞：`avg_fatigue_score`、`p95_fatigue_score`、`avg_perclos`、`max_perclos`、`avg_blink_temporal`、`max_blink_temporal`、`LOW_VIGILANCE/DROWSY/CRITICAL/MICROSLEEP/NO_FACE` frame counts。
 - 融合分數：`avg_fused_score`、`p95_fused_score`。

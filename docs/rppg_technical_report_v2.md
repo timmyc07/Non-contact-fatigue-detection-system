@@ -434,3 +434,7 @@ UTA-RLDD 官方 label 為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`。本專案
 GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，方便操作者確認 ROI 是否落在額頭、雙頰與眉間等預期區域。預覽影像會限制尺寸並以最高約 20 FPS 顯示，以降低 Qt 主執行緒縮放與跨 thread 傳輸成本；這只影響畫面體感，不改變 rPPG、fatigue、fused score 的逐幀計算與輸出。CSV 輸出分為給人工檢視的 `utarldd_summary_<timestamp>.csv`，以及保留完整欄位的 `utarldd_summary_full_<timestamp>.csv`；rPPG 相關欄位仍只作品質與穩定度診斷。
 
 若後續要調整 rPPG guard、ROI、color-space 或模型，仍需使用有參考心率的資料或現場量測，並以 MAE、median absolute error、95th percentile error、跳值次數與 guard 次數做 A/B replay。UTA-RLDD replay 的價值在於讓我們確認「疲勞影片中 rPPG 是否仍維持足夠品質」以及「BPM guard 是否有把大幅波動記錄下來」，而不是宣稱心率準確度。
+
+### 16.1 Welch 短訊號邊界保護
+
+UTA-RLDD 部分影片在短 tachogram 或訊號邊界時，SciPy `welch` 可能因實際 `nperseg` 被縮短而要求 `noverlap < nperseg`。本系統新增 `_safe_welch_params()`，依目前有效資料長度動態設定 `nperseg/noverlap`，避免 `noverlap=16 must be less than nperseg=16` 這類錯誤讓整支影片被標成 failed。此修正只保護 rPPG 訊號分析不中斷，不改 POS、band-pass、BPM guard 或 fatigue fusion 的判定公式。

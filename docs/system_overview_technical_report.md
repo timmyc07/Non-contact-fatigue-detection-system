@@ -247,6 +247,7 @@ python -m scripts.utarldd_replay <dataset_root> --max-videos 1 --max-frames 300
 
 - `metrics_utarldd_<subject>_<label>_<timestamp>.db`：沿用 `MetricsRecorder` schema，`camera_label` 寫入 `UTA-RLDD subject=<id> label=<0|5|10>`。
 - `utarldd_summary_<timestamp>.csv`：給人工檢視的好讀摘要，使用中文欄位、百分比欄位與快速判讀。
+- `utarldd_validation_report_<timestamp>.csv`：整批驗證趨勢報表，彙整 label 0/5/10 的平均疲勞/PERCLOS/狀態比例，並檢查同一受試者三段影片是否呈現疲勞趨勢上升。
 - `utarldd_summary_full_<timestamp>.csv`：保留每支影片的完整 summary 欄位，供後續 notebook、統計與稽核使用。
 - `utarldd_manifest_<timestamp>.json`：run metadata、來源 URL、label 對應與每支影片摘要。
 - 可選 `video_utarldd_<subject>_<label>_<timestamp>.mp4`：只有啟用 `--write-annotated-video` 或 GUI 勾選輸出標註影片時產生。

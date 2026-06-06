@@ -15,6 +15,7 @@ from gui.utarldd_replay import (
     run_replay_batch,
     write_full_summary_csv,
     write_summary_csv,
+    write_validation_report_csv,
 )
 from scripts.utarldd_replay import _split_csv
 
@@ -119,6 +120,64 @@ def test_write_full_summary_csv_keeps_machine_readable_fields(tmp_path: Path) ->
     assert "01,10,Drowsy" in text
 
 
+def test_write_validation_report_csv_summarizes_label_and_subject_trends(tmp_path: Path) -> None:
+    out = tmp_path / "validation.csv"
+    summaries = [
+        UtaRlddVideoSummary(
+            subject="01",
+            label="0",
+            label_name="Alert",
+            video_path="C:/video/01/0.mov",
+            status="done",
+            frames=100,
+            face_frames=100,
+            face_rate=1.0,
+            p95_fused_score=0.05,
+            p95_fatigue_score=0.04,
+            ok_frames=95,
+            low_vigilance_frames=5,
+        ),
+        UtaRlddVideoSummary(
+            subject="01",
+            label="5",
+            label_name="Low Vigilant",
+            video_path="C:/video/01/5.mov",
+            status="done",
+            frames=100,
+            face_frames=100,
+            face_rate=1.0,
+            p95_fused_score=0.15,
+            p95_fatigue_score=0.10,
+            ok_frames=70,
+            low_vigilance_frames=30,
+        ),
+        UtaRlddVideoSummary(
+            subject="01",
+            label="10",
+            label_name="Drowsy",
+            video_path="C:/video/01/10.mov",
+            status="done",
+            frames=100,
+            face_frames=100,
+            face_rate=1.0,
+            p95_fused_score=0.30,
+            p95_fatigue_score=0.20,
+            low_vigilance_frames=30,
+            drowsy_frames=60,
+            critical_frames=5,
+        ),
+    ]
+
+    write_validation_report_csv(out, summaries)
+
+    text = out.read_text(encoding="utf-8-sig")
+    assert "列類型,受試者,資料集標籤" in text
+    assert "run_summary" in text
+    assert "label_summary" in text
+    assert "subject_trend" in text
+    assert "完整上升" in text
+
+
 def test_split_csv_accepts_repeated_and_comma_values() -> None:
     assert _split_csv(["01, 02", "03"]) == ["01", "02", "03"]
     assert _split_csv(["", "  "]) is None
@@ -167,11 +226,13 @@ def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatc
     assert result.videos_failed == 1
     assert result.summary_csv.exists()
     assert result.full_summary_csv.exists()
+    assert result.validation_report_csv.exists()
     assert result.manifest_path.exists()
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_url"] == "https://sites.google.com/view/utarldd/home"
     assert manifest["summary_csv"] == str(result.summary_csv)
     assert manifest["full_summary_csv"] == str(result.full_summary_csv)
+    assert manifest["validation_report_csv"] == str(result.validation_report_csv)
     assert manifest["labels"] == {"0": "Alert", "5": "Low Vigilant", "10": "Drowsy"}
     assert len(manifest["summaries"]) == 2
 
@@ -296,6 +357,7 @@ def test_run_replay_batch_parallel_handles_broken_process_pool(tmp_path: Path, m
     assert all("平行處理子行程異常中止" in summary.error for summary in result.summaries)
     assert result.summary_csv.exists()
     assert result.full_summary_csv.exists()
+    assert result.validation_report_csv.exists()
     assert result.manifest_path.exists()
     assert events
 

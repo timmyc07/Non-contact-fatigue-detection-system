@@ -282,8 +282,11 @@ def welch_peak_hz(sig: np.ndarray, fs: float) -> tuple[float, np.ndarray, np.nda
     from scipy.signal import welch
 
     n = len(sig)
-    nperseg = min(256, max(32, n // 2))
-    f, pxx = welch(sig, fs=fs, nperseg=nperseg, noverlap=nperseg // 2)
+    params = _safe_welch_params(n, max_nperseg=256)
+    if params is None:
+        return 0.0, np.array([]), np.array([])
+    nperseg, noverlap = params
+    f, pxx = welch(sig, fs=fs, nperseg=nperseg, noverlap=noverlap)
     band = (f >= 0.7) & (f <= 3.5)
     if not np.any(band):
         return 0.0, f, pxx
@@ -299,8 +302,11 @@ def compute_sqi(sig: np.ndarray, fs: float) -> float:
     n = len(sig)
     if n < 32:
         return 0.0
-    nperseg = min(256, max(32, n // 2))
-    f, pxx = welch(sig, fs=fs, nperseg=nperseg, noverlap=nperseg // 2)
+    params = _safe_welch_params(n, max_nperseg=256)
+    if params is None:
+        return 0.0
+    nperseg, noverlap = params
+    f, pxx = welch(sig, fs=fs, nperseg=nperseg, noverlap=noverlap)
     total = float(np.sum(pxx)) + 1e-12
     in_band = float(np.sum(pxx[(f >= 0.6) & (f <= 4.0)]))
     return float(np.clip(in_band / total, 0.0, 1.0))
@@ -352,13 +358,24 @@ def lf_hf_from_tachogram(ibis_ms: np.ndarray, fs_resample: float = 4.0) -> float
         series = series - np.mean(series)
     except Exception:
         return 0.0
-    nperseg = min(128, max(32, len(series) // 2))
-    if nperseg < 32:
+    params = _safe_welch_params(len(series), max_nperseg=128)
+    if params is None:
         return 0.0
-    ff, pxx = welch(series, fs=fs_resample, nperseg=nperseg, noverlap=nperseg // 2)
+    nperseg, noverlap = params
+    ff, pxx = welch(series, fs=fs_resample, nperseg=nperseg, noverlap=noverlap)
     lf = float(np.sum(pxx[(ff >= 0.04) & (ff < 0.15)])) + 1e-12
     hf = float(np.sum(pxx[(ff >= 0.15) & (ff <= 0.4)])) + 1e-12
     return float(lf / hf)
+
+
+def _safe_welch_params(n: int, *, max_nperseg: int, min_nperseg: int = 32) -> tuple[int, int] | None:
+    if n < 2:
+        return None
+    nperseg = min(max_nperseg, max(min_nperseg, n // 2), n)
+    noverlap = min(nperseg // 2, nperseg - 1)
+    if nperseg < 2 or noverlap >= nperseg:
+        return None
+    return int(nperseg), int(noverlap)
 
 
 def stress_heuristic(lf_hf: float, rmssd: float) -> tuple[float, str]:

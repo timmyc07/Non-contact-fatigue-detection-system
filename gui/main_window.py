@@ -1587,7 +1587,7 @@ class MainWindow(QMainWindow):
         self._bar_utarldd_progress.setRange(0, max(result.videos_total, 1))
         self._bar_utarldd_progress.setValue(result.videos_done + result.videos_failed)
         self._lbl_utarldd_result.setText(
-            f"摘要檔：{result.summary_csv}\n完整欄位：{result.full_summary_csv}"
+            f"摘要檔：{result.summary_csv}\n驗證報表：{result.validation_report_csv}\n完整欄位：{result.full_summary_csv}"
         )
         stopped = any(summary.status == "stopped" for summary in result.summaries)
         if stopped or self._utarldd_stopping:
