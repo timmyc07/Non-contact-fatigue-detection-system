@@ -261,6 +261,10 @@ class MainWindow(QMainWindow):
         self._utarldd_stopping = False
         self._close_after_utarldd = False
         self._utarldd_mode_label = "回放中"
+        self._utarldd_total_count = 0
+        self._utarldd_done_count = 0
+        self._utarldd_active_videos: dict[str, UtaRlddVideoSummary] = {}
+        self._utarldd_recent_done: list[str] = []
 
         self._build_menu()
         self._build_central()
@@ -558,6 +562,11 @@ class MainWindow(QMainWindow):
         uta_row_c.addWidget(self._bar_utarldd_progress, 1)
         uta_row_c.addWidget(self._lbl_utarldd_result, 2)
         uta_l.addLayout(uta_row_c)
+
+        self._lbl_utarldd_parallel_status = QLabel("處理清單：--")
+        self._lbl_utarldd_parallel_status.setObjectName("hintLabel")
+        self._lbl_utarldd_parallel_status.setWordWrap(True)
+        uta_l.addWidget(self._lbl_utarldd_parallel_status)
 
         self._frame_utarldd_preview = QFrame()
         self._frame_utarldd_preview.setFixedHeight(360)
@@ -1389,10 +1398,18 @@ class MainWindow(QMainWindow):
         self._utarldd_worker = worker
         self._utarldd_stopping = False
         self._utarldd_mode_label = mode_label
+        self._utarldd_total_count = 0
+        self._utarldd_done_count = 0
+        self._utarldd_active_videos.clear()
+        self._utarldd_recent_done.clear()
         self._set_utarldd_controls_running(True)
         self._bar_utarldd_progress.setRange(0, 0)
         self._lbl_utarldd_current.setText("目前影片：準備中")
         self._lbl_utarldd_result.setText("摘要檔：--")
+        if preview_enabled:
+            self._lbl_utarldd_parallel_status.setText("處理清單：等待第一支影片")
+        else:
+            self._lbl_utarldd_parallel_status.setText("處理清單：平行驗證等待工作派發")
         self._lbl_utarldd_preview.clear()
         if preview_enabled:
             self._lbl_utarldd_preview.setText("影片預覽載入中")
@@ -1417,6 +1434,7 @@ class MainWindow(QMainWindow):
         self._btn_utarldd_stop.setEnabled(False)
         self._btn_utarldd_stop.setText("停止中")
         self._lbl_utarldd_current.setText("目前影片：正在停止，請稍候")
+        self._lbl_utarldd_parallel_status.setText("處理清單：正在停止，已派發的影片會安全收尾")
         self._lbl_pipeline.setText("管線：UTA-RLDD 停止中")
         self._append_log("[UTA-RLDD] 已送出停止請求，等待目前 frame 安全收尾")
 
@@ -1436,27 +1454,43 @@ class MainWindow(QMainWindow):
         total: int,
         summary: UtaRlddVideoSummary | None,
     ) -> None:
+        self._utarldd_total_count = max(self._utarldd_total_count, total)
         if event == "video_start":
             self._bar_utarldd_progress.setRange(0, max(total, 1))
-            self._bar_utarldd_progress.setValue(max(current - 1, 0))
+            self._bar_utarldd_progress.setValue(self._utarldd_done_count)
             if summary is not None:
+                key = self._utarldd_video_key(summary)
+                self._utarldd_active_videos[key] = summary
                 self._lbl_utarldd_current.setText(
-                    f"目前影片：subject {summary.subject} / label {summary.label} {summary.label_name}"
+                    f"目前影片：派發 {current}/{total}，正在跑 {len(self._utarldd_active_videos)} 支"
                 )
                 self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
             else:
                 self._lbl_utarldd_current.setText(f"目前影片：{current}/{total}")
+            self._refresh_utarldd_parallel_status()
         elif event == "video_done":
             self._bar_utarldd_progress.setRange(0, max(total, 1))
-            self._bar_utarldd_progress.setValue(current)
+            self._utarldd_done_count = max(self._utarldd_done_count, current)
+            self._bar_utarldd_progress.setValue(self._utarldd_done_count)
             if summary is not None:
+                key = self._utarldd_video_key(summary)
+                self._utarldd_active_videos.pop(key, None)
+                self._utarldd_recent_done.insert(0, self._format_utarldd_video_label(summary, include_status=True))
+                self._utarldd_recent_done = self._utarldd_recent_done[:3]
+                failed_text = "，此支失敗" if summary.status == "failed" else ""
+                self._lbl_utarldd_current.setText(
+                    f"目前影片：已完成 {self._utarldd_done_count}/{max(total, 1)}{failed_text}"
+                )
                 self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
                 self._append_log(
                     "[UTA-RLDD] 完成 "
                     f"subject {summary.subject} label {summary.label} "
                     f"frames={summary.frames} face_rate={summary.face_rate:.2%} status={summary.status}"
                 )
+            self._refresh_utarldd_parallel_status()
         elif event == "frame" and summary is not None:
+            key = self._utarldd_video_key(summary)
+            self._utarldd_active_videos[key] = summary
             if total > 0:
                 self._lbl_utarldd_current.setText(
                     f"目前影片：subject {summary.subject} / label {summary.label} "
@@ -1468,6 +1502,38 @@ class MainWindow(QMainWindow):
                     f"{summary.frames} frames"
                 )
             self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
+            self._refresh_utarldd_parallel_status()
+
+    def _utarldd_video_key(self, summary: UtaRlddVideoSummary) -> str:
+        return f"{summary.subject}:{summary.label}:{summary.video_path}"
+
+    def _format_utarldd_video_label(self, summary: UtaRlddVideoSummary, *, include_status: bool = False) -> str:
+        label = f"S{summary.subject}/L{summary.label} {summary.label_name}"
+        if summary.frames > 0:
+            label += f" {summary.frames}f"
+        if include_status:
+            if summary.status == "failed":
+                label += " failed"
+            elif summary.status == "stopped":
+                label += " stopped"
+            elif summary.status:
+                label += f" {summary.status}"
+            if summary.face_rate > 0:
+                label += f" face={summary.face_rate:.0%}"
+        return label
+
+    def _refresh_utarldd_parallel_status(self) -> None:
+        active = [self._format_utarldd_video_label(summary) for summary in self._utarldd_active_videos.values()]
+        active_preview = active[:4]
+        if len(active) > len(active_preview):
+            active_preview.append(f"另 {len(active) - len(active_preview)} 支")
+        active_text = "、".join(active_preview) if active_preview else "無"
+        recent_text = "、".join(self._utarldd_recent_done) if self._utarldd_recent_done else "尚無"
+        total_text = str(self._utarldd_total_count) if self._utarldd_total_count > 0 else "?"
+        self._lbl_utarldd_parallel_status.setText(
+            f"進行中：{active_text}\n"
+            f"已完成：{self._utarldd_done_count}/{total_text}；最近完成：{recent_text}"
+        )
 
     def _update_utarldd_status_strip(self, summary: UtaRlddVideoSummary, *, prefix: str) -> None:
         self._lbl_pipeline.setText(f"管線：{prefix}")
@@ -1513,6 +1579,15 @@ class MainWindow(QMainWindow):
         stopped = any(summary.status == "stopped" for summary in result.summaries)
         state = "已停止" if stopped or self._utarldd_stopping else "完成"
         self._lbl_utarldd_current.setText(f"目前影片：{state}")
+        self._utarldd_done_count = result.videos_done + result.videos_failed
+        self._utarldd_total_count = result.videos_total
+        self._utarldd_active_videos.clear()
+        if result.summaries and not self._utarldd_recent_done:
+            self._utarldd_recent_done = [
+                self._format_utarldd_video_label(summary, include_status=True)
+                for summary in reversed(result.summaries[-3:])
+            ]
+        self._refresh_utarldd_parallel_status()
         if result.summaries:
             self._update_utarldd_status_strip(result.summaries[-1], prefix=f"UTA-RLDD {state}")
         else:
@@ -1524,6 +1599,10 @@ class MainWindow(QMainWindow):
 
     def _on_utarldd_failed(self, msg: str) -> None:
         self._lbl_utarldd_current.setText("目前影片：批次失敗")
+        total_text = str(self._utarldd_total_count) if self._utarldd_total_count > 0 else "?"
+        self._lbl_utarldd_parallel_status.setText(
+            f"處理清單：批次失敗；已完成 {self._utarldd_done_count}/{total_text}"
+        )
         self._lbl_pipeline.setText("管線：UTA-RLDD 失敗")
         self._append_log(f"[UTA-RLDD] 批次失敗：{msg}")
         QMessageBox.warning(self, "UTA-RLDD 影片測試", msg)
