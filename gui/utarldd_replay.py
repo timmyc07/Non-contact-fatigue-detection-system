@@ -10,6 +10,7 @@ import csv
 import json
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -515,6 +516,17 @@ def run_replay_video(
     return summary
 
 
+def _run_replay_video_process_job(args: tuple[UtaRlddVideo, str, str, int, bool]) -> UtaRlddVideoSummary:
+    video, output_dir, run_stamp, max_frames, write_annotated_video = args
+    return run_replay_video(
+        video,
+        Path(output_dir),
+        run_stamp,
+        max_frames=max_frames,
+        write_annotated_video=write_annotated_video,
+    )
+
+
 def _pct(value: float) -> float:
     return round(float(value) * 100.0, 2)
 
@@ -646,6 +658,7 @@ def run_replay_batch(
     subjects: Iterable[str] | None = None,
     labels: Iterable[str] | None = None,
     write_annotated_video: bool = False,
+    jobs: int = 1,
     progress_cb: ProgressCallback | None = None,
     preview_frame_cb: PreviewFrameCallback | None = None,
     stop_requested: Callable[[], bool] | None = None,
@@ -660,34 +673,83 @@ def run_replay_batch(
         videos = videos[:max_videos]
 
     summaries: list[UtaRlddVideoSummary] = []
-    for index, video in enumerate(videos, start=1):
-        if stop_requested is not None and stop_requested():
-            break
-        if progress_cb:
-            progress_cb(
-                "video_start",
-                index,
-                len(videos),
-                UtaRlddVideoSummary(
-                    subject=video.subject,
-                    label=video.label,
-                    label_name=video.label_name,
-                    video_path=str(video.path),
-                ),
+    effective_jobs = max(1, int(jobs or 1))
+    if preview_frame_cb is not None or stop_requested is not None:
+        effective_jobs = 1
+
+    if effective_jobs <= 1 or len(videos) <= 1:
+        for index, video in enumerate(videos, start=1):
+            if stop_requested is not None and stop_requested():
+                break
+            if progress_cb:
+                progress_cb(
+                    "video_start",
+                    index,
+                    len(videos),
+                    UtaRlddVideoSummary(
+                        subject=video.subject,
+                        label=video.label,
+                        label_name=video.label_name,
+                        video_path=str(video.path),
+                    ),
+                )
+            summary = run_replay_video(
+                video,
+                output_dir,
+                run_stamp,
+                max_frames=max_frames,
+                write_annotated_video=write_annotated_video,
+                progress_cb=progress_cb,
+                preview_frame_cb=preview_frame_cb,
+                stop_requested=stop_requested,
             )
-        summary = run_replay_video(
-            video,
-            output_dir,
-            run_stamp,
-            max_frames=max_frames,
-            write_annotated_video=write_annotated_video,
-            progress_cb=progress_cb,
-            preview_frame_cb=preview_frame_cb,
-            stop_requested=stop_requested,
-        )
-        summaries.append(summary)
-        if progress_cb:
-            progress_cb("video_done", index, len(videos), summary)
+            summaries.append(summary)
+            if progress_cb:
+                progress_cb("video_done", index, len(videos), summary)
+    else:
+        indexed: list[tuple[int, UtaRlddVideo]] = list(enumerate(videos, start=1))
+        summary_by_index: dict[int, UtaRlddVideoSummary] = {}
+        max_workers = min(effective_jobs, len(indexed))
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {}
+            for index, video in indexed:
+                if progress_cb:
+                    progress_cb(
+                        "video_start",
+                        index,
+                        len(videos),
+                        UtaRlddVideoSummary(
+                            subject=video.subject,
+                            label=video.label,
+                            label_name=video.label_name,
+                            video_path=str(video.path),
+                        ),
+                    )
+                future = executor.submit(
+                    _run_replay_video_process_job,
+                    (video, str(output_dir), run_stamp, max_frames, write_annotated_video),
+                )
+                future_to_index[future] = (index, video)
+
+            done_count = 0
+            for future in as_completed(future_to_index):
+                index, video = future_to_index[future]
+                done_count += 1
+                try:
+                    summary = future.result()
+                except Exception as exc:
+                    summary = UtaRlddVideoSummary(
+                        subject=video.subject,
+                        label=video.label,
+                        label_name=video.label_name,
+                        video_path=str(video.path),
+                        status="failed",
+                        error=str(exc),
+                    )
+                summary_by_index[index] = summary
+                if progress_cb:
+                    progress_cb("video_done", done_count, len(videos), summary)
+        summaries = [summary_by_index[index] for index, _video in indexed if index in summary_by_index]
 
     summary_csv = output_dir / f"utarldd_summary_{run_stamp}.csv"
     full_summary_csv = output_dir / f"utarldd_summary_full_{run_stamp}.csv"
@@ -736,6 +798,7 @@ class UtaRlddReplayWorker(QObject):
         max_videos: int = 0,
         max_frames: int = 0,
         write_annotated_video: bool = False,
+        jobs: int = 1,
     ) -> None:
         super().__init__()
         self.dataset_root = Path(dataset_root)
@@ -743,6 +806,7 @@ class UtaRlddReplayWorker(QObject):
         self.max_videos = int(max_videos)
         self.max_frames = int(max_frames)
         self.write_annotated_video = bool(write_annotated_video)
+        self.jobs = max(1, int(jobs))
         self._stop = threading.Event()
 
     def request_stop(self) -> None:
@@ -763,6 +827,7 @@ class UtaRlddReplayWorker(QObject):
                 max_videos=self.max_videos,
                 max_frames=self.max_frames,
                 write_annotated_video=self.write_annotated_video,
+                jobs=self.jobs,
                 progress_cb=self._progress_cb,
                 preview_frame_cb=self._preview_frame_cb,
                 stop_requested=self._stop.is_set,

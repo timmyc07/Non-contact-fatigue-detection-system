@@ -575,6 +575,8 @@ Behavior sub-score 權重：
 
 GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目的在於讓操作者一邊跑批次一邊確認偵測是否正常。預覽影像會限制尺寸並以最高約 20 FPS 顯示，降低 GUI 主執行緒負擔；這個預覽不改變 DB 與 CSV 的逐幀數值計算，也不會取代完整 SQLite 回放。
 
+大量驗證時不建議用 GUI 一支一支觀察完整影片，而應使用 CLI `--jobs N` 做多進程批次。此平行化只在不同影片之間進行；單支影片內仍逐幀順序分析，使 EAR、PERCLOS、眨眼時序、rPPG buffer 與 MediaPipe VIDEO timestamp 維持可重現。這能在不改變疲勞門檻與逐幀輸出的前提下，提高 60 位受試者資料的驗證效率。
+
 臉部特徵疲勞基準值的決定方式維持原則：
 
 1. 文獻與資料集提供「哪些特徵應該看」以及分類趨勢，例如 PERCLOS、EAR/閉眼時間、blink temporal、gaze、head pose、yawn 與 low vigilant/drowsy 分層。

@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--max-frames", type=int, default=0, help="每支影片最多處理幀數，0 代表全幀")
     parser.add_argument("--subject", action="append", help="只處理指定受試者，可重複或用逗號分隔，例如 01,02")
     parser.add_argument("--label", action="append", help="只處理指定 label，可重複或用逗號分隔，例如 0,5,10")
+    parser.add_argument("--jobs", type=int, default=1, help="平行處理影片數，建議 2-4；預設 1")
     parser.add_argument("--write-annotated-video", action="store_true", help="額外輸出標註後 mp4，預設關閉")
     args = parser.parse_args()
 
@@ -48,6 +49,7 @@ def main() -> None:
         subjects=_split_csv(args.subject),
         labels=_split_csv(args.label),
         write_annotated_video=bool(args.write_annotated_video),
+        jobs=max(1, args.jobs),
         progress_cb=progress,
     )
     print()

@@ -173,3 +173,64 @@ def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatc
     assert manifest["full_summary_csv"] == str(result.full_summary_csv)
     assert manifest["labels"] == {"0": "Alert", "5": "Low Vigilant", "10": "Drowsy"}
     assert len(manifest["summaries"]) == 2
+
+
+def test_run_replay_batch_parallel_keeps_video_order(tmp_path: Path, monkeypatch) -> None:
+    videos = [
+        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        UtaRlddVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
+        UtaRlddVideo("01", "10", "Drowsy", tmp_path / "01" / "10.mov"),
+    ]
+
+    def fake_discover(root, *, subjects=None, labels=None):
+        return videos
+
+    def fake_process_job(args):
+        video, output_dir, run_stamp, _max_frames, _write_annotated_video = args
+        return UtaRlddVideoSummary(
+            subject=video.subject,
+            label=video.label,
+            label_name=video.label_name,
+            video_path=str(video.path),
+            db_path=str(Path(output_dir) / f"metrics_utarldd_{video.subject}_{video.label}_{run_stamp}.db"),
+            status="done",
+            frames=10,
+        )
+
+    class FakeFuture:
+        def __init__(self, value):
+            self._value = value
+
+        def result(self):
+            return self._value
+
+    class FakeExecutor:
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+            self.futures = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, args):
+            future = FakeFuture(fn(args))
+            self.futures.append(future)
+            return future
+
+    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.utarldd_replay._run_replay_video_process_job", fake_process_job)
+    monkeypatch.setattr("gui.utarldd_replay.ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr("gui.utarldd_replay.as_completed", lambda futures: reversed(list(futures)))
+
+    result = run_replay_batch(tmp_path / "dataset", output_dir=tmp_path / "out", jobs=2)
+
+    assert [(s.subject, s.label) for s in result.summaries] == [
+        ("01", "0"),
+        ("01", "5"),
+        ("01", "10"),
+    ]
+    assert result.videos_total == 3
+    assert result.videos_done == 3
