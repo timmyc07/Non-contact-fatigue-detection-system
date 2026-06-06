@@ -77,7 +77,7 @@ python -m rppg.demo_rppg_live
 
 ## UTA-RLDD replay
 
-本專案可把 UTA-RLDD 影片當作可重現的「離線鏡頭」來批次測試，不會改動即時攝影機 worker。UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：https://sites.google.com/view/utarldd/home。
+本專案可把 UTA-RLDD 影片當作可重現的「離線鏡頭」來批次測試，不會改動即時攝影機 worker。UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：https://sites.google.com/view/utarldd/home。回放模式會使用影片 FPS 產生 deterministic timestamp，疲勞校準起點會對齊第一個有效人臉 frame 的時間，因此前約 5 秒為 `CALIBRATING`，後續才進入 `OK / LOW_VIGILANCE / DROWSY / CRITICAL` 等狀態統計。
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.utarldd_replay "%USERPROFILE%\Downloads\Fold1_part1" --max-videos 1 --max-frames 300

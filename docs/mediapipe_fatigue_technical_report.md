@@ -549,7 +549,7 @@ Behavior sub-score 權重：
 4. 暫時不要把 rPPG 當疲勞主判定；rPPG 保留為生理負荷/壓力輔助，等有同步心率參考與疲勞標註後再提高權重。
 ## 16. 2026-06-06 UTA-RLDD 回放驗證與門檻校正資料
 
-本次新增 UTA-RLDD 影片回放測試，實作檔案為 `gui/utarldd_replay.py` 與 `scripts/utarldd_replay.py`，GUI 入口位於主視窗「UTA-RLDD 影片測試」區塊。它把資料集影片當作離線鏡頭逐幀餵入 MediaPipe Face Landmarker，再依序產生疲勞行為特徵、rPPG 指標與 fused score。此流程不改 live camera worker，也不直接更動現有疲勞門檻。
+本次新增 UTA-RLDD 影片回放測試，實作檔案為 `gui/utarldd_replay.py` 與 `scripts/utarldd_replay.py`，GUI 入口位於主視窗「UTA-RLDD 影片測試」區塊。它把資料集影片當作離線鏡頭逐幀餵入 MediaPipe Face Landmarker，再依序產生疲勞行為特徵、rPPG 指標與 fused score。此流程不改 live camera worker，也不直接更動現有疲勞門檻。回放模式使用影片 FPS 產生 timestamp；`FatigueEngine` 的 EAR / blendshape 校準起點對齊第一個有效人臉 frame，因此 replay 與 live camera 可共用同一套校準邏輯，避免離線影片因 timestamp 從 0 秒開始而整段停留在 `CALIBRATING`。
 
 資料集標籤依 UTA-RLDD 官方定義：
 

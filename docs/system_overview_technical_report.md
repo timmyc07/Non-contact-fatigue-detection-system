@@ -222,7 +222,7 @@ rPPG 生理訊號不使用心率 AI 模型，而是由訊號處理產生：
 - 王奕鈞，2026：參考 MediaPipe ROI、雙頰與 Lab 色彩空間在 rPPG 動態情境下的後續優化方向；本次未直接替換已接近精準的 POS 主流程。
 ## 12. 2026-06-06 UTA-RLDD 影片回放測試系統
 
-本次新增 `scripts/utarldd_replay.py` 與 GUI「UTA-RLDD 影片測試」入口，讓 UTA-RLDD 影片可被當作可重現的離線鏡頭輸入。此功能不改動 live camera worker；回放核心位於 `gui/utarldd_replay.py`，逐幀讀取 `.mov/.MOV/.mp4`，使用影片 FPS 產生 deterministic timestamp，再共用同一條 `FatigueEngine`、`RppgEngine`、`FatigueFuser` 與 `MetricsRecorder` 記錄流程。
+本次新增 `scripts/utarldd_replay.py` 與 GUI「UTA-RLDD 影片測試」入口，讓 UTA-RLDD 影片可被當作可重現的離線鏡頭輸入。此功能不改動 live camera worker；回放核心位於 `gui/utarldd_replay.py`，逐幀讀取 `.mov/.MOV/.mp4`，使用影片 FPS 產生 deterministic timestamp，再共用同一條 `FatigueEngine`、`RppgEngine`、`FatigueFuser` 與 `MetricsRecorder` 記錄流程。疲勞校準起點使用第一個有效人臉 frame 的輸入 timestamp，因此 live camera 的 `perf_counter()` 時間軸與 replay 的影片相對時間軸都能完成前段校準，再進入正式狀態統計。
 
 資料集 label 依 UTA-RLDD 官方定義：
 

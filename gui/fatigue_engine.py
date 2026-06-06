@@ -18,7 +18,6 @@ V2 vs V1 changes:
 from __future__ import annotations
 
 import logging
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -393,7 +392,7 @@ class EyeCognitiveModule:
 
         # Calibration
         self.calibrated         = False
-        self._calib_start       = time.perf_counter()
+        self._calib_start: Optional[float] = None
         self._calib_ears: list[float] = []
         self.base_ear_th        = p.base_th_default
         self._calib_logged      = False
@@ -557,6 +556,8 @@ class EyeCognitiveModule:
         run_brow: bool = True,
     ) -> None:
         p = self.p
+        if self._calib_start is None:
+            self._calib_start = float(t_now)
         bs = _blendshape_map(blendshapes)
         raw_eye_blink = _bs(bs, "eye_blink_left", "eye_blink_right")
         raw_eye_squint = _bs(bs, "eye_squint_left", "eye_squint_right")

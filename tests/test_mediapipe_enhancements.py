@@ -14,7 +14,7 @@ import numpy as np
 from gui.mediapipe_tuning import load_mediapipe_tuning  # noqa: E402
 from gui.metrics_recorder import MetricsRecorder  # noqa: E402
 from gui.fatigue_scorer import FatigueFuser  # noqa: E402
-from gui.fatigue_engine import FatigueMetrics  # noqa: E402
+from gui.fatigue_engine import FatigueEngine, FatigueMetrics  # noqa: E402
 from gui.fatigue_engine import _norm_blend  # noqa: E402
 from rppg.rppg_worker import (  # noqa: E402
     RppgMetrics,
@@ -58,6 +58,20 @@ def test_quality_score_penalises_motion() -> None:
 def test_blendshape_normalisation_uses_baseline() -> None:
     assert _norm_blend(0.65, 0.15) > _norm_blend(0.35, 0.15)
     assert _norm_blend(0.10, 0.15) == 0.0
+
+
+def test_fatigue_engine_calibrates_with_video_relative_timestamps() -> None:
+    engine = FatigueEngine()
+    lm = _fake_landmarks()
+    metrics = None
+
+    for i in range(180):
+        metrics = engine.step(lm, 640, 480, i / 30.0)
+
+    assert metrics is not None
+    assert metrics.calibrated is True
+    assert metrics.status != "CALIBRATING"
+    assert metrics.calib_progress == 1.0
 
 
 def test_mediapipe_tuning_profiles_load() -> None:
