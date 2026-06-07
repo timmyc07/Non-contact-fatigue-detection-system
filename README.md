@@ -2,6 +2,8 @@
 
 rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a web dashboard.
 
+本專題主旨為「無人機駕駛員疲勞狀態監測」：使用一般攝影機觀察遠端操作員的臉部、眼部、姿態與 rPPG 輔助生理訊號，提供長時間監控或操控任務中的警覺度下降提示。UTA-RLDD replay 是可重現驗證與門檻校正工具，不是把專題改成汽車駕駛分類器。
+
 ## Features
 - Live camera preview with MediaPipe annotations
 - rPPG heart-rate and HRV metrics
