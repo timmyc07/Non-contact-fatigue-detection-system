@@ -324,12 +324,13 @@ behavior 可用條件：
 
 Behavior sub-score 權重：
 
-- PERCLOS：25%
-- squint：20%
+- PERCLOS：35%
+- blink temporal：25%
 - microsleep：20%
-- gaze：20%
-- frown：10%
+- gaze：10%
+- squint：5%
 - yawn：5%
+- frown：0%
 
 分數等級：
 
@@ -586,3 +587,23 @@ GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目
 4. 若統計趨勢不符合預期，再回到固定錄影與真人標註做 A/B 校正，門檻調整需同時檢查 false alarm rate、miss rate 與 no-face/low-quality 占比。
 
 因此，本次新增的是「校正與驗證資料管線」，不是新的疲勞判定門檻。它能補足受試者不足時的早期測試，但最終仍需無人機駕駛員現場資料確認。
+
+## 17. 2026-06-07 UTA-RLDD 最新測試分析
+
+最新測試使用 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv` 與同批次 validation report。批次共 36 支影片，12 位受試者，每位受試者各含 Alert、Low Vigilant、Drowsy 三段影片；36 支皆成功完成，沒有 failed 影片。
+
+本次測試最強的結果是管線穩定性，而不是分類準確率。三類影片平均人臉偵測率分別為 Alert 99.98%、Low Vigilant 99.89%、Drowsy 99.93%，整體約 99.93%。因此若報告中使用「滿分」或「接近 100%」說法，只能指影片處理完成率與人臉偵測率，不能指疲勞分類準確率。
+
+從疲勞特徵看，PERCLOS 指標有部分支持：平均 PERCLOS 在 Alert、Low Vigilant、Drowsy 分別約為 2.46%、2.68%、5.10%；最高 PERCLOS 平均約為 6.67%、12.69%、17.03%。Drowsy 類別的嗜睡/危急 frame 比例約 3.99%，高於 Alert 與 Low Vigilant 的約 0.03%。這表示閉眼比例與較嚴重狀態對部分 Drowsy 影片有反應。
+
+但融合分數沒有跟著資料集標籤穩定上升：平均融合分數在 Alert、Low Vigilant、Drowsy 分別約為 0.060、0.048、0.054；95 分位融合分數約為 0.156、0.144、0.134。這與 `0 -> 5 -> 10` 的理論警覺度下降方向不一致，validation report 因此判定「目前不支持分類有效」。
+
+這份結果暴露三個需要在畢專報告誠實揭露的限制：
+
+1. `LOW_VIGILANCE` 對 Alert 影片偏敏感，容易造成早期警示誤報。
+2. Drowsy 影片若沒有長閉眼或明顯 PERCLOS 上升，現有規則可能漏報。
+3. UTA-RLDD label 是整段影片類別，不是逐幀標註，因此不能直接換算逐幀 accuracy、precision 或 recall。
+4. 目前 summary 平均值會受到 `CALIBRATING`、`NO_FACE` 與尚未完成行為校準的 frame 影響；下一版應新增有效 frame 分母。
+5. replay 若讀到本機持久化 blendshape baseline，可能影響資料集可重現性；下一版應使用 replay 專用 calibration namespace 或停用持久化讀寫。
+
+畢專展示時，建議將本系統定位為「可即時運作的疲勞監測原型與驗證資料管線」。已完成部分包含 MediaPipe 特徵擷取、個人化 EAR baseline、PERCLOS、眨眼時序、head pose、rPPG 輔助融合、GUI、Web dashboard、SQLite 紀錄與 UTA-RLDD replay。尚未完成部分是以標註資料做門檻校正與三分類泛化驗證。詳細收尾建議見 `docs/2026-06-07-utarldd-analysis.md`。

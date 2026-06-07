@@ -95,6 +95,8 @@ python -m rppg.demo_rppg_live
 
 CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。桌面 GUI 也提供「UTA-RLDD 影片測試」區塊，可選資料夾、開始/停止批次、顯示目前 subject/label/video 進度、MediaPipe 人臉特徵與 ROI 標註預覽，以及摘要檔路徑。`開始批次` 會啟用單工預覽，適合抽查偵測畫面；`平行驗證` 會依 GUI 的「平行數」設定使用多進程、停用預覽，適合正式大量驗證，GUI 平行數上限為 4。平行驗證會自動停用 `輸出標註影片`，避免多個子行程同時寫 mp4 造成 Windows/OpenCV/MediaPipe 資源壓力；需要標註影片時請用單工 `開始批次`。若某個子行程異常中止，批次會停止派發新工作，把未完成影片寫成 `failed` 並保留 CSV/manifest。平行驗證時可看 GUI 的「處理清單」：`進行中` 會列出目前正在跑的影片，`已完成` 顯示完成數/總數，`最近完成` 顯示剛處理完的 subject/label、frame 數、狀態與 face rate。GUI 預覽為了保持主視窗流暢，會以最高約 20 FPS 顯示並限制預覽影像尺寸；這只影響螢幕顯示，不影響 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
 
+2026-06-07 最新 36 支影片測試結果整理於 `docs/2026-06-07-utarldd-analysis.md`。本次影片處理完成率為 100%，平均人臉偵測率約 99.93%，代表回放與偵測管線穩定；但融合分數未隨 `0 -> 5 -> 10` 穩定上升，因此不能宣稱三分類準確率接近 100%。這份結果適合用於畢專報告的限制分析與後續門檻校正依據。
+
 ## MediaPipe tuning and calibration
 
 目前 `active_profile` 預設為 `stable_indoor`，提高 Face Landmarker tracking confidence 並加強 ROI polygon 平滑，目標是降低室內 webcam 下的 landmark 與 ROI 抖動。若環境偏暗或頭部動作較大，可切換 `low_light` 或 `high_motion` 後用固定錄影回放比較。

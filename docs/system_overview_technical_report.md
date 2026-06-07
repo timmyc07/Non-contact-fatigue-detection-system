@@ -257,3 +257,17 @@ GUI 版本會在批次進行時顯示 MediaPipe 人臉特徵與 rPPG ROI 標註�
 為了提高大量驗證效率，CLI 支援 `--jobs N` 以 `ProcessPoolExecutor` 平行處理多支影片，GUI 也新增「平行驗證」按鈕與「平行數」設定。平行化單位是「影片」，不是「影格」：同一支影片仍依序送入 MediaPipe VIDEO mode，以維持遞增 timestamp 與 tracking 行為；不同影片則由不同 process 各自建立 Face Landmarker、FatigueEngine、RppgEngine 與 SQLite 輸出。GUI 的「開始批次」保留單工標註預覽，適合抽查；「平行驗證」停用預覽、使用多進程，適合完整資料集驗證。GUI 平行數上限為 4，且平行驗證會自動停用輸出標註影片，避免多個 process 同時解碼、推論與寫入 mp4 導致 Windows 子行程崩潰。若 `ProcessPoolExecutor` 發生 BrokenProcessPool，批次會停止派發新工作，把已知未完成影片標成 `failed`，仍寫出 CSV 與 manifest 供追蹤。平行驗證時，GUI「處理清單」會列出目前進行中的 subject/label、已完成數/總數，以及最近完成影片的 frame 數、狀態與 face rate，方便確認批次已跑到哪些影片。建議先以平行數 2 smoke test，再依主機 CPU、記憶體與散熱提高到平行數 4。
 
 Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 replay DB 可以與一般錄影 DB 一樣被 dashboard 讀取。這項測試可補足目前無法短時間募集大量真人受試者的問題，但仍不能完全取代無人機駕駛員場域真人測試；最終門檻仍應用本場域資料做校正。
+
+## 13. 2026-06-07 UTA-RLDD 最新測試結論
+
+最新批次報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv`，同批次驗證報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_validation_report_20260607_122601.csv`。本次共處理 36 支影片，涵蓋 12 位受試者與 `0 / 5 / 10` 三類標籤，每類各 12 支，全部處理完成，失敗影片數為 0。
+
+本次可以稱為「接近滿分」的部分，只限於工程可用性：影片處理完成率為 100%，平均人臉偵測率約 99.93%。其中 Alert、Low Vigilant、Drowsy 的平均人臉偵測率分別約為 99.98%、99.89%、99.93%。這代表 replay 管線、MediaPipe 偵測與逐幀資料記錄穩定，不代表疲勞分類準確率接近 100%。
+
+疲勞分類趨勢目前仍不足。平均融合分數在 Alert、Low Vigilant、Drowsy 分別約為 0.060、0.048、0.054，95 分位融合分數分別約為 0.156、0.144、0.134，沒有隨 `0 -> 5 -> 10` 單調上升。validation report 的整體結論為「目前不支持分類有效」。因此本專案目前應定位為可即時運作、可記錄、可回放驗證的疲勞監測原型，而不是已完成高準確率三分類模型。
+
+較有支持性的結果來自眼部閉合相關指標。平均 PERCLOS 在 Alert、Low Vigilant、Drowsy 分別約為 2.46%、2.68%、5.10%；最高 PERCLOS 平均分別約為 6.67%、12.69%、17.03%；嗜睡/危急 frame 比例在 Drowsy 類別約為 3.99%，高於 Alert 與 Low Vigilant 的約 0.03%。這表示 PERCLOS 與部分狀態比例對 Drowsy 類別有反應，但目前融合權重、低警覺門檻與個人化 baseline 尚未足以穩定支持整段影片三分類。
+
+畢業專題收尾建議採保守路線：展示完整 GUI、rPPG ROI、疲勞指標、SQLite/Web dashboard 與 UTA-RLDD replay；報告中主動揭露 Alert 誤報、Drowsy 漏報、UTA-RLDD 非逐幀 ground truth，以及 rPPG 不能用此資料集驗證 BPM 絕對準確率。兩週內不建議大改演算法或導入新的深度模型，應優先完成圖表、展示影片、報告限制章節、README 操作流程與必要測試。詳細分析見 `docs/2026-06-07-utarldd-analysis.md`。
+
+下一輪工程修正優先順序為：新增 post-calibration / face-detected / behavior-available 的有效 frame 統計，避免 summary 平均值被 `CALIBRATING` 或 `NO_FACE` frame 稀釋；同時隔離 UTA-RLDD replay 的 calibration namespace，避免本機既有 webcam baseline 影響資料集回放結果。這兩項風險不需要大改演算法，但能明顯提升報表可信度。
