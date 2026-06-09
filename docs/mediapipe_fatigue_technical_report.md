@@ -612,4 +612,4 @@ GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目
 4. 目前 summary 平均值會受到 `CALIBRATING`、`NO_FACE` 與尚未完成行為校準的 frame 影響；下一版應新增有效 frame 分母。
 5. replay 若讀到本機持久化 blendshape baseline，可能影響資料集可重現性；下一版應使用 replay 專用 calibration namespace 或停用持久化讀寫。
 
-畢專展示時，建議將本系統定位為「可即時運作的疲勞監測原型與驗證資料管線」。已完成部分包含 MediaPipe 特徵擷取、個人化 EAR baseline、PERCLOS、眨眼時序、head pose、rPPG 輔助融合、GUI、Web dashboard、SQLite 紀錄與 UTA-RLDD replay。尚未完成部分是以標註資料做門檻校正與三分類泛化驗證。詳細收尾建議見 `docs/2026-06-07-utarldd-analysis.md`。
+畢專展示時，建議將本系統定位為「可即時運作的疲勞監測原型與驗證資料管線」。已完成部分包含 MediaPipe 特徵擷取、個人化 EAR baseline、PERCLOS、眨眼時序、head pose、rPPG 輔助融合、GUI、Web dashboard、SQLite 紀錄與 UTA-RLDD replay。尚未完成部分是以標註資料做門檻校正與三分類泛化驗證。詳細收尾建議見 `docs/2026-06-07-utarldd-analysis.md` 。
