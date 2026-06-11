@@ -61,9 +61,11 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 這能讓系統更誠實，也能降低老師或使用者看到異常分數時的疑問。
 
-## 3. 第二優先：個人化校準
+## 3. 第二優先：疲勞基準值、文獻依據與校準
 
-疲勞偵測最大挑戰之一是個人差異。眼型、眨眼頻率、眼鏡、坐姿、臉部角度與平常心率都會不同。若使用固定門檻判斷所有人，容易造成誤報或漏報。
+疲勞偵測最大挑戰之一是個人差異。眼型、眨眼頻率、眼鏡、坐姿、臉部角度與平常心率都會不同。若使用固定門檻判斷所有人，容易造成誤報或漏報。經閱讀 `docs/` 內既有報告與目前程式碼後，可以確認本系統不是憑空設定一個疲勞分數，而是把文獻中常見的眼部閉合、眨眼時序、長閉眼、視線穩定、頭部姿態與 rPPG 輔助訊號，轉換成可即時運作的規則式工程基準。
+
+但也必須精準說明：文獻足以支持「這些特徵可用於疲勞/嗜睡風險監測」，目前 UTA-RLDD 回放也證明「資料處理與人臉偵測管線穩定」，但還不足以宣稱「現有門檻已可可靠分類無人機操作員疲勞」。目前最合理的定位仍是可解釋疲勞監測原型與驗證資料管線。
 
 ### 3.1 建議校準內容
 
@@ -74,7 +76,78 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 - 嘴部開合基準：降低說話、咬合、張嘴與哈欠混淆。
 - rPPG 基準：記錄初始 BPM、HRV 趨勢與訊號品質。
 
-### 3.2 建議流程
+### 3.2 目前系統實際使用的疲勞基準值
+
+目前實作主要來自 `gui/fatigue_engine.py` 與 `gui/fatigue_scorer.py`，可整理如下。
+
+| 類別 | 目前基準值或邏輯 | 判讀意義 |
+| --- | --- | --- |
+| EAR 校準 | 啟動後 `calib_sec=5.0` 秒，至少 `min_calib_samples=20` 筆；閉眼門檻為個人 EAR 中位數乘上 `thresh_ratio=0.75`，不足時 fallback `base_th_default=0.18` | 不使用單一固定 EAR，先建立個人開眼基準 |
+| 閉眼開啟遲滯 | `closed_open_hyst=1.06` | 避免眼睛開合在門檻附近抖動造成重複觸發 |
+| PERCLOS | `perclos_window_sec=60.0` 秒 sliding window | 以一段時間內眼睛閉合比例估計警覺度下降 |
+| 低警覺 PERCLOS | `low_vigilance_perclos_th=0.10` | 早期提醒工程門檻，不等於醫療診斷 |
+| 明顯嗜睡 PERCLOS | `tired_perclos_th=0.25` | `DROWSY` 狀態主要門檻 |
+| 長閉眼 | `long_closed_sec=1.5` 秒 | 觸發 `CRITICAL` 危急閉眼事件 |
+| 眨眼事件 | `blink_min_sec=0.08` 到 `blink_max_sec=0.45` 秒 | 排除太短雜訊與太長閉眼，把有效 blink 納入基準 |
+| 眨眼時序 baseline | 前 `blink_feature_calib_count=12` 次有效 blink 建立 duration、amplitude、opening velocity baseline | 用個人眨眼型態偏移偵測低警覺 |
+| 眨眼時序警示 | `blink_duration_warn_z=1.5`、`blink_opening_velocity_warn_z=-1.5`，`blink_temporal_score >= 0.45` 進入早期警示條件 | 眨眼變長或睜眼速度變慢時提高低警覺分數 |
+| 瞇眼 | `squint_ear_ratio=1.35`，持續 `squint_min_sec=3.0` 秒 | 長時間低 EAR 但非完整閉眼時視為早期疲勞/眼部負荷訊號 |
+| 凝視與掃視 | `gaze_fixed_alert_sec=5.0`、`fixation_duration > 15.0`、低 saccade frequency | 作為早期警示輔助，不能單獨判定嗜睡 |
+| 頭部姿態 | pitch 以 60 筆樣本建立 offset；`head_pitch_down_th=-15.0`、`head_microsleep_sec=1.5` | 用於點頭/微睡眠輔助判斷 |
+| 哈欠 | `mar_yawn_th=0.60`、`mar_yawn_dur_sec=1.5`，搭配 mouth blendshape | late-stage 輔助，權重低，避免說話誤判 |
+| 品質 gate | face area、roll、yaw ratio、nose speed、lid balance、mouth open noise；例如 fatigue face area 至少 `0.06`，roll 不超過 `25` 度 | 品質不足時降低或停止高信心判讀 |
+| 行為/生理融合 | 行為疲勞 `behavior_weight=0.85`，rPPG `rppg_weight=0.15`；rPPG 需 SQI、quality 與 ROI 數足夠才參與 | 目前以行為疲勞為主，rPPG 僅作輔助 |
+
+狀態分級目前如下：
+
+| 狀態 | 主要觸發 |
+| --- | --- |
+| `OK` | 已校準，主要疲勞特徵未達警示 |
+| `LOW_VIGILANCE` | PERCLOS >= 0.10、blink temporal score >= 0.45、瞇眼、凝視、皺眉或 blendshape 輔助訊號 |
+| `DROWSY` | PERCLOS >= 0.25 |
+| `CRITICAL` | 連續閉眼 >= 1.5 秒 |
+| `MICROSLEEP` | head nod / microsleep rule 觸發，優先級最高 |
+
+目前 `fatigue_level` 是工程加權分數，不是文獻直接給定的單一標準。程式中主要權重為：PERCLOS 0.40、micro/nod 0.30、blink temporal 0.10、squint 0.15，其他如皺眉、凝視、blendshape 與 yawn 為小權重輔助。融合器則另以 PERCLOS、blink temporal、microsleep、gaze、squint、yawn 等子分數計算行為 pillar，再與可用的 rPPG pillar 合併。
+
+### 3.3 文獻支持程度判斷
+
+目前技術路線不是憑空想像，文獻支持可分成三層：
+
+1. **高度支持的特徵方向**：PERCLOS 是疲勞/嗜睡被動偵測中長期使用且驗證較多的指標；EAR 與 facial landmarks 可用一般相機估計眼睛開合與眨眼；UTA-RLDD 提供 Alert、Low Vigilant、Drowsy 三類長影片，支持用時序特徵而非單張影像判斷早期嗜睡。
+2. **中度支持但需場域校正的工程門檻**：PERCLOS 0.10/0.25、長閉眼 1.5 秒、blink temporal z-score、凝視與掃視頻率等門檻，符合文獻方向與工程安全邏輯，但不是所有場景通用的保證值。這些門檻必須用本專案資料與無人機操作情境校正。
+3. **目前只能作輔助的訊號**：rPPG、皺眉、視線穩定、哈欠與頭部姿態都能提供風險線索，但容易受到光線、任務負荷、說話、轉頭查看現場與相機品質影響，因此不應單獨作為疲勞主判定。
+
+換句話說，目前可以篤定的是「使用這些特徵做疲勞風險監測有文獻與工程依據」；還不能篤定的是「現有固定門檻已經能在無人機操作員場域達到可靠分類」。報告與簡報應避免把系統包裝成高準確率分類器，應強調它是可解釋、可回放、可調校的疲勞監測原型。
+
+### 3.4 UTA-RLDD 回放系統目前證明了什麼
+
+本專案新增的 UTA-RLDD 回放系統會把資料集影片當成離線鏡頭，逐幀輸入 MediaPipe Face Landmarker，再輸出疲勞行為特徵、rPPG 指標、融合分數、SQLite 與 CSV 報表。這套系統的價值是建立可重現的驗證與門檻校正資料管線。
+
+目前 docs 紀錄的最新 36 支影片測試結果顯示：
+
+- 影片處理完成率 100%。
+- 三類影片平均人臉偵測率約 99.93%。
+- Drowsy 類別的平均 PERCLOS 與最高 PERCLOS 較高，嗜睡/危急 frame 比例也高於 Alert 與 Low Vigilant。
+- 但平均疲勞分數與融合分數沒有隨 `0 -> 5 -> 10` 單調上升。
+- Alert 類別 `LOW_VIGILANCE` 偏高，表示早期警示誤報風險仍存在。
+- Drowsy 影片若沒有明顯長閉眼或 PERCLOS 上升，現有規則可能漏報。
+
+因此，UTA-RLDD 目前最有力的證據是「管線穩定、可大量回放、可產生可稽核指標」，不是「疲勞分類已可靠」。這一點需要在優化報告、畢專報告與簡報中保持一致。
+
+### 3.5 目前還缺少什麼
+
+經閱讀既有報告後，最需要補上的不是單純更多影片，而是更精準的驗證設計：
+
+- 有效 frame 分母：summary 應分開列出全影片、face-detected、post-calibration、behavior-available 等分母，避免 `CALIBRATING` 或 `NO_FACE` 稀釋平均值。
+- Replay calibration 隔離：UTA-RLDD replay 不應讀到真人 webcam 的持久化 blendshape baseline，建議建立 replay 專用 calibration namespace 或在 replay 模式停用持久化校準。
+- 門檻 sweep：用 UTA-RLDD 與自錄標註資料批次掃描 PERCLOS、blink temporal、LOW_VIGILANCE 條件與融合權重，輸出 false alarm rate、miss rate、Drowsy recall 與 Alert 誤報率。
+- 逐事件標註：UTA-RLDD label 是整段影片類別，不是逐幀 ground truth；若要調長閉眼、哈欠、低頭、轉頭或凝視，仍需要自己標註事件時間。
+- 無人機場域資料：目前文獻多來自汽車駕駛或一般嗜睡資料集，仍缺少無人機操作員看遙控器、看平板、看天空、轉頭觀察現場、任務壓力上升等專用情境。
+- 原因碼輸出：每次 `LOW_VIGILANCE`、`DROWSY` 或 `CRITICAL` 應記錄觸發原因，例如 PERCLOS、blink temporal、long closed、gaze 或 quality issue，方便回放時確認判斷是否合理。
+- 報告一致性：技術報告、優化報告與簡報要使用同一套說法：目前是疲勞監測原型與驗證管線，不是已完成泛化驗證的三分類模型。
+
+### 3.6 建議校準流程
 
 飛前先進行 30 到 60 秒校準，系統檢查：
 
@@ -246,6 +319,10 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 短期目標是讓展示與報告更可信。
 
+- 新增 UTA-RLDD replay 的有效 frame 分母：全影片、face-detected、post-calibration、behavior-available 分開統計。
+- 隔離 replay calibration：避免資料集回放讀到本機真人 webcam 的持久化 baseline。
+- 新增狀態觸發原因碼：記錄每次 `LOW_VIGILANCE`、`DROWSY`、`CRITICAL` 的主要原因。
+- 製作門檻 sweep 報表：比較 PERCLOS、blink temporal、長閉眼與融合權重對 Alert 誤報和 Drowsy 漏報的影響。
 - 新增疲勞分數的原因解釋。
 - 強化品質 gate 與信心等級。
 - 飛前校準流程可視化。
@@ -256,6 +333,8 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 中期目標是讓系統更適合實際無人機任務。
 
+- 建立無人機操作情境標註資料：清醒監控、低頭看遙控器、轉頭看天空、長時間凝視螢幕、閉眼、打哈欠、說話、眼鏡反光與光線變化。
+- 用 false alarm rate per hour、miss rate、Drowsy recall、低警覺提前量作為門檻調校指標。
 - 加入任務情境標記。
 - 建立誤報/漏報情境測試集。
 - 強化 dashboard 趨勢圖與事件時間軸。
@@ -274,13 +353,13 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 ## 11. 可放入簡報的重點句
 
-本系統下一階段不只需要更多驗證資料，更需要優化「可相信、可解釋、可回顧、可部署」四個面向。具體來說，系統應從單純輸出疲勞分數，進一步提供信心等級、品質診斷、疲勞原因、飛前校準、任務中分級提醒與飛後報告。這樣才能把技術 demo 提升為無人機操作員人因安全輔助平台。
+本系統下一階段不只需要更多驗證資料，更需要優化「可相信、可解釋、可回顧、可部署」四個面向。具體來說，系統應從單純輸出疲勞分數，進一步提供信心等級、品質診斷、疲勞原因、飛前校準、任務中分級提醒與飛後報告。現有 PERCLOS、EAR、眨眼時序、長閉眼與 UTA-RLDD 三階段資料集有文獻依據，證明技術路線不是憑空想像；但目前門檻仍是工程基準，必須透過有效 frame 分母、replay calibration 隔離、門檻 sweep 與無人機場域標註資料校正。這樣才能把技術 demo 提升為無人機操作員人因安全輔助平台。
 
 ## 12. 結論
 
-本專案已具備疲勞監測原型的主要功能，但下一階段的核心不只是增加資料量，而是讓系統在真實使用情境下更可信、更穩定、更容易解釋。建議優先優化信心等級、品質 gate、個人化 baseline、飛前/飛中/飛後流程、誤報漏報情境處理、dashboard 報告輸出、相機穩定性與資料隱私。
+本專案已具備疲勞監測原型的主要功能，但下一階段的核心不只是增加資料量，而是讓系統在真實使用情境下更可信、更穩定、更容易解釋。建議優先優化信心等級、品質 gate、個人化 baseline、UTA-RLDD replay 有效分母、replay calibration 隔離、門檻 sweep、飛前/飛中/飛後流程、誤報漏報情境處理、dashboard 報告輸出、相機穩定性與資料隱私。
 
-若能完成上述優化，系統的定位會更清楚：它不是單純的臉部疲勞偵測程式，而是一套可支援民用專業無人機訓練、巡檢、演練與研究的人因安全輔助平台。
+若能完成上述優化，系統的定位會更清楚：它不是單純的臉部疲勞偵測程式，也不是已完成泛化驗證的高準確率分類器，而是一套可支援民用專業無人機訓練、巡檢、演練與研究的人因安全輔助平台。
 
 ## 13. 參考資料
 
@@ -299,3 +378,19 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 4. CDC/NIOSH, Work Schedules: Shift Work and Long Work Hours  
    https://www.cdc.gov/niosh/work-hour-training-for-nurses/longhours/index.html  
    參考用途：長工時、輪班、疲勞風險與工作安排管理脈絡。
+
+5. Tereza Soukupova and Jan Cech, Real-Time Eye Blink Detection using Facial Landmarks, 2016  
+   https://vision.fe.uni-lj.si/cvww2016/proceedings/papers/05.pdf  
+   參考用途：EAR 六點眼睛模型與 facial landmarks 眨眼偵測思路。
+
+6. PERCLOS-based technologies for detecting drowsiness: current evidence and future directions, Sleep Advances, 2023  
+   https://pmc.ncbi.nlm.nih.gov/articles/PMC10108649/  
+   參考用途：PERCLOS 作為嗜睡偵測指標的證據、限制與未來方向。
+
+7. Reza Ghoddoosian, Marnim Galib, Vassilis Athitsos, A Realistic Dataset and Baseline Temporal Model for Early Drowsiness Detection, CVPR Workshops, 2019  
+   https://openaccess.thecvf.com/content_CVPRW_2019/html/AMFG/Ghoddoosian_A_Realistic_Dataset_and_Baseline_Temporal_Model_for_Early_Drowsiness_CVPRW_2019_paper.html  
+   參考用途：UTA-RLDD、Alert / Low Vigilant / Drowsy 三階段標籤與長影片早期嗜睡偵測。
+
+8. National Highway Traffic Safety Administration, Assessment of Drowsy Driver Algorithms  
+   https://www-nrd.nhtsa.dot.gov/departments/Human%20Factors/810594/pages/AppC.htm  
+   參考用途：PERCLOS、長閉眼與嗜睡行為觀察的工程評估背景。
