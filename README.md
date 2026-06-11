@@ -189,9 +189,11 @@ fuser /dev/video0
 - `docs/system_overview_technical_report.md`: 系統總報告書，整合 rPPG、MediaPipe 疲勞偵測、融合分數、架構、驗證與限制。
 - `docs/rppg_technical_report_v2.md`: rPPG 子系統報告書，整理模型、演算法、input/output、架構與可信度驗證方式。
 - `docs/mediapipe_fatigue_technical_report.md`: MediaPipe 疲勞偵測子系統報告書，整理 Face Landmarker、行為疲勞演算法、融合分數與驗證方式。
+- `docs/drone_operator_fatigue_application_report.md`: 無人機操作員疲勞監測應用定位報告，整理民用專業無人機、訓練、巡檢與公共安全場景的系統價值。
 - `docs/system_overview_technical_report.pdf`: 系統總 PDF 報告。
 - `docs/rppg_technical_report_v2.pdf`: rPPG 子系統 PDF 報告。
 - `docs/mediapipe_fatigue_technical_report.pdf`: MediaPipe 疲勞偵測 PDF 報告。
+- `docs/drone_operator_fatigue_application_report.pdf`: 無人機操作員疲勞監測應用定位 PDF 報告。
 
 PDF reports can be regenerated with:
 

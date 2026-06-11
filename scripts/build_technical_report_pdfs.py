@@ -29,6 +29,11 @@ REPORTS = {
         "target": ROOT / "docs" / "mediapipe_fatigue_technical_report.pdf",
         "footer": "MediaPipe 疲勞偵測系統技術報告書",
     },
+    "drone-operator-application": {
+        "source": ROOT / "docs" / "drone_operator_fatigue_application_report.md",
+        "target": ROOT / "docs" / "drone_operator_fatigue_application_report.pdf",
+        "footer": "無人機操作員疲勞監測應用定位報告",
+    },
 }
 
 FONT_CANDIDATES = [
