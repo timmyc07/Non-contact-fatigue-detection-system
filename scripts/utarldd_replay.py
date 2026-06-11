@@ -61,6 +61,7 @@ def main() -> None:
     print(f"好讀摘要 CSV: {result.summary_csv}")
     print(f"驗證報表 CSV: {result.validation_report_csv}")
     print(f"完整欄位 CSV: {result.full_summary_csv}")
+    print(f"可視化 HTML 報表: {result.visual_report_html}")
     print(f"Manifest: {result.manifest_path}")
     print(f"影片總數: {result.videos_total}, 完成: {result.videos_done}, 失敗: {result.videos_failed}")
 

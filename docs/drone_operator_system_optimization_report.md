@@ -283,6 +283,16 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 這有助於口試展示、教學回顧、演算法調校與後續研究。
 
+### 7.3 UTA-RLDD CSV 可視化報表
+
+已新增 UTA-RLDD summary CSV 的可視化報表流程。Replay 批次完成後會輸出 `utarldd_visual_report_<timestamp>.html`，也可用 `scripts/utarldd_csv_report.py` 將既有 `utarldd_summary_<timestamp>.csv` 轉成單檔 HTML 報表。報表內容包含：
+
+- 總覽卡片：影片總數、完成數、平均人臉偵測率、Alert 誤報風險、Drowsy 漏報風險與有效幀不足數量。
+- Label 分組圖表：平均 PERCLOS、最高 PERCLOS、95 分位融合分數、低警覺比例、嗜睡/危急比例、行為有效率與低品質比例。
+- 逐影片表格：快速判讀、標籤對齊判讀、主要判斷依據、建議修正方向與優化旗標。
+
+這份 HTML 報表的目的不是取代 validation report，而是讓使用者能快速回答三個問題：系統這次主要靠哪些數值判斷疲勞、哪些影片可能是誤報或漏報、下一輪門檻調整應優先看哪一類特徵。
+
 ## 8. 第七優先：相機與部署穩定性
 
 實際使用時，最常出問題的往往不是疲勞演算法，而是相機與環境。OpenCV `VideoCapture` 支援不同平台與後端，但 Windows、Ubuntu、DirectShow、MSMF、V4L2、FFMPEG 的行為可能不同。

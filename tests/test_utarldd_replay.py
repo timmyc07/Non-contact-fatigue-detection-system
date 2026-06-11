@@ -16,6 +16,7 @@ from gui.utarldd_replay import (
     write_full_summary_csv,
     write_summary_csv,
     write_validation_report_csv,
+    write_visual_report_html_from_csv,
 )
 from scripts.utarldd_replay import _split_csv
 
@@ -91,13 +92,22 @@ def test_write_summary_csv(tmp_path: Path) -> None:
         face_frames=9,
         face_rate=0.9,
         status="done",
+        perclos_low_frames=4,
+        behavior_available_frames=8,
+        rppg_available_frames=7,
+        primary_fatigue_evidence="",
     )
 
     write_summary_csv(out, [summary])
 
     text = out.read_text(encoding="utf-8-sig")
     assert "受試者,資料集標籤,警覺類別,快速判讀" in text
+    assert "標籤對齊判讀" in text
+    assert "主要判斷依據" in text
+    assert "建議修正方向" in text
+    assert "優化旗標" in text
     assert "01,0,Alert,未見明顯疲勞" in text
+    assert "PERCLOS>=0.10" in text
 
 
 def test_write_full_summary_csv_keeps_machine_readable_fields(tmp_path: Path) -> None:
@@ -117,7 +127,54 @@ def test_write_full_summary_csv_keeps_machine_readable_fields(tmp_path: Path) ->
 
     text = out.read_text(encoding="utf-8-sig")
     assert "subject,label,label_name" in text
+    assert "label_alignment" in text
+    assert "optimization_flags_json" in text
     assert "01,10,Drowsy" in text
+
+
+def test_write_visual_report_html_from_summary_csv(tmp_path: Path) -> None:
+    summary_csv = tmp_path / "utarldd_summary_20260611_010203.csv"
+    html_out = tmp_path / "report.html"
+    summaries = [
+        UtaRlddVideoSummary(
+            subject="01",
+            label="0",
+            label_name="Alert",
+            video_path="C:/video/01/0.mov",
+            frames=100,
+            face_frames=100,
+            face_rate=1.0,
+            status="done",
+            low_vigilance_frames=30,
+            perclos_low_frames=30,
+            max_perclos=0.12,
+            behavior_available_frames=90,
+        ),
+        UtaRlddVideoSummary(
+            subject="01",
+            label="10",
+            label_name="Drowsy",
+            video_path="C:/video/01/10.mov",
+            frames=100,
+            face_frames=100,
+            face_rate=1.0,
+            status="done",
+            drowsy_frames=20,
+            perclos_drowsy_frames=20,
+            max_perclos=0.32,
+            p95_fused_score=0.42,
+            behavior_available_frames=95,
+        ),
+    ]
+    write_summary_csv(summary_csv, summaries)
+
+    write_visual_report_html_from_csv(summary_csv, html_out)
+
+    text = html_out.read_text(encoding="utf-8")
+    assert "UTA-RLDD 疲勞驗證可視化報表" in text
+    assert "逐影片判讀與修正建議" in text
+    assert "Alert 誤報風險" in text
+    assert "PERCLOS" in text
 
 
 def test_write_validation_report_csv_summarizes_label_and_subject_trends(tmp_path: Path) -> None:
@@ -227,12 +284,14 @@ def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatc
     assert result.summary_csv.exists()
     assert result.full_summary_csv.exists()
     assert result.validation_report_csv.exists()
+    assert result.visual_report_html.exists()
     assert result.manifest_path.exists()
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["source_url"] == "https://sites.google.com/view/utarldd/home"
     assert manifest["summary_csv"] == str(result.summary_csv)
     assert manifest["full_summary_csv"] == str(result.full_summary_csv)
     assert manifest["validation_report_csv"] == str(result.validation_report_csv)
+    assert manifest["visual_report_html"] == str(result.visual_report_html)
     assert manifest["labels"] == {"0": "Alert", "5": "Low Vigilant", "10": "Drowsy"}
     assert len(manifest["summaries"]) == 2
 
