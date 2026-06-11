@@ -39,6 +39,11 @@ REPORTS = {
         "target": ROOT / "docs" / "drone_operator_system_optimization_report.pdf",
         "footer": "無人機操作員疲勞監測系統優化建議報告",
     },
+    "utarldd-replay-validation": {
+        "source": ROOT / "docs" / "utarldd_replay_validation_report.md",
+        "target": ROOT / "docs" / "utarldd_replay_validation_report.pdf",
+        "footer": "UTA-RLDD 影片回放驗證系統技術報告",
+    },
 }
 
 FONT_CANDIDATES = [

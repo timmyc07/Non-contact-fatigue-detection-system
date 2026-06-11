@@ -198,11 +198,13 @@ fuser /dev/video0
 - `docs/mediapipe_fatigue_technical_report.md`: MediaPipe 疲勞偵測子系統報告書，整理 Face Landmarker、行為疲勞演算法、融合分數與驗證方式。
 - `docs/drone_operator_fatigue_application_report.md`: 無人機操作員疲勞監測應用定位報告，整理民用專業無人機、訓練、巡檢與公共安全場景的系統價值。
 - `docs/drone_operator_system_optimization_report.md`: 無人機操作員疲勞監測系統優化建議報告，整理可信度、校準、任務流程、誤報漏報、報告輸出與部署穩定性優化。
+- `docs/utarldd_replay_validation_report.md`: UTA-RLDD 影片回放驗證系統技術報告，整理回測流程、資料可信度、演算法原理、輸出報表與限制。
 - `docs/system_overview_technical_report.pdf`: 系統總 PDF 報告。
 - `docs/rppg_technical_report_v2.pdf`: rPPG 子系統 PDF 報告。
 - `docs/mediapipe_fatigue_technical_report.pdf`: MediaPipe 疲勞偵測 PDF 報告。
 - `docs/drone_operator_fatigue_application_report.pdf`: 無人機操作員疲勞監測應用定位 PDF 報告。
 - `docs/drone_operator_system_optimization_report.pdf`: 無人機操作員疲勞監測系統優化建議 PDF 報告。
+- `docs/utarldd_replay_validation_report.pdf`: UTA-RLDD 影片回放驗證系統 PDF 報告。
 
 PDF reports can be regenerated with:
 
