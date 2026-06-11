@@ -34,6 +34,11 @@ REPORTS = {
         "target": ROOT / "docs" / "drone_operator_fatigue_application_report.pdf",
         "footer": "無人機操作員疲勞監測應用定位報告",
     },
+    "drone-operator-optimization": {
+        "source": ROOT / "docs" / "drone_operator_system_optimization_report.md",
+        "target": ROOT / "docs" / "drone_operator_system_optimization_report.pdf",
+        "footer": "無人機操作員疲勞監測系統優化建議報告",
+    },
 }
 
 FONT_CANDIDATES = [
