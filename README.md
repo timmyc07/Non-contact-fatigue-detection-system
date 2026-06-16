@@ -209,8 +209,9 @@ fuser /dev/video0
 - `docs/drone_operator_fatigue_application_report.pdf`: 無人機操作員疲勞監測應用定位 PDF 報告。
 - `docs/drone_operator_system_optimization_report.pdf`: 無人機操作員疲勞監測系統優化建議 PDF 報告。
 - `docs/utarldd_replay_validation_report.pdf`: UTA-RLDD 影片回放驗證系統 PDF 報告。
+- `docs/system_architecture_algorithm_map.pdf`: 用途導向專案架構、資料流與演算法地圖 PDF 報告。
 
-PDF reports can be regenerated with:
+既有技術報告 PDF 可使用下列指令重新產生：
 
 ```bash
 .venv/bin/python scripts/build_technical_report_pdfs.py
