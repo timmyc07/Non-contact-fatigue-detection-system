@@ -253,6 +253,7 @@ MediaPipe 調校目前以 `stable_indoor` profile 為預設，另有 low light �
 - 融合評分在 rPPG 低品質時降權、在兩管線可用時使用 15/85 權重。
 - SQLite schema migration、Web playback、UTA-RLDD discovery/report、告警觸發邏輯。
 - Socket.IO dashboard contract 測試覆蓋連線初始狀態、`request_metrics` history/latest、latest 去重、callback 失敗容錯、Web preview JPEG 編碼與 `frame_update` 推播。
+- 2026-06-16 專案審視後，`npx pyright` 為 0 errors / 0 warnings，完整 `pytest` 紀錄為 `68 passed`。
 
 建議修改 Python 邏輯後至少執行：
 

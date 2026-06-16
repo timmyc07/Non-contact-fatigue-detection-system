@@ -16,6 +16,9 @@ TARGET = ROOT / "docs" / "rppg_technical_report.pdf"
 
 
 FONT_CANDIDATES = [
+    "C:/Windows/Fonts/msjh.ttc",
+    "C:/Windows/Fonts/mingliu.ttc",
+    "C:/Windows/Fonts/simsun.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc",
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",

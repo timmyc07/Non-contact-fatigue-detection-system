@@ -20,6 +20,7 @@
 - 修正 `gui/utarldd_replay.py` 可視化報表聚合時的 CSV 欄位轉 float 型別問題。
 - 修正 `gui/web_server.py` 與 `tests/test_web_socketio_dashboard.py` 的 Socket.IO payload 型別註記。
 - 移除 `gui/__init__.py` 中造成 pyright warning 的 lazy export `__all__`。
+- 同步更新技術報告與 PDF 產生流程，讓 Web 同步、Web preview 30 FPS、UTA CSV 轉 HTML 報表與最新驗證狀態反映在文件中。
 
 追加驗證：
 

@@ -1,6 +1,6 @@
 # UTA-RLDD 影片回放驗證系統技術報告
 
-更新日期：2026-06-11
+更新日期：2026-06-16
 
 本報告說明本專案 UTA-RLDD 影片回放驗證系統的目的、資料流程、回測方法、可信度來源、演算法與輸出報表。此系統的核心功能，是把 UTA-RLDD 資料集影片當成「可重現的離線鏡頭」，逐幀送入本專案正式使用的 MediaPipe、疲勞分析、rPPG 與融合分數流程，輸出 SQLite、CSV、validation report、manifest 與 HTML 可視化報表。
 
@@ -43,6 +43,14 @@ CLI 使用方式：
 ```bash
 .venv/bin/python scripts/utarldd_csv_report.py recordings/utarldd_runs/<timestamp>/utarldd_summary_<timestamp>.csv
 ```
+
+已驗證的既有回測轉換範例：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\utarldd_csv_report.py recordings\utarldd_runs\20260607_122601\utarldd_summary_20260607_122601.csv
+```
+
+輸出檔案為 `recordings/utarldd_runs/20260607_122601/utarldd_visual_report_20260607_122601.html`。
 
 ## 3. 回放資料如何被發現與分類
 
@@ -298,6 +306,8 @@ HTML 報表會整理：
 
 這讓使用者不用只看原始 CSV，就能快速看出系統目前主要靠哪些訊號判斷疲勞、哪一類影片最容易誤報或漏報、下一步應調整哪個門檻。
 
+2026-06-16 補充：`20260607_122601` 這批正式完整回測已從既有 summary CSV 補產 HTML 可視化報表；不需要重新跑 36 支影片即可更新展示報表。需注意的是，這批 CSV 是較早輸出的欄位版本，尚未包含新版 post-calibration / behavior-available 等有效分母欄位；若要讓 HTML 報表顯示完整有效分母，需要用目前程式重跑 replay。
+
 ## 12. 回測數據為什麼可信
 
 本系統的可信度來自六個工程設計。
@@ -324,7 +334,7 @@ summary 不只輸出平均分數，也輸出：
 - rPPG available frames。
 - low-quality frames。
 
-這避免把校準期、無臉、低品質 frame 混在一起誤解成演算法失敗或成功。
+這避免把校準期、無臉、低品質 frame 混在一起誤解成演算法失敗或成功。舊版已輸出的 CSV 不會自動補齊這些欄位；從既有 CSV 轉 HTML 時會以現有欄位呈現，欄位版本需在報告中註明。
 
 ### 12.5 批次輸出 manifest
 
@@ -381,6 +391,8 @@ GUI replay 可顯示即時預覽。預覽內容包含：
 - rPPG ROI 標註。
 
 預覽會限制最大尺寸與最高約 20 FPS，避免 Qt 主執行緒負擔過重。這只影響畫面顯示，不影響 SQLite、CSV 與 manifest 的逐幀分析結果。
+
+此處的 20 FPS 只指 UTA-RLDD 離線 replay 預覽。live camera 與 Web dashboard 即時 preview 已在 2026-06-16 調整為 30 FPS 目標，且以 `QImageWriter` 產生 JPEG base64 後透過 Socket.IO 推送；兩者目的不同，不能混為同一條 FPS 限制。
 
 若使用 `--write-annotated-video` 或 GUI 勾選標註影片，系統會輸出標註後 mp4。標註影片適合展示與人工檢查，但正式批次驗證不建議大量輸出，避免容量與編碼壓力。
 

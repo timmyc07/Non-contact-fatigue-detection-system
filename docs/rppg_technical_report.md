@@ -1,6 +1,7 @@
 # rPPG 技術、演算法與系統運作說明
 
 產生日期：2026-05-21
+更新日期：2026-06-16
 
 本文件整理目前 `mediapipe_rppg_system_v2` 專案中 rPPG 模組實際使用到的技術、演算法、模型、資料流、計算方式與系統運作邏輯。內容以現有程式碼為準，主要來源為 `rppg/rppg_worker.py`、`rppg/demo_rppg_live.py`、`gui/camera_stream_worker.py`、`gui/combined_worker.py`、`gui/main_window.py`、`gui/fatigue_scorer.py` 與 `gui/metrics_recorder.py`。
 
@@ -478,6 +479,8 @@ rPPG metrics 會被轉成兩種輸出：
 
 即時鏡頭預覽不走 SQLite，而是由 GUI 目前的 frame routing 來源取得 `QImage`，以 `QImageWriter` 編成 JPEG base64 後透過 Socket.IO `frame_update` 推送到 dashboard。live camera 與各分析 worker 的預覽輸出上限為 30 FPS，Web 推播端也以 30 FPS 為目標節流。前端收到影格後更新 `preview-frame`，並隱藏「等待鏡頭畫面」placeholder。這條路徑只影響 Web 顯示，不改變 rPPG、疲勞判定、融合分數或錄製資料。
 
+2026-06-16 補充：dashboard 初始同步會在 Socket.IO `connect` 與 `request_metrics` 時補送 GUI 最新 `_build_web_metrics()` 封包。此封包包含 pipeline/camera/recording 狀態、相機 metadata、frame source、record source，以及行為疲勞與 rPPG 啟用狀態；前端同時支援 `metrics_history.latest` 與即時 `metrics_update`。因此新開或重新整理 dashboard 時，畫面會直接反映目前 GUI 狀態，不必等待下一筆 rPPG 指標才更新。
+
 ### 18.2 SQLite
 
 `MetricsRecorder` 寫入 `metrics` table。rPPG 相關欄位包括：
@@ -645,3 +648,6 @@ Demo 也支援：
 - SciPy `welch` 官方文件：https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.welch.html
 - SciPy `find_peaks` 官方文件：https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html
 - SciPy `interp1d` 官方文件：https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.interp1d.html
+- Flask-SocketIO API：https://flask-socketio.readthedocs.io/en/latest/api.html
+- Socket.IO emitting events：https://socket.io/docs/v4/emitting-events/
+- Qt for Python QImageWriter：https://doc.qt.io/qtforpython-6.5/PySide6/QtGui/QImageWriter.html

@@ -11,6 +11,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - Recording to SQLite (.db) and video (.mp4)
 - Web dashboard for live metrics and playback
 - Web dashboard 預設僅本機存取；可在 GUI「設定 → 允許區域網存取 Web 儀表板」開啟後，由同區域網裝置以 `http://<主機IP>:5000` 連線
+- Web dashboard 會在新連線與重新整理後同步 GUI 最新狀態，live camera preview 目標為 30 FPS；UTA-RLDD 離線 replay 預覽仍約 20 FPS。
 - 疲勞警報器：GUI「設定 → 警報器設定…」可依 `LOW_VIGILANCE` / `DROWSY` / `CRITICAL` / `MICROSLEEP` 指定不同音效（預設路徑 `assets/alerts/*.wav`）
 - rPPG BPM 估測回到第一版基準：有效 ROI 等權平均、Welch peak 直接輸出，並用峰值插值與輕量平滑補足 71/72/73 這類細節。
 - 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
@@ -105,7 +106,7 @@ python -m rppg.demo_rppg_live
 
 CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。桌面 GUI 也提供「UTA-RLDD 影片測試」區塊，可選資料夾、開始/停止批次、顯示目前 subject/label/video 進度、MediaPipe 人臉特徵與 ROI 標註預覽，以及摘要檔路徑。`開始批次` 會啟用單工預覽，適合抽查偵測畫面；`平行驗證` 會依 GUI 的「平行數」設定使用多進程、停用預覽，適合正式大量驗證，GUI 平行數上限為 4。平行驗證會自動停用 `輸出標註影片`，避免多個子行程同時寫 mp4 造成 Windows/OpenCV/MediaPipe 資源壓力；需要標註影片時請用單工 `開始批次`。若某個子行程異常中止，批次會停止派發新工作，把未完成影片寫成 `failed` 並保留 CSV/manifest。平行驗證時可看 GUI 的「處理清單」：`進行中` 會列出目前正在跑的影片，`已完成` 顯示完成數/總數，`最近完成` 顯示剛處理完的 subject/label、frame 數、狀態與 face rate。GUI 預覽為了保持主視窗流暢，會以最高約 20 FPS 顯示並限制預覽影像尺寸；這只影響螢幕顯示，不影響 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
 
-2026-06-07 最新 36 支影片測試結果整理於 `docs/2026-06-07-utarldd-analysis.md`。本次影片處理完成率為 100%，平均人臉偵測率約 99.93%，代表回放與偵測管線穩定；但融合分數未隨 `0 -> 5 -> 10` 穩定上升，因此不能宣稱三分類準確率接近 100%。這份結果適合用於畢專報告的限制分析與後續門檻校正依據。
+2026-06-07 最新 36 支影片測試結果整理於 `docs/2026-06-07-utarldd-analysis.md`。本次影片處理完成率為 100%，平均人臉偵測率約 99.93%，代表回放與偵測管線穩定；但融合分數未隨 `0 -> 5 -> 10` 穩定上升，因此不能宣稱三分類準確率接近 100%。同批次 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv` 已可轉成 `utarldd_visual_report_20260607_122601.html`，適合用於畢專報告的限制分析與後續門檻校正依據。
 
 ## MediaPipe tuning and calibration
 
@@ -191,7 +192,7 @@ fuser /dev/video0
 - `docs/rppg_technical_report.md`: rPPG 技術、演算法、模型與系統運作說明；可用 `scripts/build_rppg_pdf.py` 產生 PDF。
 - `docs/2026-05-21-mediapipe-landmark-expansion-log.md`: 本次新增 MediaPipe 部位與精準度提升的更新紀錄。
 
-- `scripts/utarldd_replay.py`: UTA-RLDD 影片批次回放測試，輸出 SQLite、CSV summary 與 manifest。
+- `scripts/utarldd_replay.py`: UTA-RLDD 影片批次回放測試，輸出 SQLite、summary CSV、validation CSV、完整 CSV、HTML 與 manifest。
 - `scripts/utarldd_csv_report.py`: 將 UTA-RLDD summary CSV 轉成單檔 HTML 可視化報表，整理趨勢圖、判斷依據與優化建議。
 
 ## Technical reports
@@ -201,6 +202,7 @@ fuser /dev/video0
 - `docs/drone_operator_fatigue_application_report.md`: 無人機操作員疲勞監測應用定位報告，整理民用專業無人機、訓練、巡檢與公共安全場景的系統價值。
 - `docs/drone_operator_system_optimization_report.md`: 無人機操作員疲勞監測系統優化建議報告，整理可信度、校準、任務流程、誤報漏報、報告輸出與部署穩定性優化。
 - `docs/utarldd_replay_validation_report.md`: UTA-RLDD 影片回放驗證系統技術報告，整理回測流程、資料可信度、演算法原理、輸出報表與限制。
+- `docs/system_architecture_algorithm_map.md`: 用途導向的專案架構、資料流與演算法地圖，不以實際檔名作為架構節點。
 - `docs/system_overview_technical_report.pdf`: 系統總 PDF 報告。
 - `docs/rppg_technical_report_v2.pdf`: rPPG 子系統 PDF 報告。
 - `docs/mediapipe_fatigue_technical_report.pdf`: MediaPipe 疲勞偵測 PDF 報告。

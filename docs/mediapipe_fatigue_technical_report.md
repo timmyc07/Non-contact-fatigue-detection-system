@@ -1,6 +1,6 @@
 # MediaPipe 疲勞偵測系統技術報告書
 
-更新日期：2026-05-31
+更新日期：2026-06-16
 
 本報告整理本專案 MediaPipe 疲勞偵測子系統實際使用的 AI 模型、演算法、輸入輸出、可信度驗證方式與系統架構。依據檔案包含 `gui/combined_worker.py`、`gui/fatigue_engine.py`、`gui/fatigue_scorer.py`、`gui/fatigue_worker.py`、`gui/mediapipe_tuning.py`、`config/mediapipe_tuning.json` 與 `tests/test_mediapipe_enhancements.py`。
 
@@ -514,7 +514,7 @@ Behavior sub-score 權重：
    網路來源：https://digitalcommons.aaru.edu.jo/erjeng/vol6/iss3/7
    本系統參考內容：CNN 擷取影像特徵、LSTM 學習時序依賴，以及 NTHU driver drowsiness dataset 作為駕駛疲勞時序建模背景。本次沒有導入 CNN-LSTM 模型，因目前專案需要可解釋且可即時調整的規則式基準。
 
-2. Gülin Tüfekci, Alper Kayabaşi, Erdem Akagündüz, İlkay Ulusoy, "Detecting Driver Drowsiness as an Anomaly Using LSTM Autoencoders", arXiv:2209.05269, 2022.
+2. Gulin Tufekci, Alper Kayabasi, Erdem Akagunduz, Ilkay Ulusoy, "Detecting Driver Drowsiness as an Anomaly Using LSTM Autoencoders", arXiv:2209.05269, 2022.
    網路來源：https://arxiv.org/abs/2209.05269
    本系統參考內容：只用正常駕駛表徵建立個人/單人 baseline，將偏離正常的時序特徵視為 anomaly。這支持本系統用個人化 EAR 與 blink temporal baseline，而不是套用所有人的固定門檻。
 
@@ -533,7 +533,7 @@ Behavior sub-score 權重：
 
 - MediaPipe Face Landmarker Python guide：https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python
   參考 Face Landmarker 的 478 landmarks、blendshape scores、facial transformation matrix、`RunningMode.VIDEO` 與 `detect_for_video()`。
-- Tereza Soukupová and Jan Čech, "Real-Time Eye Blink Detection using Facial Landmarks", 2016：https://vision.fe.uni-lj.si/cvww2016/proceedings/papers/05.pdf
+- Tereza Soukupova and Jan Cech, "Real-Time Eye Blink Detection using Facial Landmarks", 2016：https://vision.fe.uni-lj.si/cvww2016/proceedings/papers/05.pdf
   參考 EAR 六點眼睛比例與 blink detection 思路。
 - PERCLOS-based technologies for detecting drowsiness: current evidence and future directions, Sleep Advances, 2023：https://pmc.ncbi.nlm.nih.gov/articles/PMC10108649/
   參考 PERCLOS 作為 established drowsiness measure，以及常見「眼睛高度閉合時間比例」定義差異。
@@ -570,12 +570,15 @@ Behavior sub-score 權重：
 - `utarldd_summary_<timestamp>.csv`：給人工快速檢視的好讀摘要，包含中文欄位、百分比化的 face rate/PERCLOS、快速判讀、主要疲勞/rPPG 指標與狀態分布。
 - `utarldd_validation_report_<timestamp>.csv`：整批驗證趨勢報表，包含 `label_summary` 與 `subject_trend`，用於檢查 label 0/5/10 是否呈現疲勞趨勢上升；此報表比逐支影片摘要更適合回答「這批資料是否支持系統」。
 - `utarldd_summary_full_<timestamp>.csv`：完整欄位版本，保留原始 summary dataclass 欄位供 notebook、統計分析與稽核。
+- `utarldd_visual_report_<timestamp>.html`：由 summary CSV 產生的單檔可視化報表，用於快速檢視標籤對齊、主要判斷依據、優化旗標與誤報/漏報風險。
 - 行為疲勞：`avg_fatigue_score`、`p95_fatigue_score`、`avg_perclos`、`max_perclos`、`avg_blink_temporal`、`max_blink_temporal`、`LOW_VIGILANCE/DROWSY/CRITICAL/MICROSLEEP/NO_FACE` frame counts。
 - 融合分數：`avg_fused_score`、`p95_fused_score`。
 - 可用性：frames、face_frames、face_rate、duration_sec、fps、width、height。
 - rPPG 診斷：`avg_rppg_quality`、`avg_sqi`、`avg_bpm`、`bpm_guard_count`。
 
 GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目的在於讓操作者一邊跑批次一邊確認偵測是否正常。預覽影像會限制尺寸並以最高約 20 FPS 顯示，降低 GUI 主執行緒負擔；這個預覽不改變 DB 與 CSV 的逐幀數值計算，也不會取代完整 SQLite 回放。
+
+即時 Web dashboard 預覽與 UTA-RLDD replay 預覽需分開解讀。2026-06-16 後，live camera 與即時分析 worker 的 preview producer 目標為 30 FPS，Web 端使用 `QImageWriter` 編成 JPEG base64 後推送 `frame_update`；UTA-RLDD 離線 replay 預覽仍維持約 20 FPS，避免批次處理時 Qt 主執行緒負擔過高。兩者都只影響畫面顯示，不改變疲勞指標、rPPG 指標、融合分數、DB 或 CSV/HTML 報表。
 
 大量驗證時不建議用 GUI 一支一支觀察完整影片，而應使用 CLI `--jobs N` 或 GUI「平行驗證」做多進程批次。GUI「開始批次」保留單工標註預覽，適合確認 MediaPipe 偵測是否正常；GUI「平行驗證」依「平行數」設定跑多進程並停用預覽，適合正式跑 60 位受試者。平行驗證期間，GUI 的「處理清單」會顯示目前進行中的 subject/label、已完成數/總數，以及最近完成影片的 frame 數、狀態與 face rate，讓操作者可直接確認批次處理到哪些影片。為降低 Windows 多進程、OpenCV 影片解碼與 MediaPipe 初始化造成的資源壓力，GUI 平行數上限為 4，且平行模式會自動停用標註影片輸出；若子行程異常中止，系統會把未完成影片標成 `failed` 並保留摘要檔，讓驗證流程可追蹤而不是只留下英文 pool 錯誤。此平行化只在不同影片之間進行；單支影片內仍逐幀順序分析，使 EAR、PERCLOS、眨眼時序、rPPG buffer 與 MediaPipe VIDEO timestamp 維持可重現。這能在不改變疲勞門檻與逐幀輸出的前提下，提高資料集驗證效率。
 
@@ -609,7 +612,13 @@ GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目
 1. `LOW_VIGILANCE` 對 Alert 影片偏敏感，容易造成早期警示誤報。
 2. Drowsy 影片若沒有長閉眼或明顯 PERCLOS 上升，現有規則可能漏報。
 3. UTA-RLDD label 是整段影片類別，不是逐幀標註，因此不能直接換算逐幀 accuracy、precision 或 recall。
-4. 目前 summary 平均值會受到 `CALIBRATING`、`NO_FACE` 與尚未完成行為校準的 frame 影響；下一版應新增有效 frame 分母。
+4. 2026-06-07 舊批次 summary 平均值會受到 `CALIBRATING`、`NO_FACE` 與尚未完成行為校準的 frame 影響；新版 replay schema 已加入有效 frame 分母，但舊批次若不重跑，只能依既有欄位與 HTML 報表標註限制。
 5. replay 若讀到本機持久化 blendshape baseline，可能影響資料集可重現性；下一版應使用 replay 專用 calibration namespace 或停用持久化讀寫。
 
 畢專展示時，建議將本系統定位為「可即時運作的疲勞監測原型與驗證資料管線」。已完成部分包含 MediaPipe 特徵擷取、個人化 EAR baseline、PERCLOS、眨眼時序、head pose、rPPG 輔助融合、GUI、Web dashboard、SQLite 紀錄與 UTA-RLDD replay。尚未完成部分是以標註資料做門檻校正與三分類泛化驗證。詳細收尾建議見 `docs/2026-06-07-utarldd-analysis.md` 。
+
+## 19. 2026-06-16 專案審視補充
+
+本輪審視確認近期小修集中在顯示同步與工程品質：Web dashboard 會在初始連線與 `request_metrics` 時補送 GUI 最新狀態，Web preview 改用 `QImageWriter` 推送 JPEG 並以 30 FPS 為 live 目標，`20260607_122601` 回測結果已轉成 HTML 可視化報表。這些修正不更動 EAR、PERCLOS、眨眼時序、head pose、yawn、rPPG 或融合權重。
+
+最新工程驗證紀錄為 `npx pyright` 0 errors / 0 warnings，完整 `pytest` 為 `68 passed`。後續若調整疲勞門檻，仍應以固定 replay、人工標註與 false alarm / miss rate 指標做 A/B 比較。

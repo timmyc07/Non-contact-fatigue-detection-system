@@ -1,6 +1,6 @@
 # rPPG 系統技術報告書
 
-更新日期：2026-05-31
+更新日期：2026-06-16
 
 本報告整理本專案 rPPG 子系統實際使用的模型、演算法、技術、輸入輸出、可信度驗證方式與系統架構。依據檔案包含 `rppg/rppg_worker.py`、`rppg/demo_rppg_live.py`、`gui/combined_worker.py`、`gui/mediapipe_tuning.py`、`config/mediapipe_tuning.json` 與 `tests/test_rppg_signal_processing.py`。
 
@@ -413,9 +413,10 @@ rPPG 指標可能反映壓力、生理負荷或運動狀態，但不能單獨定
 2. 同時輸出 `raw_bpm` 與 stabilized `bpm`，檢查 guard 是否只攔截 artifact，而不是壓掉真實心率變化。
 3. 將 `bpm_guard_reason` 與 `sqi`、`roi_valid_count`、`quality_score`、`landmark_jitter_norm`、`roi_area_stability` 一起分析，找出波動來源。
 4. 若要參考清華碩論導入雙頰 Lab/GRU，應先以 feature flag 或離線 replay 模式測試，通過後再考慮進入即時主流程。
+
 ## 16. 2026-06-06 UTA-RLDD replay 對 rPPG 的使用界線
 
-本次新增的 UTA-RLDD replay 會在離線影片上同步執行 fatigue、rPPG 與 fused score，輸出 SQLite、CSV summary 與 manifest。rPPG 主流程仍維持既有 POS、Butterworth band-pass、Welch peak、IBI/HRV 與 BPM guard，不因資料集回放而替換演算法，避免使用者已測得「接近精準」的 rPPG 行為被不必要改壞。
+本次新增的 UTA-RLDD replay 會在離線影片上同步執行 fatigue、rPPG 與 fused score，輸出 SQLite、CSV summary、validation report、完整 CSV、HTML 可視化報表與 manifest。rPPG 主流程仍維持既有 POS、Butterworth band-pass、Welch peak、IBI/HRV 與 BPM guard，不因資料集回放而替換演算法，避免使用者已測得「接近精準」的 rPPG 行為被不必要改壞。
 
 資料集來源：
 
@@ -438,3 +439,11 @@ GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，方
 ### 16.1 Welch 短訊號邊界保護
 
 UTA-RLDD 部分影片在短 tachogram 或訊號邊界時，SciPy `welch` 可能因實際 `nperseg` 被縮短而要求 `noverlap < nperseg`。本系統新增 `_safe_welch_params()`，依目前有效資料長度動態設定 `nperseg/noverlap`，避免 `noverlap=16 must be less than nperseg=16` 這類錯誤讓整支影片被標成 failed。此修正只保護 rPPG 訊號分析不中斷，不改 POS、band-pass、BPM guard 或 fatigue fusion 的判定公式。
+
+## 17. 2026-06-16 Web preview 與報表同步狀態
+
+live Web preview 目前不經 SQLite，而是由 GUI 目前的 frame routing 來源取得 `QImage`，用 `QImageWriter` 編成 JPEG base64 後以 Socket.IO `frame_update` 推送。live camera、combined worker、fatigue worker 與 rPPG worker 的 preview producer 皆以 30 FPS 為上限，Web 端也以 30 FPS 目標節流。這項修正只改善 dashboard 畫面同步，不改 rPPG 數值、ROI 取樣或 BPM guard。
+
+dashboard 指標同步也已補上最新狀態封包：新連線或 `request_metrics` 會取得 buffer history，並以 GUI 最新封包補上 `metrics_history.latest` 與 `metrics_update`。rPPG 報告中應把這項列為顯示層與資料同步修復，而非演算法修正。
+
+最新驗證狀態：`npx pyright` 為 0 errors / 0 warnings，完整 `pytest` 紀錄為 `68 passed`。`recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv` 已可用 `scripts/utarldd_csv_report.py` 轉成 `utarldd_visual_report_20260607_122601.html`，作為 UTA-RLDD rPPG 品質與疲勞趨勢的可視化檢視入口。

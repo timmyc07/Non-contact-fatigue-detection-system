@@ -1,6 +1,6 @@
 # 系統總技術報告書
 
-更新日期：2026-05-31
+更新日期：2026-06-16
 
 本報告整理本系統的整體目的、AI 模型、訊號處理、疲勞分析、輸入輸出、系統架構、可信度驗證方式與限制。內容以聽眾能理解的用途名稱描述流程；必要技術術語會以括號補充，例如臉部特徵點（landmarks）與皮膚取樣區域（ROI）。
 
@@ -215,10 +215,10 @@ rPPG 生理訊號不使用心率 AI 模型，而是由訊號處理產生：
 ### 11.3 主要參考依據
 
 - MediaPipe Face Landmarker 官方文件：採用 478 landmarks、blendshape scores 與 transformation matrix 作為臉部特徵來源。
-- Soukupová and Čech, 2016：採用 EAR 與 facial landmarks 進行眼部開合/眨眼偵測的思路。
+- Soukupova and Cech, 2016：採用 EAR 與 facial landmarks 進行眼部開合/眨眼偵測的思路。
 - PERCLOS 駕駛嗜睡研究與 NHTSA 相關報告：採用「時間窗內眼睛閉合比例」作為警覺度下降指標。
 - Ghoddoosian, 2019/2022：參考 `alert / low vigilant / drowsy` 三階段與 temporal model 思路，因此新增低警覺分級。
-- Tüfekci et al., 2022：參考以正常表徵建立 baseline、偏離正常視為 anomaly 的概念，因此採用個人化眨眼時序 baseline。
+- Tufekci et al., 2022：參考以正常表徵建立 baseline、偏離正常視為 anomaly 的概念，因此採用個人化眨眼時序 baseline。
 - 王奕鈞，2026：參考 MediaPipe ROI、雙頰與 Lab 色彩空間在 rPPG 動態情境下的後續優化方向；本次未直接替換已接近精準的 POS 主流程。
 ## 12. 2026-06-06 UTA-RLDD 影片回放測試系統
 
@@ -249,6 +249,7 @@ python -m scripts.utarldd_replay <dataset_root> --max-videos 1 --max-frames 300
 - `utarldd_summary_<timestamp>.csv`：給人工檢視的好讀摘要，使用中文欄位、百分比欄位與快速判讀。
 - `utarldd_validation_report_<timestamp>.csv`：整批驗證趨勢報表，彙整 label 0/5/10 的平均疲勞/PERCLOS/狀態比例，並檢查同一受試者三段影片是否呈現疲勞趨勢上升。
 - `utarldd_summary_full_<timestamp>.csv`：保留每支影片的完整 summary 欄位，供後續 notebook、統計與稽核使用。
+- `utarldd_visual_report_<timestamp>.html`：由 summary CSV 產生的單檔 HTML 可視化報表，整理趨勢圖、快速判讀、主要判斷依據與優化旗標。
 - `utarldd_manifest_<timestamp>.json`：run metadata、來源 URL、label 對應與每支影片摘要。
 - 可選 `video_utarldd_<subject>_<label>_<timestamp>.mp4`：只有啟用 `--write-annotated-video` 或 GUI 勾選輸出標註影片時產生。
 
@@ -258,15 +259,23 @@ GUI 版本會在批次進行時顯示 MediaPipe 人臉特徵與 rPPG ROI 標註�
 
 Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 replay DB 可以與一般錄影 DB 一樣被 dashboard 讀取。這項測試可補足目前無法短時間募集大量真人受試者的問題，但仍不能完全取代無人機駕駛員場域真人測試；最終門檻仍應用本場域資料做校正。
 
-## 13. 畢專主旨：無人機駕駛員疲勞狀態監測
+## 13. 2026-06-16 Web dashboard 同步與即時預覽修復
+
+Web dashboard 的即時狀態同步已改為「buffer history + GUI 最新快照」模式。新開或重新整理頁面時，Socket.IO `connect` 與 `request_metrics` 會取得目前 GUI 端 `_build_web_metrics()` 的最新封包；封包包含 pipeline/camera/recording 狀態、相機 metadata、目前 frame source、record source、行為疲勞與 rPPG 啟用狀態。前端收到 `metrics_history.latest` 或 `metrics_update` 後會立即更新畫面，避免 dashboard 連上後停留在等待狀態。
+
+Web 鏡頭預覽也已從 `QImage.save(..., "JPEG")` 改為以 `QImageWriter` 寫入 JPEG，再轉成 base64 透過 Socket.IO `frame_update` 推送。live camera、combined worker、fatigue worker 與 rPPG worker 的 preview producer 上限皆為 30 FPS，Web 推播端目標同樣為 30 FPS；UTA-RLDD 離線 replay 預覽仍維持約 20 FPS，因其用途是批次抽查偵測畫面，不影響逐幀 SQLite、CSV、HTML 與 manifest 輸出。
+
+本輪同步修復後，Web contract 測試覆蓋連線初始狀態、`request_metrics` history/latest、latest 去重、callback 失敗容錯、JPEG preview 編碼與 `frame_update` 推播。
+
+## 14. 畢專主旨：無人機駕駛員疲勞狀態監測
 
 本專題的主要應用場域是無人機遠端駕駛員，而非一般汽車駕駛分類器。系統目標是在地面站或桌面監控情境中，透過一般 RGB 攝影機與 MediaPipe 臉部特徵，監測操作員長時間注視螢幕、任務負荷、疲勞累積或警覺度下降時可能出現的眼部、臉部、頭部姿態與 rPPG 輔助生理變化。
 
 因此，系統輸出應被解讀為「無人機操作員狀態提示與紀錄」，不是醫療診斷、不是安全關鍵自動接管依據，也不是已完成法規認證的疲勞分類器。UTA-RLDD replay 的定位是短期內補足回放驗證資料，協助檢查 PERCLOS、眨眼時序、狀態比例與融合分數的趨勢；最終仍需使用無人機操作場域的人工標註資料，校正 false alarm rate、miss rate 與警示提前量。
 
-## 14. 2026-06-07 UTA-RLDD 最新測試結論
+## 15. 2026-06-07 UTA-RLDD 最新測試結論
 
-最新批次報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv`，同批次驗證報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_validation_report_20260607_122601.csv`。本次共處理 36 支影片，涵蓋 12 位受試者與 `0 / 5 / 10` 三類標籤，每類各 12 支，全部處理完成，失敗影片數為 0。
+最新批次報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv`，同批次驗證報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_validation_report_20260607_122601.csv`，HTML 可視化報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_visual_report_20260607_122601.html`。本次共處理 36 支影片，涵蓋 12 位受試者與 `0 / 5 / 10` 三類標籤，每類各 12 支，全部處理完成，失敗影片數為 0。
 
 本次可以稱為「接近滿分」的部分，只限於工程可用性：影片處理完成率為 100%，平均人臉偵測率約 99.93%。其中 Alert、Low Vigilant、Drowsy 的平均人臉偵測率分別約為 99.98%、99.89%、99.93%。這代表 replay 管線、MediaPipe 偵測與逐幀資料記錄穩定，不代表疲勞分類準確率接近 100%。
 
@@ -276,4 +285,13 @@ Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 r
 
 畢業專題收尾建議採保守路線：展示完整 GUI、rPPG ROI、疲勞指標、SQLite/Web dashboard 與 UTA-RLDD replay；報告中主動揭露 Alert 誤報、Drowsy 漏報、UTA-RLDD 非逐幀 ground truth，以及 rPPG 不能用此資料集驗證 BPM 絕對準確率。兩週內不建議大改演算法或導入新的深度模型，應優先完成圖表、展示影片、報告限制章節、README 操作流程與必要測試。詳細分析見 `docs/2026-06-07-utarldd-analysis.md`。
 
-下一輪工程修正優先順序為：新增 post-calibration / face-detected / behavior-available 的有效 frame 統計，避免 summary 平均值被 `CALIBRATING` 或 `NO_FACE` frame 稀釋；同時隔離 UTA-RLDD replay 的 calibration namespace，避免本機既有 webcam baseline 影響資料集回放結果。這兩項風險不需要大改演算法，但能明顯提升報表可信度。
+下一輪工程修正優先順序為：持續使用新版 summary schema 中的 post-calibration / face-detected / behavior-available 有效 frame 統計，並在舊批次未重跑時清楚標註欄位版本，避免 summary 平均值被 `CALIBRATING` 或 `NO_FACE` frame 稀釋；同時隔離 UTA-RLDD replay 的 calibration namespace，避免本機既有 webcam baseline 影響資料集回放結果。這兩項風險不需要大改演算法，但能明顯提升報表可信度。
+
+## 16. 2026-06-16 專案審視與報告更新狀態
+
+本輪審視確認近期修復集中在 Web 同步、Web preview、靜態分析與報表輸出，未更動 rPPG POS、Butterworth、Welch、IBI/HRV、ROI 權重、PERCLOS、眨眼時序或融合分數公式。已更新的報告重點包含：
+
+- live Web preview 目標 30 FPS；UTA-RLDD replay 預覽仍約 20 FPS。
+- Socket.IO 初始連線與 `request_metrics` 會補送 GUI 最新狀態。
+- `20260607_122601` 回測 summary CSV 已可轉成 HTML 可視化報表。
+- `npx pyright` 已達 0 errors / 0 warnings；最新完整測試紀錄為 `68 passed`。

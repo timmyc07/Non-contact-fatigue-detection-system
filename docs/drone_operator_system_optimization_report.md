@@ -1,6 +1,6 @@
 # 無人機操作員疲勞監測系統優化建議報告
 
-更新日期：2026-06-11
+更新日期：2026-06-16
 
 本報告整理本專案在完成基本 GUI、MediaPipe 臉部特徵、rPPG、疲勞分數、SQLite 紀錄、Web dashboard 與 UTA-RLDD replay 後，除了持續收集驗證資料之外，還應優先進行的系統優化方向。核心觀點是：本系統下一階段不應只追求「更多資料」或「更高分數」，而應強化可信度、穩定性、流程整合、可解釋性與實際部署能力，讓系統從技術 demo 提升為可支援無人機操作安全管理的工程原型。
 
@@ -139,7 +139,7 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 經閱讀既有報告後，最需要補上的不是單純更多影片，而是更精準的驗證設計：
 
-- 有效 frame 分母：summary 應分開列出全影片、face-detected、post-calibration、behavior-available 等分母，避免 `CALIBRATING` 或 `NO_FACE` 稀釋平均值。
+- 有效 frame 分母：新版 summary 應分開列出全影片、face-detected、post-calibration、behavior-available 等分母，避免 `CALIBRATING` 或 `NO_FACE` 稀釋平均值；既有舊批次若未重跑，報表應註明欄位版本。
 - Replay calibration 隔離：UTA-RLDD replay 不應讀到真人 webcam 的持久化 blendshape baseline，建議建立 replay 專用 calibration namespace 或在 replay 模式停用持久化校準。
 - 門檻 sweep：用 UTA-RLDD 與自錄標註資料批次掃描 PERCLOS、blink temporal、LOW_VIGILANCE 條件與融合權重，輸出 false alarm rate、miss rate、Drowsy recall 與 Alert 誤報率。
 - 逐事件標註：UTA-RLDD label 是整段影片類別，不是逐幀 ground truth；若要調長閉眼、哈欠、低頭、轉頭或凝視，仍需要自己標註事件時間。
@@ -293,6 +293,12 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 這份 HTML 報表的目的不是取代 validation report，而是讓使用者能快速回答三個問題：系統這次主要靠哪些數值判斷疲勞、哪些影片可能是誤報或漏報、下一輪門檻調整應優先看哪一類特徵。
 
+2026-06-16 已將 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv` 轉成 `utarldd_visual_report_20260607_122601.html`。這代表既有回測結果不必重跑影片，也能補產可視化報表；後續優化應把此流程納入固定交付物。
+
+### 7.4 Web dashboard 同步與 preview 現況
+
+Web dashboard 已完成初始同步與即時 preview 修復。Socket.IO 新連線與 `request_metrics` 會補送 GUI 最新狀態封包，前端會用 `metrics_history.latest` 或 `metrics_update` 立即更新畫面。鏡頭影像改用 `QImageWriter` 編成 JPEG base64 後透過 `frame_update` 推送，live 目標為 30 FPS；UTA-RLDD 離線 replay 預覽仍維持約 20 FPS。後續優化重點不再是「能不能顯示」，而是把 dashboard 擴充成任務後摘要、事件時間軸與 A/B 比較報表。
+
 ## 8. 第七優先：相機與部署穩定性
 
 實際使用時，最常出問題的往往不是疲勞演算法，而是相機與環境。OpenCV `VideoCapture` 支援不同平台與後端，但 Windows、Ubuntu、DirectShow、MSMF、V4L2、FFMPEG 的行為可能不同。
@@ -329,7 +335,7 @@ GUI 與 Web dashboard 應避免只用單一大分數。建議加入：
 
 短期目標是讓展示與報告更可信。
 
-- 新增 UTA-RLDD replay 的有效 frame 分母：全影片、face-detected、post-calibration、behavior-available 分開統計。
+- 持續使用 UTA-RLDD replay 已輸出的有效 frame 分母：全影片、face-detected、post-calibration、behavior-available 分開統計。
 - 隔離 replay calibration：避免資料集回放讀到本機真人 webcam 的持久化 baseline。
 - 新增狀態觸發原因碼：記錄每次 `LOW_VIGILANCE`、`DROWSY`、`CRITICAL` 的主要原因。
 - 製作門檻 sweep 報表：比較 PERCLOS、blink temporal、長閉眼與融合權重對 Alert 誤報和 Drowsy 漏報的影響。
