@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from gui.web_server import MetricsBuffer, PlaybackManager, create_app
+from gui.web_server import MetricsBuffer, PlaybackManager, create_app, format_web_dashboard_urls
 
 
 def _write_minimal_metrics_db(path: Path) -> None:
@@ -53,3 +53,17 @@ def test_playback_api_reads_nested_utarldd_db(tmp_path: Path) -> None:
     assert playback_json["success"] is True
     assert playback_json["total"] == 2
     assert playback_json["data"][1]["status"] == "DROWSY"
+
+
+def test_format_web_dashboard_urls_local_only() -> None:
+    urls = format_web_dashboard_urls(5000, allow_lan=False)
+    assert urls == ["http://127.0.0.1:5000"]
+
+
+def test_format_web_dashboard_urls_with_lan_includes_localhost() -> None:
+    urls = format_web_dashboard_urls(5000, allow_lan=True)
+    assert urls[0] == "http://127.0.0.1:5000"
+    for url in urls[1:]:
+        assert url.startswith("http://")
+        assert ":5000" in url
+        assert "127.0.0.1" not in url

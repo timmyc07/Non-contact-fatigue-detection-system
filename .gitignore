@@ -92,3 +92,12 @@ config/mediapipe_calibration.json
 # Keep specific docs if explicitly desired (example whitelist already in file)
 # !docs/rppg_technical_report.md
 # !docs/rppg_technical_report.pdf
+
+# 專題簡報／成果報告輔助腳本與甘特圖（本機生成，勿上傳 GitHub）
+generate_gantt_supplement.py
+recreate_original_gantt.py
+進度甘特圖-1.png
+甘特圖_後期實驗驗證補充版.png
+scripts/update_achievement_report.py
+scripts/update_project_presentation.py
+scripts/update_project_presentation_expanded.py

@@ -10,6 +10,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - Fatigue/behavior analysis overlays
 - Recording to SQLite (.db) and video (.mp4)
 - Web dashboard for live metrics and playback
+- Web dashboard 預設僅本機存取；可在 GUI「設定 → 允許區域網存取 Web 儀表板」開啟後，由同區域網裝置以 `http://<主機IP>:5000` 連線
 - rPPG BPM 估測回到第一版基準：有效 ROI 等權平均、Welch peak 直接輸出，並用峰值插值與輕量平滑補足 71/72/73 這類細節。
 - 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
 - MediaPipe 姿態補償、ROI 動態權重、遮擋降權與品質診斷

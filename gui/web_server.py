@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import socket
 import threading
 import time
 from collections import deque
@@ -24,6 +25,45 @@ _ws_connected_clients: set = set()
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _PLAYBACK_DEFAULT_LIMIT = 100
 _PLAYBACK_MAX_LIMIT = 1000
+WEB_DASHBOARD_DEFAULT_PORT = 5000
+
+
+def get_lan_ipv4_addresses() -> list[str]:
+    """列舉本機可用於區域網存取的 IPv4 位址（不含 loopback）。"""
+    seen: set[str] = set()
+    addresses: list[str] = []
+
+    def add(ip: str) -> None:
+        if not ip or ip.startswith("127.") or ip in seen:
+            return
+        seen.add(ip)
+        addresses.append(ip)
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            add(sock.getsockname()[0])
+    except OSError:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET):
+            add(info[4][0])
+    except OSError:
+        pass
+
+    return addresses
+
+
+def format_web_dashboard_urls(
+    port: int = WEB_DASHBOARD_DEFAULT_PORT,
+    *,
+    allow_lan: bool = False,
+) -> list[str]:
+    urls = [f"http://127.0.0.1:{port}"]
+    if allow_lan:
+        urls.extend(f"http://{ip}:{port}" for ip in get_lan_ipv4_addresses())
+    return urls
 
 
 def _is_local_request() -> bool:

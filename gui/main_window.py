@@ -43,7 +43,13 @@ from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
 from rppg.rppg_worker import RppgWorker
 from gui.video_recorder import VideoRecorderWorker
-from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread
+from gui.web_server import (
+    MetricsBuffer,
+    PlaybackManager,
+    WEB_DASHBOARD_DEFAULT_PORT,
+    WebServerThread,
+    format_web_dashboard_urls,
+)
 
 
 def application_stylesheet() -> str:
@@ -298,6 +304,10 @@ class MainWindow(QMainWindow):
         act_web = QAction("開啟Web 儀表板頁面", self)
         act_web.triggered.connect(self._on_web_info)
 
+        self._act_web_allow_lan = QAction("允許區域網存取 Web 儀表板", self)
+        self._act_web_allow_lan.setCheckable(True)
+        self._act_web_allow_lan.toggled.connect(self._on_web_allow_lan_toggled)
+
         m_settings = self.menuBar().addMenu("設定")
         m_settings.addAction(act_hotkeys)
         m_settings.addAction(act_profile)
@@ -308,6 +318,7 @@ class MainWindow(QMainWindow):
         m_settings.addAction(act_save)
         m_settings.addAction(act_reset)
         m_settings.addSeparator()
+        m_settings.addAction(self._act_web_allow_lan)
         m_settings.addAction(act_web)
 
         act_start = QAction("開始／停止", self)
@@ -868,6 +879,14 @@ class MainWindow(QMainWindow):
         if isinstance(opacity, int):
             self._sld_opacity.setValue(opacity)
 
+        web = data.get("web", {})
+        if isinstance(web, dict):
+            allow_lan = web.get("allow_lan")
+            if isinstance(allow_lan, bool):
+                self._act_web_allow_lan.blockSignals(True)
+                self._act_web_allow_lan.setChecked(allow_lan)
+                self._act_web_allow_lan.blockSignals(False)
+
     def _save_settings(self) -> Path:
         path = self._settings_path()
         data = {
@@ -907,6 +926,9 @@ class MainWindow(QMainWindow):
                 "age": self._user.age,
                 "height_cm": self._user.height_cm,
                 "weight_kg": self._user.weight_kg,
+            },
+            "web": {
+                "allow_lan": self._act_web_allow_lan.isChecked(),
             },
         }
         path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -994,22 +1016,55 @@ class MainWindow(QMainWindow):
         rec.mkdir(exist_ok=True)
         return rec
 
+    def _web_allow_lan_enabled(self) -> bool:
+        return self._act_web_allow_lan.isChecked()
+
+    def _web_bind_host(self) -> str:
+        return "0.0.0.0" if self._web_allow_lan_enabled() else "127.0.0.1"
+
+    def _web_dashboard_urls(self) -> list[str]:
+        return format_web_dashboard_urls(
+            WEB_DASHBOARD_DEFAULT_PORT,
+            allow_lan=self._web_allow_lan_enabled(),
+        )
+
+    def _format_web_dashboard_message(self, *, include_lan_hint: bool = False) -> str:
+        lines = self._web_dashboard_urls()
+        if self._web_allow_lan_enabled() and len(lines) == 1:
+            lines.append("（區域網已啟用，但未能偵測到區域網 IP）")
+        message = "\n".join(lines)
+        if include_lan_hint and self._web_allow_lan_enabled():
+            message += (
+                "\n\n其他裝置請使用上方區域網網址。"
+                "若無法連線，請確認防火牆是否放行 TCP "
+                f"{WEB_DASHBOARD_DEFAULT_PORT}。"
+            )
+        return message
+
     def _start_web_server(self) -> None:
         if self._web_server is not None:
             return
         try:
             playback_manager = PlaybackManager(self._recordings_dir())
+            host = self._web_bind_host()
             self._web_server = WebServerThread(
                 self._web_metrics_buffer,
                 playback_manager,
-                host="127.0.0.1",
-                port=5000,
+                host=host,
+                port=WEB_DASHBOARD_DEFAULT_PORT,
             )
             self._web_server.start()
-            self._append_log("🌐 Web 儀表板啟動：http://127.0.0.1:5000")
+            lan_state = "區域網已啟用" if self._web_allow_lan_enabled() else "僅本機"
+            self._append_log(
+                f"🌐 Web 儀表板啟動（{lan_state}）：{self._format_web_dashboard_message()}"
+            )
         except Exception as exc:
             self._append_log(f"⚠ Web 儀表板啟動失敗：{exc}")
             self._web_server = None
+
+    def _restart_web_server(self) -> None:
+        self._stop_web_server()
+        self._start_web_server()
 
     def _stop_web_server(self) -> None:
         if self._web_server is None:
@@ -2255,7 +2310,20 @@ class MainWindow(QMainWindow):
             self._chk_preview.setChecked(False)
             self._chk_lock.setChecked(True)
             self._chk_stress.setChecked(False)
+            self._act_web_allow_lan.setChecked(False)
+            self._restart_web_server()
             self._append_log("🔄 已重置為示範預設值。")
+
+    def _on_web_allow_lan_toggled(self, checked: bool) -> None:
+        self._restart_web_server()
+        state = "已啟用" if checked else "已關閉"
+        self._append_log(
+            f"🌐 Web 儀表板區域網存取{state}：{self._format_web_dashboard_message()}"
+        )
+        if checked:
+            self._append_log(
+                f"提示：其他裝置若無法連線，請檢查防火牆是否放行 TCP {WEB_DASHBOARD_DEFAULT_PORT}。"
+            )
 
     def _on_web_info(self) -> None:
         if self._web_server is None:
@@ -2267,13 +2335,14 @@ class MainWindow(QMainWindow):
                 "Web 儀表板啟動失敗，請確認已安裝 Flask/Socket.IO 相依套件。",
             )
             return
-        url = QUrl("http://127.0.0.1:5000")
+        url = QUrl(self._web_dashboard_urls()[0])
         QDesktopServices.openUrl(url)
         QMessageBox.information(
             self,
             "Web 儀表板",
-            "已開啟 Web 儀表板：\nhttp://127.0.0.1:5000\n"
-            "若瀏覽器無法連線，請確認防火牆或埠 5000 未被佔用。",
+            "已開啟 Web 儀表板：\n"
+            f"{self._format_web_dashboard_message(include_lan_hint=True)}\n"
+            f"若瀏覽器無法連線，請確認防火牆或埠 {WEB_DASHBOARD_DEFAULT_PORT} 未被佔用。",
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
