@@ -204,7 +204,8 @@ class FatigueAlarmController:
         volume = max(0.0, min(1.0, self._config.volume / 100.0))
         path = str(scenario_cfg.sound_path or "").strip()
         if path:
-            if self._playback.play_file(path, volume=volume):
+            sound = Path(path).expanduser()
+            if sound.is_file() and self._playback.play_file(str(sound), volume=volume):
                 return True
             logger.info("警報音效檔不存在或無法播放：%s", path)
 
