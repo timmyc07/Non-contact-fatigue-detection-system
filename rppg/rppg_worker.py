@@ -40,7 +40,7 @@ from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
 
 _HAS_MP = True
 _HAS_SCIPY = True
-_ANNOTATED_PREVIEW_MAX_FPS = 20.0
+_ANNOTATED_PREVIEW_MAX_FPS = 30.0
 
 # ── ROI landmark indices (MediaPipe 478-point face mesh) ────────────────────
 FOREHEAD_ROI_IDX  = [107, 66, 69, 109, 10, 338, 299, 296, 336, 9]

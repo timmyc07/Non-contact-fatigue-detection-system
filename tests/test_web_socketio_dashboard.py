@@ -7,8 +7,10 @@ from typing import Any, Mapping, Sequence
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 
-from gui.main_window import MainWindow
+from gui import camera_stream_worker, combined_worker, fatigue_worker
+from gui.main_window import MainWindow, WEB_PREVIEW_TARGET_FPS
 from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread, create_app
+from rppg import rppg_worker
 
 
 def _event_payloads(events: Sequence[Mapping[str, Any]], name: str) -> list[Any]:
@@ -168,3 +170,11 @@ def test_socketio_broadcast_frame_event_reaches_client(tmp_path: Path) -> None:
         assert frames == [{"frame": "jpeg-base64"}]
     finally:
         client.disconnect()
+
+
+def test_live_web_preview_targets_thirty_fps() -> None:
+    assert WEB_PREVIEW_TARGET_FPS == 30.0
+    assert camera_stream_worker._PREVIEW_MAX_FPS == 30.0
+    assert combined_worker._ANNOTATED_PREVIEW_MAX_FPS == 30.0
+    assert fatigue_worker._ANNOTATED_PREVIEW_MAX_FPS == 30.0
+    assert rppg_worker._ANNOTATED_PREVIEW_MAX_FPS == 30.0

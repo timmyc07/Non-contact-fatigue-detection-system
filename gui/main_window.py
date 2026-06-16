@@ -54,6 +54,8 @@ from gui.web_server import (
     format_web_dashboard_urls,
 )
 
+WEB_PREVIEW_TARGET_FPS = 30.0
+
 
 def application_stylesheet() -> str:
     return """
@@ -261,7 +263,7 @@ class MainWindow(QMainWindow):
         self._web_metrics_buffer = MetricsBuffer(maxsize=300)
         self._web_server: WebServerThread | None = None
         self._web_emit_interval = 0.25
-        self._web_frame_interval = 0.2
+        self._web_frame_interval = 1.0 / WEB_PREVIEW_TARGET_FPS
         self._web_last_emit = 0.0
         self._web_last_frame_emit = 0.0
         self._utarldd_thread: QThread | None = None

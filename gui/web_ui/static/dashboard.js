@@ -81,7 +81,7 @@ function initSocket() {
         const latest = data && data.latest ? data.latest : history[history.length - 1];
         applyLiveMetrics(latest);
     });
-    // 鏡頭幀串流（5Hz JPEG）
+    // 鏡頭幀串流（目標 30 FPS JPEG）
     socket.on('frame_update', (data) => {
         if (data.frame) {
             _updatePreviewFrame(data.frame);

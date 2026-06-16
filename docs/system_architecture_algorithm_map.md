@@ -61,7 +61,7 @@ flowchart TD
 ## 即時執行流程
 
 1. 使用者從主控制台選擇相機、解析度、FPS、是否水平翻轉與要啟用的分析項目。
-2. 相機擷取工作啟動 OpenCV backend，持續讀取 BGR frame，並以 20 FPS 上限輸出預覽影格。
+2. 相機擷取工作啟動 OpenCV backend，持續讀取 BGR frame，並以 30 FPS 上限輸出 live preview 影格。
 3. 分析佇列採「保留最新」策略，讓分析 worker 不追趕舊 frame。
 4. 若 rPPG 與疲勞分析都啟用，系統使用單一臉部推論協調器；若只啟用其中一條，則啟用對應的單獨分析 worker。
 5. MediaPipe Face Landmarker 以 VIDEO 模式處理 frame timestamp，輸出臉部 landmarks、blendshape scores 與 facial transformation matrix。
@@ -216,7 +216,7 @@ Web 儀表板：
 - 即時資料用 Socket.IO 推播。
 - GUI 會在 Web server 啟動、管線開始/停止、相機資訊更新、FPS 更新、錄影切換與分析 metrics 到達時送出狀態封包。
 - 新開或重新整理的 dashboard 會透過 `request_metrics` 取得 buffer history，並以 GUI 最新快照補上 `metrics_history.latest` 與 `metrics_update`，避免畫面停在等待狀態。
-- 即時影像由目前 frame routing 來源透過 `QImageWriter` 轉成節流 JPEG base64 後推送；管線重啟時會先解除舊 signal，再接上新來源。
+- 即時影像由目前 frame routing 來源透過 `QImageWriter` 轉成節流 JPEG base64 後推送，Web dashboard 目標為 30 FPS；管線重啟時會先解除舊 signal，再接上新來源。
 - 歷史資料從 SQLite 讀取，可分頁或完整回放。
 - 支援錄製影片串流與 File Browser 遠端 DB/影片整合。
 - 預設本機網址為 `http://127.0.0.1:5000`；LAN URL 依設定與網路介面列出。

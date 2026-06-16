@@ -24,7 +24,7 @@ from mediapipe.tasks import python as _mp_python
 from mediapipe.tasks.python import vision as _mp_vision
 
 _HAS_MP = True
-_ANNOTATED_PREVIEW_MAX_FPS = 20.0
+_ANNOTATED_PREVIEW_MAX_FPS = 30.0
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from .frame_queue import get_latest

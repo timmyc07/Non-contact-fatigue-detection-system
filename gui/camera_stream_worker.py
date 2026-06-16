@@ -19,7 +19,7 @@ from gui.frame_queue import put_latest
 _FIRST_FRAME_TIMEOUT = 10.0
 _READ_FAILURE_TIMEOUT = 5.0
 _DARK_FRAME_WARN_SECONDS = 3.0
-_PREVIEW_MAX_FPS = 20.0
+_PREVIEW_MAX_FPS = 30.0
 
 # Sliding-window FPS: keeps timestamps of last N frames.
 # fps = (N-1) / (newest_ts - oldest_ts)
