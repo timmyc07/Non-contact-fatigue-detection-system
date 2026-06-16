@@ -34,6 +34,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.alarm_config import AlarmConfig
+from gui.alarm_dialog import AlarmSettingsDialog
+from gui.alarm_player import FatigueAlarmController
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.combined_worker import CombinedWorker
 from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserProfileDialog
@@ -271,11 +274,13 @@ class MainWindow(QMainWindow):
         self._utarldd_done_count = 0
         self._utarldd_active_videos: dict[str, UtaRlddVideoSummary] = {}
         self._utarldd_recent_done: list[str] = []
+        self._alarm_config = AlarmConfig.defaults()
 
         self._build_menu()
         self._build_central()
 
         self._load_settings()
+        self._alarm_controller = FatigueAlarmController(self._alarm_config, self)
         self._apply_hotkey_shortcuts()
         self._apply_overlay_state()
         self._start_web_server()
@@ -288,6 +293,9 @@ class MainWindow(QMainWindow):
 
         act_profile = QAction("使用者資料…", self)
         act_profile.triggered.connect(self._on_user_profile)
+
+        act_alarm = QAction("警報器設定…", self)
+        act_alarm.triggered.connect(self._on_alarm_settings)
 
         act_refresh = QAction("刷新攝影機列表", self)
         act_refresh.triggered.connect(self._start_camera_scan)
@@ -311,6 +319,7 @@ class MainWindow(QMainWindow):
         m_settings = self.menuBar().addMenu("設定")
         m_settings.addAction(act_hotkeys)
         m_settings.addAction(act_profile)
+        m_settings.addAction(act_alarm)
         m_settings.addSeparator()
         m_settings.addAction(act_refresh)
         m_settings.addAction(act_recordings)
@@ -887,6 +896,10 @@ class MainWindow(QMainWindow):
                 self._act_web_allow_lan.setChecked(allow_lan)
                 self._act_web_allow_lan.blockSignals(False)
 
+        alarm = data.get("alarm", {})
+        if isinstance(alarm, dict):
+            self._alarm_config = AlarmConfig.from_dict(alarm)
+
     def _save_settings(self) -> Path:
         path = self._settings_path()
         data = {
@@ -930,6 +943,7 @@ class MainWindow(QMainWindow):
             "web": {
                 "allow_lan": self._act_web_allow_lan.isChecked(),
             },
+            "alarm": self._alarm_config.to_dict(),
         }
         path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
         return path
@@ -2094,6 +2108,7 @@ class MainWindow(QMainWindow):
     def _on_fatigue_metrics(self, metrics: object) -> None:
         self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
         self._latest_fatigue_metrics = metrics
+        self._alarm_controller.on_metrics(metrics)
         self._record_metrics()
         self._emit_web_metrics()
 
@@ -2279,6 +2294,25 @@ class MainWindow(QMainWindow):
                 f"{self._user.height_cm} cm / {self._user.weight_kg} kg"
             )
 
+    def _on_alarm_settings(self) -> None:
+        dlg = AlarmSettingsDialog(self._alarm_config, self)
+        if not dlg.exec():
+            return
+        self._alarm_config = dlg.get_config()
+        self._alarm_controller.set_config(self._alarm_config)
+        try:
+            path = self._save_settings()
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "保存失敗",
+                f"警報器設定已套用，但無法寫入 settings.json：{exc}",
+            )
+            self._append_log(f"⚠ 警報器設定已套用，但保存失敗：{exc}")
+            return
+        state = "已啟用" if self._alarm_config.enabled else "已關閉"
+        self._append_log(f"🔔 警報器設定已更新（{state}）並保存 → {path}")
+
     def _open_recordings_dir(self) -> None:
         root = Path(__file__).resolve().parents[1]
         rec = root / "recordings"
@@ -2311,7 +2345,13 @@ class MainWindow(QMainWindow):
             self._chk_lock.setChecked(True)
             self._chk_stress.setChecked(False)
             self._act_web_allow_lan.setChecked(False)
+            self._alarm_config = AlarmConfig.defaults()
+            self._alarm_controller.set_config(self._alarm_config)
             self._restart_web_server()
+            try:
+                self._save_settings()
+            except OSError as exc:
+                self._append_log(f"⚠ 重置後保存 settings.json 失敗：{exc}")
             self._append_log("🔄 已重置為示範預設值。")
 
     def _on_web_allow_lan_toggled(self, checked: bool) -> None:
