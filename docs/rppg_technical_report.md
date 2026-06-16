@@ -476,6 +476,8 @@ rPPG metrics 會被轉成兩種輸出：
 - `stress_psd_freqs`
 - `stress_psd_values`
 
+即時鏡頭預覽不走 SQLite，而是由 GUI 目前的 frame routing 來源取得 `QImage`，以 `QImageWriter` 編成 JPEG base64 後透過 Socket.IO `frame_update` 推送到 dashboard。前端收到影格後更新 `preview-frame`，並隱藏「等待鏡頭畫面」placeholder。這條路徑只影響 Web 顯示，不改變 rPPG、疲勞判定、融合分數或錄製資料。
+
 ### 18.2 SQLite
 
 `MetricsRecorder` 寫入 `metrics` table。rPPG 相關欄位包括：

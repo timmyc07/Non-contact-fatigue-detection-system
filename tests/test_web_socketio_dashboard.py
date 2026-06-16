@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
-from gui.web_server import MetricsBuffer, PlaybackManager, create_app
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage
+
+from gui.main_window import MainWindow
+from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread, create_app
 
 
 def _event_payloads(events: list[dict], name: str) -> list[dict]:
@@ -134,5 +139,31 @@ def test_socketio_latest_packet_callback_error_keeps_request_metrics_alive(tmp_p
         assert histories[0]["data"] == [first]
         assert "latest" not in histories[0]
         assert updates == []
+    finally:
+        client.disconnect()
+
+
+def test_web_preview_frame_encoder_returns_jpeg_base64() -> None:
+    image = QImage(320, 240, QImage.Format.Format_RGB888)
+    image.fill(Qt.GlobalColor.red)
+
+    encoded = MainWindow._encode_frame_jpeg(object(), image, max_width=160, quality=70)
+
+    assert encoded is not None
+    raw = base64.b64decode(encoded)
+    assert raw.startswith(b"\xff\xd8")
+    assert raw.endswith(b"\xff\xd9")
+
+
+def test_socketio_broadcast_frame_event_reaches_client(tmp_path: Path) -> None:
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path))
+    client = server.socketio.test_client(server.app)
+
+    try:
+        client.get_received()
+        server.broadcast_frame("jpeg-base64")
+        events = client.get_received()
+        frames = _event_payloads(events, "frame_update")
+        assert frames == [{"frame": "jpeg-base64"}]
     finally:
         client.disconnect()

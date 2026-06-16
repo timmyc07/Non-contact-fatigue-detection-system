@@ -12,7 +12,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt, QThread, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QDesktopServices, QImage, QImageWriter, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -1213,8 +1213,11 @@ class MainWindow(QMainWindow):
             image = image.convertToFormat(QImage.Format.Format_RGB888)
         buffer = QByteArray()
         qbuffer = QBuffer(buffer)
-        qbuffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        ok = image.save(qbuffer, b"JPEG", quality)
+        if not qbuffer.open(QIODevice.OpenModeFlag.WriteOnly):
+            return None
+        writer = QImageWriter(qbuffer, b"JPEG")
+        writer.setQuality(quality)
+        ok = writer.write(image)
         qbuffer.close()
         if not ok:
             return None
@@ -1226,7 +1229,13 @@ class MainWindow(QMainWindow):
         now = time.perf_counter()
         if now - self._web_last_frame_emit < self._web_frame_interval:
             return
-        b64 = self._encode_frame_jpeg(image)
+        try:
+            b64 = self._encode_frame_jpeg(image)
+        except Exception as exc:
+            if not getattr(self, "_web_frame_encode_err_logged", False):
+                self._append_log(f"⚠ Web 預覽影格編碼失敗：{exc}")
+                self._web_frame_encode_err_logged = True
+            return
         if not b64:
             return
         self._web_server.broadcast_frame(b64)
