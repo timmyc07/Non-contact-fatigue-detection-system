@@ -1064,10 +1064,12 @@ class MainWindow(QMainWindow):
             self._web_server = WebServerThread(
                 self._web_metrics_buffer,
                 playback_manager,
+                get_latest_packet=self._build_web_metrics,
                 host=host,
                 port=WEB_DASHBOARD_DEFAULT_PORT,
             )
             self._web_server.start()
+            self._emit_web_metrics(force=True)
             lan_state = "區域網已啟用" if self._web_allow_lan_enabled() else "僅本機"
             self._append_log(
                 f"🌐 Web 儀表板啟動（{lan_state}）：{self._format_web_dashboard_message()}"
@@ -1087,9 +1089,13 @@ class MainWindow(QMainWindow):
         self._web_server = None
 
     def _build_web_metrics(self) -> dict:
-        r = self._latest_rppg_metrics
-        f = self._latest_fatigue_metrics
-        z = self._latest_fused_score
+        pipeline_running = bool(self._pipeline_running)
+        stress_enabled = self._chk_stress.isChecked()
+        behavior_enabled = self._chk_behavior.isChecked()
+        r = self._latest_rppg_metrics if pipeline_running and stress_enabled else None
+        f = self._latest_fatigue_metrics if pipeline_running and behavior_enabled else None
+        z = self._latest_fused_score if pipeline_running and stress_enabled and behavior_enabled else None
+        info = self._last_camera_info
 
         face_r = bool(getattr(r, "face_detected", False)) if r else False
         face_f = bool(getattr(f, "face_detected", False)) if f else False
@@ -1101,7 +1107,17 @@ class MainWindow(QMainWindow):
 
         return {
             "timestamp": time.time(),
+            "pipeline_running": pipeline_running,
+            "camera_running": bool(self._cam_worker is not None),
+            "recording": bool(self._recording),
             "fps": float(self._last_fps or 0.0),
+            "camera_label": str(self._cmb_camera.currentText() or ""),
+            "camera_codec": str(info.get("codec") or ""),
+            "camera_width": int(info.get("width") or 0),
+            "camera_height": int(info.get("height") or 0),
+            "frame_source": str(self._frame_source or ""),
+            "record_source": str(self._record_source or ""),
+            "behavior_enabled": behavior_enabled,
             "face_detected": face_r or face_f,
             "calibrated": bool(getattr(f, "calibrated", False)) if f else False,
             "calib_samples": calib_samples,
@@ -1140,7 +1156,7 @@ class MainWindow(QMainWindow):
             "stress_waveform": list(getattr(r, "waveform", []) or []),
             "stress_psd_freqs": list(getattr(r, "psd_freqs", []) or []),
             "stress_psd_values": list(getattr(r, "psd_vals", []) or []),
-            "stress_enabled": self._chk_stress.isChecked(),
+            "stress_enabled": stress_enabled,
             "stress_has_face": face_r,
             "stress_warmup_progress": warmup_progress,
             "stress_warmup_done": warmup_progress >= 0.99,
@@ -1177,11 +1193,11 @@ class MainWindow(QMainWindow):
             "dl_status": "",
         }
 
-    def _emit_web_metrics(self) -> None:
+    def _emit_web_metrics(self, *, force: bool = False) -> None:
         if self._web_server is None:
             return
         now = time.perf_counter()
-        if now - self._web_last_emit < self._web_emit_interval:
+        if not force and now - self._web_last_emit < self._web_emit_interval:
             return
         metrics = self._build_web_metrics()
         self._web_metrics_buffer.append(metrics)
@@ -1795,6 +1811,8 @@ class MainWindow(QMainWindow):
 
     def _stop_camera_worker(self) -> None:
         self._stop_analysis_workers()   # stop all analysis before camera
+        self._set_record_source(None)
+        self._set_frame_source(None)
         if self._cam_worker is not None:
             self._cam_worker.detach_bgr_queue()   # clear all queues
             self._cam_worker.request_stop()
@@ -1867,14 +1885,17 @@ class MainWindow(QMainWindow):
             self._cam_worker.frame_ready.connect(handler)
 
     def _disconnect_source(self, source: str | None, handler) -> None:
-        if source == "combined" and self._combined_worker is not None:
-            self._combined_worker.frame_annotated.disconnect(handler)
-        elif source == "rppg" and self._rppg_worker is not None:
-            self._rppg_worker.frame_annotated.disconnect(handler)
-        elif source == "fatigue" and self._fatigue_worker is not None:
-            self._fatigue_worker.frame_annotated.disconnect(handler)
-        elif source == "camera" and self._cam_worker is not None:
-            self._cam_worker.frame_ready.disconnect(handler)
+        try:
+            if source == "combined" and self._combined_worker is not None:
+                self._combined_worker.frame_annotated.disconnect(handler)
+            elif source == "rppg" and self._rppg_worker is not None:
+                self._rppg_worker.frame_annotated.disconnect(handler)
+            elif source == "fatigue" and self._fatigue_worker is not None:
+                self._fatigue_worker.frame_annotated.disconnect(handler)
+            elif source == "camera" and self._cam_worker is not None:
+                self._cam_worker.frame_ready.disconnect(handler)
+        except (TypeError, RuntimeError):
+            pass
 
     # ── Analysis workers (rPPG / fatigue / combined) ──────────────────────────
 
@@ -1901,6 +1922,9 @@ class MainWindow(QMainWindow):
         if not self._pipeline_running:
             return
         self._stop_analysis_workers()
+        self._latest_rppg_metrics = None
+        self._latest_fatigue_metrics = None
+        self._latest_fused_score = None
         want_rppg, want_fatigue = self._analysis_needed()
         if want_rppg and want_fatigue:
             self._start_combined_worker()
@@ -1910,6 +1934,7 @@ class MainWindow(QMainWindow):
             self._start_fatigue_worker()
         else:
             self._update_frame_routing()   # restore raw camera feed
+        self._emit_web_metrics(force=True)
 
     # ── Combined worker ───────────────────────────────────────────────────────
 
@@ -2136,6 +2161,7 @@ class MainWindow(QMainWindow):
             f"[相機] 實際格式 → 編碼：{codec}  解析度：{w}×{h}  FPS：{fps_str}"
         )
         self._preview_overlay.update_camera_info(codec, w, h, cam_text)
+        self._emit_web_metrics(force=True)
 
     def _on_frame(self, image) -> None:
         self._preview_overlay.update_frame(image)
@@ -2153,19 +2179,28 @@ class MainWindow(QMainWindow):
         self._preview_overlay.update_fps(fps)
         self._lbl_fps.setText(f"FPS：{fps:.1f}")
         self._last_fps = float(fps)
+        self._emit_web_metrics()
 
     def _on_camera_failed(self, msg: str) -> None:
         self._append_log(f"✗ 相機錯誤：{msg}")
         self._stop_analysis_workers()
+        self._set_record_source(None)
+        self._set_frame_source(None)
         if self._cam_worker is not None:
             self._cam_worker.request_stop()
         self._pipeline_running = False
         self._cam_worker = None
         self._cam_thread = None
+        self._latest_rppg_metrics = None
+        self._latest_fatigue_metrics = None
+        self._latest_fused_score = None
+        self._last_fps = 0.0
+        self._last_camera_info = {"codec": "", "width": 0, "height": 0}
         self._btn_start.setText("開始")
         self._lbl_pipeline.setText("管線：停止")
         self._lbl_fps.setText("FPS：—")
         self._sync_overlay_visibility()
+        self._emit_web_metrics(force=True)
         dlg = QMessageBox(self)
         dlg.setWindowTitle("攝影機錯誤")
         dlg.setIcon(QMessageBox.Icon.Warning)
@@ -2182,11 +2217,18 @@ class MainWindow(QMainWindow):
     def _toggle_pipeline(self) -> None:
         self._pipeline_running = not self._pipeline_running
         if self._pipeline_running:
+            self._latest_rppg_metrics = None
+            self._latest_fatigue_metrics = None
+            self._latest_fused_score = None
             self._btn_start.setText("停止")
             self._lbl_pipeline.setText("管線：運作中")
             self._lbl_fps.setText("FPS：—")
             self._lbl_face.setText("臉部：—")
             self._start_camera_worker()
+            if not self._pipeline_running:
+                self._sync_overlay_visibility()
+                self._emit_web_metrics(force=True)
+                return
             # Start the appropriate analysis worker(s) based on checkbox state
             want_rppg, want_fatigue = self._analysis_needed()
             if want_rppg and want_fatigue:
@@ -2198,7 +2240,13 @@ class MainWindow(QMainWindow):
             self._sync_overlay_visibility()
             if self._chk_auto_record.isChecked() and not self._recording:
                 self._toggle_recording()
+            self._emit_web_metrics(force=True)
         else:
+            self._latest_rppg_metrics = None
+            self._latest_fatigue_metrics = None
+            self._latest_fused_score = None
+            self._last_fps = 0.0
+            self._last_camera_info = {"codec": "", "width": 0, "height": 0}
             self._btn_start.setText("開始")
             self._lbl_pipeline.setText("管線：停止")
             self._lbl_fps.setText("FPS：—")
@@ -2212,6 +2260,7 @@ class MainWindow(QMainWindow):
                 self._lbl_record.setText("記錄狀態：未啟動")
                 self._stop_recording()
                 self._append_log("○ 管線停止，已一併結束記錄。")
+            self._emit_web_metrics(force=True)
             if self._benchmark_active:
                 self._benchmark_active = False
                 self._btn_bench.setText("DL 基準測試（120s）")
@@ -2236,11 +2285,13 @@ class MainWindow(QMainWindow):
                 self._append_log(f"● 記錄開始 → {self._recording_db_path}")
             else:
                 self._append_log("● 記錄開始 → recordings/")
+            self._emit_web_metrics(force=True)
         else:
             self._btn_record.setText("開始記錄")
             self._lbl_record.setText("記錄狀態：未啟動")
             self._stop_recording()
             self._append_log("○ 記錄停止。")
+            self._emit_web_metrics(force=True)
 
     def _toggle_benchmark(self) -> None:
         if not self._pipeline_running:

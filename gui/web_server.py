@@ -337,6 +337,30 @@ def create_app(
         async_mode="threading",
     )
 
+    latest_packet_error_logged = False
+
+    def get_latest_metrics_packet() -> Optional[dict[str, Any]]:
+        nonlocal latest_packet_error_logged
+        if get_latest_packet is None:
+            return None
+        try:
+            packet = get_latest_packet()
+        except Exception as exc:
+            if not latest_packet_error_logged:
+                print(f"[WebServer] get_latest_packet failed: {exc}")
+                latest_packet_error_logged = True
+            return None
+        if not isinstance(packet, dict):
+            return None
+        return dict(packet)
+
+    def get_metrics_history_with_latest() -> tuple[list, Optional[dict[str, Any]]]:
+        data = metrics_buffer.get_all()
+        latest = get_latest_metrics_packet()
+        if latest is not None and (not data or data[-1] != latest):
+            data = [*data, latest]
+        return data, latest
+
     @app.route("/")
     def index():
         return render_template("dashboard.html")
@@ -735,6 +759,9 @@ def create_app(
         sid = getattr(request, "sid", None)
         if sid is not None:
             _ws_connected_clients.add(sid)
+        latest = get_latest_metrics_packet()
+        if latest is not None:
+            emit("metrics_update", {"metrics": latest})
         emit("connect_response", {"data": "連接成功"})
 
     @socketio.on("disconnect")
@@ -745,8 +772,13 @@ def create_app(
 
     @socketio.on("request_metrics")
     def handle_metrics_request():
-        data = metrics_buffer.get_all()
-        emit("metrics_history", {"data": data})
+        data, latest = get_metrics_history_with_latest()
+        payload = {"data": data}
+        if latest is not None:
+            payload["latest"] = latest
+        emit("metrics_history", payload)
+        if latest is not None:
+            emit("metrics_update", {"metrics": latest})
 
     @socketio.on("clear_buffer")
     def handle_clear_buffer():

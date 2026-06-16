@@ -214,6 +214,9 @@ SQLite 記錄：
 Web 儀表板：
 
 - 即時資料用 Socket.IO 推播。
+- GUI 會在 Web server 啟動、管線開始/停止、相機資訊更新、FPS 更新、錄影切換與分析 metrics 到達時送出狀態封包。
+- 新開或重新整理的 dashboard 會透過 `request_metrics` 取得 buffer history，並以 GUI 最新快照補上 `metrics_history.latest` 與 `metrics_update`，避免畫面停在等待狀態。
+- 即時影像由目前 frame routing 來源轉成節流 JPEG base64 後推送；管線重啟時會先解除舊 signal，再接上新來源。
 - 歷史資料從 SQLite 讀取，可分頁或完整回放。
 - 支援錄製影片串流與 File Browser 遠端 DB/影片整合。
 - 預設本機網址為 `http://127.0.0.1:5000`；LAN URL 依設定與網路介面列出。
@@ -249,6 +252,7 @@ MediaPipe 調校目前以 `stable_indoor` profile 為預設，另有 low light �
 - 疲勞引擎可用影片相對時間戳完成校準。
 - 融合評分在 rPPG 低品質時降權、在兩管線可用時使用 15/85 權重。
 - SQLite schema migration、Web playback、UTA-RLDD discovery/report、告警觸發邏輯。
+- Socket.IO dashboard contract 測試覆蓋連線初始狀態、`request_metrics` history/latest、latest 去重與 callback 失敗容錯。
 
 建議修改 Python 邏輯後至少執行：
 
@@ -272,3 +276,5 @@ MediaPipe 調校目前以 `stable_indoor` profile 為預設，另有 low light �
 - SciPy peak detection API：https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html
 - OpenCV VideoCapture reference：https://docs.opencv.org/4.x/d8/dfe/classcv_1_1VideoCapture.html
 - Flask-SocketIO getting started：https://flask-socketio.readthedocs.io/en/latest/getting_started.html
+- Flask-SocketIO API：https://flask-socketio.readthedocs.io/en/latest/api.html
+- Socket.IO event emit guide：https://socket.io/docs/v4/emitting-events/

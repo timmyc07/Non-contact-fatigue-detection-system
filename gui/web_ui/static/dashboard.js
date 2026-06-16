@@ -45,6 +45,22 @@ let lastMetricsTime = 0;
 let pulseWaveformChart = null;
 let psdSpectrumChart = null;
 
+function extractMetricsPayload(data) {
+    if (!data) return null;
+    const packet = data.metrics || data;
+    return packet && typeof packet === 'object' ? packet : null;
+}
+
+function applyLiveMetrics(packet) {
+    const m = extractMetricsPayload(packet);
+    if (!m) return;
+    const running = m.pipeline_running !== false;
+    lastMetricsTime = Date.now();
+    updatePipelineStatus(running, m);
+    updateMetricsDisplay(m);
+    updateDualWaveforms(m);
+}
+
 function initSocket() {
     socket = io();
     socket.on('connect', () => {
@@ -58,18 +74,12 @@ function initSocket() {
         updatePipelineStatus(false);
     });
     socket.on('metrics_update', (data) => {
-        const m = data.metrics;
-        lastMetricsTime = Date.now();
-        updatePipelineStatus(true, m);
-        updateMetricsDisplay(m);
-        updateDualWaveforms(m);
+        applyLiveMetrics(data);
     });
     socket.on('metrics_history', (data) => {
-        if (data.data && data.data.length > 0) {
-            const last = data.data[data.data.length - 1];
-            updateMetricsDisplay(last);
-            updateDualWaveforms(last);
-        }
+        const history = Array.isArray(data && data.data) ? data.data : [];
+        const latest = data && data.latest ? data.latest : history[history.length - 1];
+        applyLiveMetrics(latest);
     });
     // 鏡頭幀串流（5Hz JPEG）
     socket.on('frame_update', (data) => {
