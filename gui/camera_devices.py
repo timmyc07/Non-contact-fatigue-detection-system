@@ -97,9 +97,13 @@ def _is_linux_video_capture_node(path: str) -> bool:
     v4l2_cap_device_caps = 0x80000000
     fd: int | None = None
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        nonblock = int(getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(path, os.O_RDONLY | nonblock)
         buf = bytearray(104)
-        fcntl.ioctl(fd, vidioc_querycap, buf, True)
+        ioctl = getattr(fcntl, "ioctl", None)
+        if not callable(ioctl):
+            return True
+        ioctl(fd, vidioc_querycap, buf, True)
         capabilities = int.from_bytes(buf[84:88], "little")
         device_caps = int.from_bytes(buf[88:92], "little")
         caps = device_caps if capabilities & v4l2_cap_device_caps else capabilities
@@ -288,7 +292,9 @@ def configure_camera_capture(
         if not apply_format:
             return
         if prefer_mjpg:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            fourcc_fn = getattr(cv2, "VideoWriter_fourcc", None)
+            if callable(fourcc_fn):
+                cap.set(cv2.CAP_PROP_FOURCC, fourcc_fn(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
         cap.set(cv2.CAP_PROP_FPS, float(target_fps))

@@ -1204,7 +1204,8 @@ class MainWindow(QMainWindow):
         self._web_server.broadcast_metrics(metrics)
         self._web_last_emit = now
 
-    def _encode_frame_jpeg(self, image: QImage, *, max_width: int = 640, quality: int = 70) -> str | None:
+    @staticmethod
+    def _encode_frame_jpeg(image: QImage, *, max_width: int = 640, quality: int = 70) -> str | None:
         if image is None:
             return None
         if image.width() > max_width:

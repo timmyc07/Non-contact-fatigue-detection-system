@@ -479,6 +479,9 @@ class EyeCognitiveModule:
             self._closed_start = None
 
     def _perclos(self, t_now: float) -> float:
+        calib_start = self._calib_start
+        if calib_start is None:
+            return 0.0
         w = self.p.perclos_window_sec
         cutoff = t_now - w
         while self._closed_intervals and self._closed_intervals[0][1] <= cutoff:
@@ -489,7 +492,7 @@ class EyeCognitiveModule:
         )
         if self._closed_start is not None:
             closed += (t_now - max(self._closed_start, cutoff)) * self._closed_quality
-        elapsed = max(1.0, min(t_now - self._calib_start - self.p.calib_sec, w))
+        elapsed = max(1.0, min(t_now - calib_start - self.p.calib_sec, w))
         return _clamp(closed / elapsed, 0.0, 1.0)
 
     def _z_from_baseline(self, key: str, value: float) -> float:
@@ -558,12 +561,14 @@ class EyeCognitiveModule:
         p = self.p
         if self._calib_start is None:
             self._calib_start = float(t_now)
+        calib_start = self._calib_start
+        assert calib_start is not None
         bs = _blendshape_map(blendshapes)
         raw_eye_blink = _bs(bs, "eye_blink_left", "eye_blink_right")
         raw_eye_squint = _bs(bs, "eye_squint_left", "eye_squint_right")
         raw_brow_down = _bs(bs, "brow_down_left", "brow_down_right", "brow_inner_up")
         self.blend_calib_progress = _clamp(
-            (t_now - self._calib_start) / max(p.blend_calib_sec, 1e-6), 0.0, 1.0
+            (t_now - calib_start) / max(p.blend_calib_sec, 1e-6), 0.0, 1.0
         )
         if not self._blend_calibrated:
             if fatigue_quality > 0.55 and blink_ok:
@@ -598,7 +603,7 @@ class EyeCognitiveModule:
         ear_s = self._ear_ema
 
         # ── Calibration ─────────────────────────────────────────────────────
-        calib_elapsed = t_now - self._calib_start
+        calib_elapsed = t_now - calib_start
         if not self.calibrated:
             if blink_ok and ear_s > p.calib_ear_min:
                 self._calib_ears.append(ear_s)

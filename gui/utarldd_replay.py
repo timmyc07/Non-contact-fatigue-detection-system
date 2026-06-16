@@ -1069,6 +1069,18 @@ def _mean_float(values: list[float]) -> float:
     return float(sum(values) / len(values)) if values else 0.0
 
 
+def _row_float(row: dict[str, object], key: str, default: float = 0.0) -> float:
+    value = row.get(key, default)
+    if value in (None, ""):
+        return default
+    if not isinstance(value, (int, float, str)):
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def _flag_count(rows: list[dict[str, object]], flag: str) -> int:
     count = 0
     for row in rows:
@@ -1150,14 +1162,14 @@ def _label_aggregates(rows: list[dict[str, object]]) -> dict[str, dict[str, floa
         group = [row for row in rows if str(row.get("資料集標籤", "")) == label]
         out[label] = {
             "count": float(len(group)),
-            "face": _mean_float([float(row.get("人臉偵測率", 0.0) or 0.0) for row in group]),
-            "perclos": _mean_float([float(row.get("平均PERCLOS", 0.0) or 0.0) for row in group]),
-            "max_perclos": _mean_float([float(row.get("最高PERCLOS", 0.0) or 0.0) for row in group]),
-            "p95_fused": _mean_float([float(row.get("95分位融合分數", 0.0) or 0.0) for row in group]),
-            "low": _mean_float([float(row.get("低警覺比例", 0.0) or 0.0) for row in group]),
-            "drowsy": _mean_float([float(row.get("嗜睡危急比例", 0.0) or 0.0) for row in group]),
-            "behavior": _mean_float([float(row.get("行為有效率", 0.0) or 0.0) for row in group]),
-            "low_quality": _mean_float([float(row.get("低品質比例", 0.0) or 0.0) for row in group]),
+            "face": _mean_float([_row_float(row, "人臉偵測率") for row in group]),
+            "perclos": _mean_float([_row_float(row, "平均PERCLOS") for row in group]),
+            "max_perclos": _mean_float([_row_float(row, "最高PERCLOS") for row in group]),
+            "p95_fused": _mean_float([_row_float(row, "95分位融合分數") for row in group]),
+            "low": _mean_float([_row_float(row, "低警覺比例") for row in group]),
+            "drowsy": _mean_float([_row_float(row, "嗜睡危急比例") for row in group]),
+            "behavior": _mean_float([_row_float(row, "行為有效率") for row in group]),
+            "low_quality": _mean_float([_row_float(row, "低品質比例") for row in group]),
         }
     return out
 
@@ -1166,7 +1178,7 @@ def _render_visual_report(rows: list[dict[str, object]], *, title: str) -> str:
     aggregates = _label_aggregates(rows)
     total = len(rows)
     done = sum(1 for row in rows if str(row.get("處理狀態", "")) == "done")
-    face_avg = _mean_float([float(row.get("人臉偵測率", 0.0) or 0.0) for row in rows])
+    face_avg = _mean_float([_row_float(row, "人臉偵測率") for row in rows])
     alert_false = _flag_count(rows, "alert_false_alarm_risk")
     drowsy_miss = _flag_count(rows, "drowsy_miss_risk")
     low_effective = _flag_count(rows, "behavior_effective_frames_low")

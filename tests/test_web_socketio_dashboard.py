@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
@@ -10,7 +11,7 @@ from gui.main_window import MainWindow
 from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread, create_app
 
 
-def _event_payloads(events: list[dict], name: str) -> list[dict]:
+def _event_payloads(events: Sequence[Mapping[str, Any]], name: str) -> list[Any]:
     return [event["args"][0] for event in events if event.get("name") == name]
 
 
@@ -147,7 +148,7 @@ def test_web_preview_frame_encoder_returns_jpeg_base64() -> None:
     image = QImage(320, 240, QImage.Format.Format_RGB888)
     image.fill(Qt.GlobalColor.red)
 
-    encoded = MainWindow._encode_frame_jpeg(object(), image, max_width=160, quality=70)
+    encoded = MainWindow._encode_frame_jpeg(image, max_width=160, quality=70)
 
     assert encoded is not None
     raw = base64.b64decode(encoded)

@@ -48,7 +48,9 @@ def get_lan_ipv4_addresses() -> list[str]:
 
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET):
-            add(info[4][0])
+            host = info[4][0]
+            if isinstance(host, str):
+                add(host)
     except OSError:
         pass
 
@@ -773,7 +775,7 @@ def create_app(
     @socketio.on("request_metrics")
     def handle_metrics_request():
         data, latest = get_metrics_history_with_latest()
-        payload = {"data": data}
+        payload: dict[str, Any] = {"data": data}
         if latest is not None:
             payload["latest"] = latest
         emit("metrics_history", payload)

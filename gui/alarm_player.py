@@ -135,8 +135,9 @@ class QtAlarmPlaybackBackend(QObject):
         from PySide6.QtWidgets import QApplication
 
         app = QApplication.instance()
-        if app is not None:
-            app.beep()
+        beep = getattr(QApplication, "beep", None)
+        if app is not None and callable(beep):
+            beep()
 
 
 class FatigueAlarmController:
