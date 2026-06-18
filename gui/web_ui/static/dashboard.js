@@ -62,7 +62,18 @@ function applyLiveMetrics(packet) {
 }
 
 function initSocket() {
-    socket = io();
+    if (socket) {
+        socket.removeAllListeners();
+        socket.disconnect();
+        socket = null;
+    }
+    socket = io({
+        transports: ['polling', 'websocket'],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+    });
     socket.on('connect', () => {
         isConnected = true;
         updateConnectionStatus(true);
@@ -72,6 +83,10 @@ function initSocket() {
         isConnected = false;
         updateConnectionStatus(false);
         updatePipelineStatus(false);
+    });
+    socket.on('connect_error', () => {
+        isConnected = false;
+        updateConnectionStatus(false);
     });
     socket.on('metrics_update', (data) => {
         applyLiveMetrics(data);

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -1087,7 +1088,12 @@ class MainWindow(QMainWindow):
     def _stop_web_server(self) -> None:
         if self._web_server is None:
             return
-        self._web_server.stop()
+        thread = self._web_server
+        stopped = thread.stop(join_timeout=5.0)
+        if not stopped and thread.is_alive():
+            self._append_log(
+                "⚠ Web 儀表板舊執行緒未能及時結束；若儀表板無法更新，請重新啟動程式。"
+            )
         self._web_server = None
 
     def _build_web_metrics(self) -> dict:
@@ -2419,14 +2425,58 @@ class MainWindow(QMainWindow):
 
     def _on_web_allow_lan_toggled(self, checked: bool) -> None:
         self._restart_web_server()
+        try:
+            self._save_settings()
+        except OSError as exc:
+            self._append_log(f"⚠ 區域網設定已套用，但保存 settings.json 失敗：{exc}")
         state = "已啟用" if checked else "已關閉"
         self._append_log(
             f"🌐 Web 儀表板區域網存取{state}：{self._format_web_dashboard_message()}"
         )
+        self._append_log("提示：請重新整理已開啟的 Web 儀表板頁面，以重新連線 Socket.IO。")
         if checked:
             self._append_log(
                 f"提示：其他裝置若無法連線，請檢查防火牆是否放行 TCP {WEB_DASHBOARD_DEFAULT_PORT}。"
             )
+
+    def _web_dashboard_url_labels(self) -> list[tuple[str, str]]:
+        """回傳 (顯示標籤, 網址) 清單。"""
+        labels: list[tuple[str, str]] = []
+        for url in self._web_dashboard_urls():
+            if url.startswith("http://127.0.0.1"):
+                labels.append((f"本機 — {url}", url))
+            else:
+                labels.append((f"區域網 — {url}", url))
+        return labels
+
+    def _pick_web_dashboard_url(self) -> str | None:
+        options = self._web_dashboard_url_labels()
+        if not options:
+            return None
+        if not self._web_allow_lan_enabled() or len(options) == 1:
+            return options[0][1]
+
+        display_labels = [label for label, _url in options]
+        default_index = 0
+        for index, (_label, url) in enumerate(options):
+            if not url.startswith("http://127.0.0.1"):
+                default_index = index
+                break
+
+        choice, ok = QInputDialog.getItem(
+            self,
+            "開啟 Web 儀表板",
+            "已啟用區域網存取，請選擇要開啟的網址：",
+            display_labels,
+            default_index,
+            False,
+        )
+        if not ok:
+            return None
+        for label, url in options:
+            if label == choice:
+                return url
+        return options[default_index][1]
 
     def _on_web_info(self) -> None:
         if self._web_server is None:
@@ -2438,14 +2488,22 @@ class MainWindow(QMainWindow):
                 "Web 儀表板啟動失敗，請確認已安裝 Flask/Socket.IO 相依套件。",
             )
             return
-        url = QUrl(self._web_dashboard_urls()[0])
-        QDesktopServices.openUrl(url)
+        url_str = self._pick_web_dashboard_url()
+        if url_str is None:
+            return
+        QDesktopServices.openUrl(QUrl(url_str))
+        all_urls = "\n".join(self._web_dashboard_urls())
         QMessageBox.information(
             self,
             "Web 儀表板",
-            "已開啟 Web 儀表板：\n"
-            f"{self._format_web_dashboard_message(include_lan_hint=True)}\n"
-            f"若瀏覽器無法連線，請確認防火牆或埠 {WEB_DASHBOARD_DEFAULT_PORT} 未被佔用。",
+            f"已開啟 Web 儀表板：\n{url_str}\n\n"
+            f"可用網址：\n{all_urls}\n"
+            f"\n若瀏覽器無法連線，請確認防火牆或埠 {WEB_DASHBOARD_DEFAULT_PORT} 未被佔用。"
+            + (
+                "\n\n其他裝置請使用「區域網」網址，不要用 127.0.0.1。"
+                if self._web_allow_lan_enabled()
+                else ""
+            ),
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802

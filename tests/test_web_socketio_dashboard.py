@@ -172,6 +172,17 @@ def test_socketio_broadcast_frame_event_reaches_client(tmp_path: Path) -> None:
         client.disconnect()
 
 
+def test_shutdown_endpoint_rejects_invalid_token(tmp_path: Path) -> None:
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        shutdown_token="secret-token",
+    )
+    client = app.test_client()
+    response = client.post("/__server/shutdown", json={"token": "wrong"})
+    assert response.status_code == 403
+
+
 def test_live_web_preview_targets_thirty_fps() -> None:
     assert WEB_PREVIEW_TARGET_FPS == 30.0
     assert camera_stream_worker._PREVIEW_MAX_FPS == 30.0

@@ -337,6 +337,9 @@ def create_app(
         app,
         cors_allowed_origins="*",
         async_mode="threading",
+        ping_timeout=60,
+        ping_interval=25,
+        max_http_buffer_size=10_000_000,
     )
 
     latest_packet_error_logged = False
@@ -796,7 +799,15 @@ def create_app(
         data = request.get_json(silent=True) or {}
         if not secrets.compare_digest(str(data.get("token") or ""), shutdown_token):
             abort(403)
-        socketio.stop()
+        # threading + Werkzeug 模式下 socketio.stop() 會拋出
+        # RuntimeError('Cannot stop unknown web server')，導致舊伺服器殘留。
+        shutdown = request.environ.get("werkzeug.server.shutdown")
+        if shutdown is None:
+            return jsonify({
+                "success": False,
+                "error": "werkzeug shutdown unavailable",
+            }), 503
+        shutdown()
         return jsonify({"success": True})
 
     return app, socketio
@@ -831,6 +842,7 @@ class WebServerThread(threading.Thread):
             shutdown_token=self._shutdown_token,
         )
         self._stop_flag = threading.Event()
+        self._stopped_event = threading.Event()
 
     def run(self) -> None:
         try:
@@ -844,28 +856,42 @@ class WebServerThread(threading.Thread):
             )
         except Exception as e:
             print(f"Web服務器啟動出錯: {e}")
+        finally:
+            self._stopped_event.set()
 
-    def stop(self) -> None:
+    def stop(self, *, join_timeout: float = 5.0) -> bool:
         self._stop_flag.set()
+        if self._stopped_event.is_set():
+            return True
         try:
             import requests
-            requests.post(
+
+            response = requests.post(
                 f"http://127.0.0.1:{self.port}/__server/shutdown",
                 json={"token": self._shutdown_token},
-                timeout=1.0,
+                timeout=2.0,
             )
+            if response.status_code != 200:
+                if not getattr(self, "_stop_err_logged", False):
+                    print(
+                        f"[WebServer] stop request returned HTTP {response.status_code}: "
+                        f"{response.text[:200]}"
+                    )
+                    self._stop_err_logged = True
         except Exception as e:
             if not getattr(self, "_stop_err_logged", False):
                 print(f"[WebServer] stop request failed: {e}")
                 self._stop_err_logged = True
+        return self._stopped_event.wait(timeout=join_timeout)
 
     def broadcast_metrics(self, metrics: dict) -> None:
         try:
-            self.socketio.emit(
-                "metrics_update",
-                {"metrics": metrics},
-                namespace="/"
-            )
+            with self.app.app_context():
+                self.socketio.emit(
+                    "metrics_update",
+                    {"metrics": metrics},
+                    namespace="/",
+                )
         except Exception as e:
             if not getattr(self, '_broadcast_err_logged', False):
                 print(f"[WebServer] broadcast_metrics 出錯: {e}")
@@ -877,11 +903,12 @@ class WebServerThread(threading.Thread):
 
     def broadcast_frame(self, frame_b64: str) -> None:
         try:
-            self.socketio.emit(
-                "frame_update",
-                {"frame": frame_b64},
-                namespace="/"
-            )
+            with self.app.app_context():
+                self.socketio.emit(
+                    "frame_update",
+                    {"frame": frame_b64},
+                    namespace="/",
+                )
         except Exception as e:
             if not getattr(self, '_broadcast_frame_err_logged', False):
                 print(f"[WebServer] broadcast_frame 出錯: {e}")
