@@ -12,7 +12,7 @@ import { FormattedMessage, useIntl } from "react-intl";
 import flowchartImage from "src/assets/system_flowchart_canva_preview.png";
 import * as styles from "styles/components.css";
 
-const FLOWCHART_ASPECT_RATIO = 1800 / 1120;
+const FLOWCHART_ASPECT_RATIO = 1800 / 1280;
 const FALLBACK_PAGE_WIDTH = 1280;
 const FALLBACK_PAGE_HEIGHT = 720;
 

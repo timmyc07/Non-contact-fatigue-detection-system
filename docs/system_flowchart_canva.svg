@@ -1,166 +1,163 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1120" viewBox="0 0 1800 1120">
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1280" viewBox="0 0 1800 1280">
   <defs>
     <marker id="arrow" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto">
-      <path d="M0,0 L14,7 L0,14 Z" fill="#334155"/>
+      <path d="M0,0 L14,7 L0,14 Z" fill="#1f2937"/>
     </marker>
-    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+    <marker id="arrow-soft" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto">
+      <path d="M0,0 L14,7 L0,14 Z" fill="#64748b"/>
+    </marker>
+    <filter id="shadow" x="-8%" y="-10%" width="116%" height="130%">
       <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.12"/>
     </filter>
     <style>
-      .bg { fill:#f7f8fc; }
-      .title { font:700 42px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#172033; }
-      .subtitle { font:400 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569; }
-      .laneTitle { font:700 24px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#263b62; }
-      .nodeTitle { font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827; }
-      .nodeText { font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569; }
-      .smallText { font:400 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b; }
-      .pillText { font:700 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff; }
-      .lane { fill:#eef4ff; stroke:#b7c8ef; stroke-width:2; }
-      .lane2 { fill:#f5f1ff; stroke:#cdbdf8; stroke-width:2; }
-      .lane3 { fill:#eefcf8; stroke:#a6e3d2; stroke-width:2; }
-      .box { fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; }
-      .input { stroke:#4f7bd9; }
-      .core { stroke:#7c3aed; }
+      .bg { fill:#f8fafc; }
+      .title { font:700 42px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#111827; }
+      .subtitle { font:400 22px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#475569; }
+      .sectionTitle { font:700 22px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#1e3a5f; }
+      .nodeTitle { font:700 21px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#111827; }
+      .nodeText { font:400 16px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#475569; }
+      .label { font:700 17px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#1f2937; }
+      .small { font:400 14px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#64748b; }
+      .legendText { font:600 15px "Noto Sans TC","Microsoft JhengHei",Arial,sans-serif; fill:#ffffff; }
+      .start { fill:#e0f2fe; stroke:#0284c7; stroke-width:2.5; }
+      .data { fill:#eef4ff; stroke:#2563eb; stroke-width:2.5; }
+      .process { fill:#ffffff; stroke:#64748b; stroke-width:2.5; }
+      .face { stroke:#7c3aed; }
+      .behavior { stroke:#9333ea; }
       .bio { stroke:#059669; }
-      .fusion { stroke:#f59e0b; }
+      .fusion { stroke:#d97706; }
       .output { stroke:#0f766e; }
-      .note { fill:#ffffff; stroke:#d8b4fe; stroke-width:2; }
-      .arrow { stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow); }
-      .arrowSoft { stroke:#64748b; stroke-width:2.6; fill:none; stroke-dasharray:8 8; marker-end:url(#arrow); }
+      .decision { fill:#fff7ed; stroke:#f59e0b; stroke-width:2.8; }
+      .laneBehavior { fill:#faf5ff; stroke:#d8b4fe; stroke-width:2; }
+      .laneBio { fill:#ecfdf5; stroke:#a7f3d0; stroke-width:2; }
+      .laneOutput { fill:#f1f5f9; stroke:#cbd5e1; stroke-width:2; }
+      .arrow { stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow); }
+      .softArrow { stroke:#64748b; stroke-width:2.5; fill:none; stroke-dasharray:8 8; marker-end:url(#arrow-soft); }
     </style>
   </defs>
 
-  <rect class="bg" style="fill:#f7f8fc;" x="0" y="0" width="1800" height="1120"/>
+  <rect class="bg" style="fill:#f8fafc;" x="0" y="0" width="1800" height="1280"/>
 
-  <text class="title" style="font:700 42px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#172033;" x="900" y="68" text-anchor="middle">結合影像辨識與生理感測之疲勞偵測系統流程圖</text>
-  <text class="subtitle" style="font:400 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="900" y="108" text-anchor="middle">以一般攝影機取得影像，整合臉部行為特徵、rPPG 生理訊號、品質評估、融合評分與多端輸出</text>
+  <text class="title" style="font:700 42px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="58" text-anchor="middle">結合影像辨識與生理感測之疲勞偵測系統流程圖</text>
+  <text class="subtitle" style="font:400 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="900" y="95" text-anchor="middle">依流程圖規範重新整理：單一起點、明確判斷、左右分支、匯合評分與下一影格循環</text>
 
-  <rect class="lane" style="fill:#eef4ff; stroke:#b7c8ef; stroke-width:2;" x="70" y="150" width="1660" height="250" rx="22"/>
-  <text class="laneTitle" style="font:700 24px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#263b62;" x="105" y="190">一、影像輸入與共用臉部推論</text>
+  <ellipse class="start" style="fill:#e0f2fe; stroke:#0284c7; stroke-width:2.5;" cx="900" cy="145" rx="150" ry="36" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="153" text-anchor="middle">開始監測</text>
 
-  <rect class="box input" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#4f7bd9;" x="105" y="225" width="260" height="120" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="235" y="260" text-anchor="middle">使用者啟動與設定</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="235" y="292" text-anchor="middle">選擇相機、解析度、FPS</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="235" y="320" text-anchor="middle">啟用疲勞、rPPG、錄製</text>
+  <path class="data" style="fill:#eef4ff; stroke:#2563eb; stroke-width:2.5;" d="M690 205 L1070 205 L1035 285 L655 285 Z" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="862" y="238" text-anchor="middle">一般攝影機輸入</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="862" y="263" text-anchor="middle">相機、解析度、FPS、鏡像校正</text>
 
-  <rect class="box input" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#4f7bd9;" x="425" y="225" width="260" height="120" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="555" y="260" text-anchor="middle">即時影像擷取</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="555" y="292" text-anchor="middle">讀取 RGB/BGR 影格</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="555" y="320" text-anchor="middle">維持低延遲預覽來源</text>
+  <rect class="process" style="fill:#ffffff; stroke:#64748b; stroke-width:2.5;" x="690" y="320" width="380" height="78" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="880" y="350" text-anchor="middle">最新影格管理</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="880" y="375" text-anchor="middle">只保留最新畫面，降低即時分析延遲</text>
 
-  <rect class="box input" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#4f7bd9;" x="745" y="225" width="260" height="120" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="875" y="260" text-anchor="middle">最新影格管理</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="875" y="292" text-anchor="middle">只保留最新畫面</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="875" y="320" text-anchor="middle">避免分析端追趕舊資料</text>
+  <polygon class="decision" style="fill:#fff7ed; stroke:#f59e0b; stroke-width:2.8;" points="900,430 1045,500 900,570 755,500" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="492" text-anchor="middle">是否偵測到</text>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="520" text-anchor="middle">有效臉部？</text>
 
-  <rect class="box core" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#7c3aed;" x="1065" y="225" width="300" height="120" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1215" y="260" text-anchor="middle">單次臉部推論</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1215" y="292" text-anchor="middle">取得臉部關鍵點、表情係數</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1215" y="320" text-anchor="middle">與頭部姿態矩陣</text>
+  <rect class="process face" style="fill:#ffffff; stroke-width:2.5; stroke:#7c3aed;" x="715" y="610" width="370" height="82" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="642" text-anchor="middle">共用臉部推論</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="900" y="668" text-anchor="middle">一次取得臉部關鍵點、表情係數與頭部姿態</text>
 
-  <rect class="note" style="fill:#ffffff; stroke:#d8b4fe; stroke-width:2;" x="1425" y="225" width="260" height="120" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1555" y="260" text-anchor="middle">設計重點</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1555" y="292" text-anchor="middle">同一影格只推論一次</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1555" y="320" text-anchor="middle">再分流到兩條分析管線</text>
+  <rect class="process" style="fill:#ffffff; stroke:#64748b; stroke-width:2.5;" x="140" y="455" width="360" height="90" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="320" y="490" text-anchor="middle">無臉或可信度不足</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="320" y="518" text-anchor="middle">標記狀態，等待下一個可分析影格</text>
 
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M365 285 L425 285"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M685 285 L745 285"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1005 285 L1065 285"/>
-  <path class="arrowSoft" style="stroke:#64748b; stroke-width:2.6; fill:none; stroke-dasharray:8 8; marker-end:url(#arrow);" d="M1365 285 L1425 285"/>
+  <rect class="laneBehavior" style="fill:#faf5ff; stroke:#d8b4fe; stroke-width:2;" x="80" y="735" width="780" height="260" rx="18"/>
+  <text class="sectionTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1e3a5f;" x="120" y="775">行為疲勞分析分支</text>
 
-  <rect class="lane2" style="fill:#f5f1ff; stroke:#cdbdf8; stroke-width:2;" x="70" y="430" width="790" height="310" rx="22"/>
-  <text class="laneTitle" style="font:700 24px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#263b62;" x="105" y="470">二、行為疲勞分析管線</text>
+  <rect class="process behavior" style="fill:#ffffff; stroke-width:2.5; stroke:#9333ea;" x="130" y="825" width="205" height="95" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="232" y="858" text-anchor="middle">眼部特徵</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="232" y="884" text-anchor="middle">閉眼、眨眼、PERCLOS</text>
 
-  <rect class="box core" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#7c3aed;" x="110" y="505" width="220" height="140" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="220" y="542" text-anchor="middle">眼部特徵</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="220" y="575" text-anchor="middle">眼睛閉合比例</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="220" y="603" text-anchor="middle">眨眼節奏、PERCLOS</text>
-  <text class="smallText" style="font:400 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="220" y="630" text-anchor="middle">判斷低警覺與長閉眼</text>
+  <rect class="process behavior" style="fill:#ffffff; stroke-width:2.5; stroke:#9333ea;" x="380" y="825" width="205" height="95" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="482" y="858" text-anchor="middle">頭姿與凝視</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="482" y="884" text-anchor="middle">低頭、偏轉、注視穩定</text>
 
-  <rect class="box core" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#7c3aed;" x="370" y="505" width="220" height="140" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="480" y="542" text-anchor="middle">凝視與頭姿</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="480" y="575" text-anchor="middle">視線穩定度、眼跳</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="480" y="603" text-anchor="middle">低頭、偏轉、微睡眠</text>
-  <text class="smallText" style="font:400 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="480" y="630" text-anchor="middle">觀察專注度變化</text>
+  <rect class="process behavior" style="fill:#ffffff; stroke-width:2.5; stroke:#9333ea;" x="630" y="825" width="185" height="95" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="722" y="858" text-anchor="middle">嘴部表情</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="722" y="884" text-anchor="middle">哈欠、瞇眼、皺眉</text>
 
-  <rect class="box core" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#7c3aed;" x="630" y="505" width="190" height="140" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="725" y="542" text-anchor="middle">嘴部與表情</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="725" y="575" text-anchor="middle">哈欠、瞇眼</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="725" y="603" text-anchor="middle">皺眉與表情基準</text>
-  <text class="smallText" style="font:400 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="725" y="630" text-anchor="middle">補充晚期疲勞訊號</text>
+  <rect class="laneBio" style="fill:#ecfdf5; stroke:#a7f3d0; stroke-width:2;" x="940" y="735" width="780" height="260" rx="18"/>
+  <text class="sectionTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1e3a5f;" x="980" y="775">rPPG 生理訊號分析分支</text>
 
-  <rect class="lane3" style="fill:#eefcf8; stroke:#a6e3d2; stroke-width:2;" x="940" y="430" width="790" height="310" rx="22"/>
-  <text class="laneTitle" style="font:700 24px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#263b62;" x="975" y="470">三、rPPG 生理訊號分析管線</text>
+  <rect class="process bio" style="fill:#ffffff; stroke-width:2.5; stroke:#059669;" x="990" y="825" width="205" height="95" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1092" y="858" text-anchor="middle">皮膚 ROI 取樣</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1092" y="884" text-anchor="middle">額頭、雙頰、眉間</text>
 
-  <rect class="box bio" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#059669;" x="980" y="505" width="210" height="140" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1085" y="542" text-anchor="middle">臉部皮膚取樣</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1085" y="575" text-anchor="middle">額頭、雙頰、眉間</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1085" y="603" text-anchor="middle">亮度與遮擋檢查</text>
-  <text class="smallText" style="font:400 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="1085" y="630" text-anchor="middle">建立 RGB 時序資料</text>
+  <rect class="process bio" style="fill:#ffffff; stroke-width:2.5; stroke:#059669;" x="1240" y="825" width="205" height="95" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1342" y="858" text-anchor="middle">脈搏波形估測</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1342" y="884" text-anchor="middle">POS 投影與帶通濾波</text>
 
-  <rect class="box bio" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#059669;" x="1230" y="505" width="210" height="140" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1335" y="542" text-anchor="middle">脈搏波形估測</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1335" y="575" text-anchor="middle">POS 色彩投影</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1335" y="603" text-anchor="middle">帶通濾波去雜訊</text>
-  <text class="smallText" style="font:400 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="1335" y="630" text-anchor="middle">保留心搏頻帶</text>
+  <rect class="process bio" style="fill:#ffffff; stroke-width:2.5; stroke:#059669;" x="1490" y="825" width="185" height="95" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1582" y="858" text-anchor="middle">生理指標</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1582" y="884" text-anchor="middle">BPM、HRV、SQI</text>
 
-  <rect class="box bio" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#059669;" x="1480" y="505" width="210" height="140" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1585" y="542" text-anchor="middle">生理指標估測</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1585" y="575" text-anchor="middle">BPM、HRV、SQI</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1585" y="603" text-anchor="middle">心率校準與品質守門</text>
-  <text class="smallText" style="font:400 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="1585" y="630" text-anchor="middle">降低光源與個體偏差</text>
+  <polygon class="decision" style="fill:#fff7ed; stroke:#f59e0b; stroke-width:2.8;" points="900,1025 1045,1095 900,1165 755,1095" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="1086" text-anchor="middle">資料品質</text>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="1114" text-anchor="middle">是否足夠？</text>
 
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1215 345 C1050 390 740 410 480 505"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1215 345 C1290 390 1335 430 1335 505"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M330 575 L370 575"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M590 575 L630 575"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1190 575 L1230 575"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1440 575 L1480 575"/>
+  <rect class="process fusion" style="fill:#ffffff; stroke-width:2.5; stroke:#d97706;" x="250" y="1050" width="360" height="90" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="430" y="1084" text-anchor="middle">品質不足時降權</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="430" y="1112" text-anchor="middle">只保留可信指標，避免誤判疲勞</text>
 
-  <rect class="lane" style="fill:#eef4ff; stroke:#b7c8ef; stroke-width:2;" x="70" y="775" width="1660" height="265" rx="22"/>
-  <text class="laneTitle" style="font:700 24px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#263b62;" x="105" y="815">四、品質評估、融合評分與輸出應用</text>
+  <rect class="laneOutput" style="fill:#f1f5f9; stroke:#cbd5e1; stroke-width:2;" x="1120" y="1010" width="610" height="210" rx="18"/>
+  <text class="sectionTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1e3a5f;" x="1160" y="1048">輸出應用</text>
 
-  <rect class="box fusion" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#f59e0b;" x="130" y="855" width="270" height="125" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="265" y="892" text-anchor="middle">訊號品質評估</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="265" y="925" text-anchor="middle">檢查臉部偵測、ROI 可用率</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="265" y="953" text-anchor="middle">與 rPPG 可信度</text>
+  <rect class="process fusion" style="fill:#ffffff; stroke-width:2.5; stroke:#d97706;" x="1150" y="1080" width="245" height="88" rx="8" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1272" y="1113" text-anchor="middle">疲勞融合評分</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1272" y="1140" text-anchor="middle">行為為主，rPPG 輔助</text>
 
-  <rect class="box fusion" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#f59e0b;" x="455" y="855" width="300" height="125" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="605" y="892" text-anchor="middle">疲勞融合評分</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="605" y="925" text-anchor="middle">行為特徵為主、rPPG 輔助</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="605" y="953" text-anchor="middle">輸出 0 到 1 分數與等級</text>
+  <path class="data output" style="fill:#eef4ff; stroke-width:2.5; stroke:#0f766e;" d="M1440 1080 L1690 1080 L1665 1168 L1415 1168 Z" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1552" y="1113" text-anchor="middle">顯示、告警、紀錄</text>
+  <text class="nodeText" style="font:400 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1552" y="1140" text-anchor="middle">GUI、Web、音效、回放報表</text>
 
-  <rect class="box output" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#0f766e;" x="815" y="855" width="230" height="125" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="930" y="892" text-anchor="middle">即時顯示</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="930" y="925" text-anchor="middle">桌面 Overlay</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="930" y="953" text-anchor="middle">Web 儀表板與波形</text>
+  <ellipse class="start" style="fill:#e0f2fe; stroke:#0284c7; stroke-width:2.5;" cx="900" cy="1230" rx="160" ry="34" filter="url(#shadow)"/>
+  <text class="nodeTitle" style="font:700 21px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="900" y="1238" text-anchor="middle">下一影格循環</text>
 
-  <rect class="box output" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#0f766e;" x="1090" y="855" width="230" height="125" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1205" y="892" text-anchor="middle">告警提醒</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1205" y="925" text-anchor="middle">低警覺、疲勞、危急</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1205" y="953" text-anchor="middle">音效與視覺提示</text>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M900 181 L900 205"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M900 285 L900 320"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M900 398 L900 430"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M900 570 L900 610"/>
+  <text class="label" style="font:700 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1f2937;" x="935" y="594">是</text>
 
-  <rect class="box output" style="fill:#ffffff; stroke:#cbd5e1; stroke-width:2.5; stroke:#0f766e;" x="1365" y="855" width="280" height="125" rx="16" filter="url(#softShadow)"/>
-  <text class="nodeTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#111827;" x="1505" y="892" text-anchor="middle">紀錄與回放驗證</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1505" y="925" text-anchor="middle">儲存指標、事件與影片</text>
-  <text class="nodeText" style="font:400 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#475569;" x="1505" y="953" text-anchor="middle">支援資料集回放與報表</text>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M755 500 L500 500"/>
+  <text class="label" style="font:700 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1f2937;" x="625" y="480">否</text>
+  <path class="softArrow" style="stroke:#64748b; stroke-width:2.5; fill:none; stroke-dasharray:8 8; marker-end:url(#arrow-soft);" d="M320 545 L55 545 L55 1230 L740 1230"/>
 
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M465 645 C420 735 315 770 265 855"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1335 645 C1135 735 520 765 265 855"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M400 918 L455 918"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M755 918 L815 918"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1045 918 L1090 918"/>
-  <path class="arrow" style="stroke:#334155; stroke-width:3.2; fill:none; marker-end:url(#arrow);" d="M1320 918 L1365 918"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M900 692 C770 725 420 745 232 825"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M900 692 C1030 725 1260 745 1092 825"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M335 872 L380 872"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M585 872 L630 872"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M1195 872 L1240 872"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M1445 872 L1490 872"/>
 
-  <rect x="105" y="1038" width="260" height="42" rx="21" fill="#4f7bd9"/>
-  <text class="pillText" style="font:700 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="235" y="1065" text-anchor="middle">一般攝影機輸入</text>
-  <rect x="390" y="1038" width="290" height="42" rx="21" fill="#7c3aed"/>
-  <text class="pillText" style="font:700 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="535" y="1065" text-anchor="middle">臉部行為疲勞分析</text>
-  <rect x="705" y="1038" width="275" height="42" rx="21" fill="#059669"/>
-  <text class="pillText" style="font:700 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="842" y="1065" text-anchor="middle">rPPG 生理訊號估測</text>
-  <rect x="1005" y="1038" width="300" height="42" rx="21" fill="#f59e0b"/>
-  <text class="pillText" style="font:700 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="1155" y="1065" text-anchor="middle">品質守門與融合評分</text>
-  <rect x="1330" y="1038" width="365" height="42" rx="21" fill="#0f766e"/>
-  <text class="pillText" style="font:700 16px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="1512" y="1065" text-anchor="middle">即時告警、記錄、Web 與回放</text>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M722 920 C770 965 815 995 845 1048"/>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M1582 920 C1420 975 1135 1010 958 1048"/>
+
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M755 1095 L610 1095"/>
+  <text class="label" style="font:700 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1f2937;" x="665" y="1074">否</text>
+  <path class="softArrow" style="stroke:#64748b; stroke-width:2.5; fill:none; stroke-dasharray:8 8; marker-end:url(#arrow-soft);" d="M430 1140 C520 1210 665 1230 740 1230"/>
+
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M1045 1095 L1150 1124"/>
+  <text class="label" style="font:700 17px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1f2937;" x="1075" y="1074">是</text>
+  <path class="arrow" style="stroke:#1f2937; stroke-width:3; fill:none; marker-end:url(#arrow);" d="M1395 1124 L1420 1124"/>
+  <path class="softArrow" style="stroke:#64748b; stroke-width:2.5; fill:none; stroke-dasharray:8 8; marker-end:url(#arrow-soft);" d="M1552 1168 C1390 1245 1125 1230 1060 1230"/>
+
+  <rect x="75" y="116" width="330" height="130" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text class="sectionTitle" style="font:700 22px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#1e3a5f;" x="100" y="150">設計規則</text>
+  <text class="small" style="font:400 14px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="100" y="180">1. 主流程由上到下</text>
+  <text class="small" style="font:400 14px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="100" y="205">2. 菱形只負責判斷</text>
+  <text class="small" style="font:400 14px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#64748b;" x="100" y="230">3. 異常路徑回到下一影格</text>
+
+  <rect x="1210" y="125" width="80" height="30" rx="15" fill="#2563eb"/>
+  <text class="legendText" style="font:600 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="1250" y="146" text-anchor="middle">輸入</text>
+  <rect x="1305" y="125" width="80" height="30" rx="15" fill="#64748b"/>
+  <text class="legendText" style="font:600 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="1345" y="146" text-anchor="middle">處理</text>
+  <rect x="1400" y="125" width="80" height="30" rx="15" fill="#f59e0b"/>
+  <text class="legendText" style="font:600 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="1440" y="146" text-anchor="middle">判斷</text>
+  <rect x="1495" y="125" width="80" height="30" rx="15" fill="#0f766e"/>
+  <text class="legendText" style="font:600 15px Noto Sans TC, Microsoft JhengHei, Arial, sans-serif; fill:#ffffff;" x="1535" y="146" text-anchor="middle">輸出</text>
 </svg>
