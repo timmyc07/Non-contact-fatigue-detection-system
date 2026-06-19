@@ -123,6 +123,9 @@ class RppgMetrics:
     roi_smoothing_applied: bool = False
     canonical_roi_warp_used: bool = False
     face_detected:     bool  = False
+    bpm_calibrated:    float = 0.0
+    calibration_version_id: str = ""
+    peak_freq_hz_calibrated: float = 0.0
     waveform:  list[float] = field(default_factory=list)
     psd_freqs: list[float] = field(default_factory=list)
     psd_vals:  list[float] = field(default_factory=list)
@@ -796,6 +799,7 @@ class RppgEngine:
     _BPM_JUMP_CONFIRM_SEC = 2.0
     _BPM_JUMP_CONFIRM_COUNT = 4
     _BPM_JUMP_CLUSTER_DELTA = 8.0
+    _BPM_COMPUTE_INTERVAL_SEC = 5.0
 
     def __init__(self, buffer_sec: float = 12.0, target_fps: float = 30.0) -> None:
         self.buffer_sec = buffer_sec
@@ -815,6 +819,8 @@ class RppgEngine:
         self._last_bpm_guarded: bool = False
         self._last_bpm_guard_reason: str = ""
         self._last_bpm_delta: float = 0.0
+        self._last_spectrum_compute_t: Optional[float] = None
+        self._cached_spectrum: dict[str, Any] = {}
 
     def reset(self) -> None:
         self._r.clear(); self._g.clear()
@@ -829,6 +835,8 @@ class RppgEngine:
         self._last_bpm_guarded = False
         self._last_bpm_guard_reason = ""
         self._last_bpm_delta = 0.0
+        self._last_spectrum_compute_t = None
+        self._cached_spectrum = {}
 
     def push(self, t: float, r: float, g: float, b: float) -> None:
         self._r.append(r); self._g.append(g)
@@ -981,6 +989,70 @@ class RppgEngine:
                 face_detected=True,
             )
 
+        landmark_jitter = roi_tracker.landmark_jitter_norm if roi_tracker else 0.0
+        roi_area_stability = roi_tracker.roi_area_stability if roi_tracker else 1.0
+        stability_q = _clamp(
+            0.55 * (1.0 - landmark_jitter / max(tuning.rppg_roi.landmark_jitter_full_norm, 1e-6))
+            + 0.45 * roi_area_stability
+        )
+        roi_valid_count = len(ROI_SPECS) if roi_valid_count is None else int(max(0, roi_valid_count))
+        pose_quality = _face_quality_from_pose(
+            roll_deg,
+            yaw_deg,
+            pitch_deg,
+            face_area_ratio,
+            self._face_motion_speed / max(face_h, 1e-6),
+            roi_valid_count / max(len(ROI_SPECS), 1),
+            tuning,
+        )
+
+        reuse_spectrum = (
+            self._last_spectrum_compute_t is not None
+            and (t_now - self._last_spectrum_compute_t) < self._BPM_COMPUTE_INTERVAL_SEC
+            and bool(self._cached_spectrum)
+        )
+
+        if reuse_spectrum:
+            cached = self._cached_spectrum
+            signal_quality = float(cached.get("signal_quality", 0.0))
+            quality_score = _clamp(0.42 * pose_quality + 0.38 * signal_quality + 0.20 * stability_q)
+            return RppgMetrics(
+                bpm=float(cached.get("bpm", 0.0)),
+                raw_bpm=float(cached.get("raw_bpm", 0.0)),
+                bpm_delta=float(cached.get("bpm_delta", 0.0)),
+                bpm_guarded=bool(cached.get("bpm_guarded", False)),
+                bpm_guard_reason=str(cached.get("bpm_guard_reason", "")),
+                rmssd=float(cached.get("rmssd", 0.0)),
+                sdnn=float(cached.get("sdnn", 0.0)),
+                lf_hf=float(cached.get("lf_hf", 0.0)),
+                sqi=float(cached.get("sqi", 0.0)),
+                stress_prob=float(cached.get("stress_prob", 0.0)),
+                stress_status=str(cached.get("stress_status", "calibrating")),
+                hrv_confidence=str(cached.get("hrv_confidence", "LOW")),
+                ibi_artifact_ratio=float(cached.get("ibi_artifact_ratio", 0.0)),
+                peak_freq_hz=float(cached.get("peak_freq_hz", 0.0)),
+                frame_brightness=brightness,
+                warmup_progress=warm,
+                quality_score=float(quality_score),
+                pose_roll_deg=float(roll_deg),
+                pose_yaw_deg=float(yaw_deg),
+                pose_pitch_deg=float(pitch_deg),
+                roi_valid_count=int(roi_valid_count),
+                roi_weight_forehead=float(roi_weights.get("forehead", 0.0)),
+                roi_weight_l_cheek=float(roi_weights.get("L_cheek", 0.0)),
+                roi_weight_r_cheek=float(roi_weights.get("R_cheek", 0.0)),
+                roi_weight_glabella=float(roi_weights.get("glabella", 0.0)),
+                landmark_jitter_norm=float(landmark_jitter),
+                roi_area_stability=float(roi_area_stability),
+                roi_area_jitter_ratio=float(roi_tracker.roi_area_jitter_ratio if roi_tracker else 0.0),
+                roi_smoothing_applied=bool(roi_tracker.roi_smoothing_applied if roi_tracker else False),
+                canonical_roi_warp_used=bool(roi_tracker.canonical_roi_warp_used if roi_tracker else False),
+                face_detected=True,
+                waveform=list(cached.get("waveform", [])),
+                psd_freqs=list(cached.get("psd_freqs", [])),
+                psd_vals=list(cached.get("psd_vals", [])),
+            )
+
         r = np.array(self._r, dtype=np.float64)
         g = np.array(self._g, dtype=np.float64)
         b = np.array(self._b, dtype=np.float64)
@@ -999,7 +1071,6 @@ class RppgEngine:
         prob, st = stress_heuristic(lf_hf, rmssd)
         conf = hrv_confidence(ibis_clean.size, sqi, art)
         signal_quality = _clamp(0.60 * sqi + 0.40 * (1.0 - art))
-        roi_valid_count = len(ROI_SPECS) if roi_valid_count is None else int(max(0, roi_valid_count))
         quality_score = _face_quality_from_pose(
             roll_deg,
             yaw_deg,
@@ -1008,12 +1079,6 @@ class RppgEngine:
             self._face_motion_speed / max(face_h, 1e-6),
             roi_valid_count / max(len(ROI_SPECS), 1),
             tuning,
-        )
-        landmark_jitter = roi_tracker.landmark_jitter_norm if roi_tracker else 0.0
-        roi_area_stability = roi_tracker.roi_area_stability if roi_tracker else 1.0
-        stability_q = _clamp(
-            0.55 * (1.0 - landmark_jitter / max(tuning.rppg_roi.landmark_jitter_full_norm, 1e-6))
-            + 0.45 * roi_area_stability
         )
         quality_score = _clamp(0.42 * quality_score + 0.38 * signal_quality + 0.20 * stability_q)
         bpm = self._stabilize_bpm(t_now, raw_bpm)
@@ -1028,6 +1093,28 @@ class RppgEngine:
         if pf.size > 64:
             step = pf.size // 64
             pf, pv = pf[::step], pv[::step]
+
+        self._last_spectrum_compute_t = t_now
+        self._cached_spectrum = {
+            "bpm": float(bpm),
+            "raw_bpm": float(raw_bpm),
+            "bpm_delta": float(self._last_bpm_delta),
+            "bpm_guarded": bool(self._last_bpm_guarded),
+            "bpm_guard_reason": str(self._last_bpm_guard_reason),
+            "rmssd": float(rmssd),
+            "sdnn": float(sdnn),
+            "lf_hf": float(lf_hf),
+            "sqi": float(sqi),
+            "stress_prob": float(prob),
+            "stress_status": st,
+            "hrv_confidence": conf,
+            "ibi_artifact_ratio": float(art),
+            "peak_freq_hz": float(peak_f),
+            "signal_quality": float(signal_quality),
+            "waveform": [float(x) for x in wave],
+            "psd_freqs": [float(x) for x in pf],
+            "psd_vals": [float(x) for x in pv],
+        }
 
         return RppgMetrics(
             bpm=float(bpm),

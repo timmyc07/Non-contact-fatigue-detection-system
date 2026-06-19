@@ -111,6 +111,9 @@ class MetricsRecorder:
         "fused_beh_gaze_score",
         "fused_beh_frown_score",
         "fused_beh_yawn_score",
+        "bpm_calibrated",
+        "calibration_version_id",
+        "peak_freq_hz_calibrated",
     ]
 
     CREATE_TABLE_SQL = """
@@ -215,7 +218,10 @@ class MetricsRecorder:
         fused_beh_microsleep_score REAL,
         fused_beh_gaze_score REAL,
         fused_beh_frown_score REAL,
-        fused_beh_yawn_score REAL
+        fused_beh_yawn_score REAL,
+        bpm_calibrated REAL,
+        calibration_version_id TEXT,
+        peak_freq_hz_calibrated REAL
     )
     """
 
@@ -295,6 +301,12 @@ class MetricsRecorder:
             "blink_temporal_score": "REAL",
             "fused_beh_blink_temporal_score": "REAL",
         }
+        extra_migrations = {
+            "bpm_calibrated": "REAL",
+            "calibration_version_id": "TEXT",
+            "peak_freq_hz_calibrated": "REAL",
+        }
+        migrations.update(extra_migrations)
         for name, col_type in migrations.items():
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE metrics ADD COLUMN {name} {col_type}")

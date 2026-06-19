@@ -44,8 +44,15 @@ from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserPro
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
 from gui.preview_overlay_window import PreviewOverlayWindow
+from gui.rppg_calibration_dialog import RppgCalibrationDialog
 from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
 from rppg.rppg_worker import RppgWorker
+from rppg.calibration import (
+    CalibrationVersionStore,
+    apply_calibration_to_metrics,
+    effective_bpm,
+    write_live_feed,
+)
 from gui.video_recorder import VideoRecorderWorker
 from gui.web_server import (
     MetricsBuffer,
@@ -278,6 +285,8 @@ class MainWindow(QMainWindow):
         self._utarldd_active_videos: dict[str, UtaRlddVideoSummary] = {}
         self._utarldd_recent_done: list[str] = []
         self._alarm_config = AlarmConfig.defaults()
+        self._rppg_calibration_store = CalibrationVersionStore()
+        self._calibration_dialog: RppgCalibrationDialog | None = None
 
         self._build_menu()
         self._build_central()
@@ -332,6 +341,11 @@ class MainWindow(QMainWindow):
         m_settings.addSeparator()
         m_settings.addAction(self._act_web_allow_lan)
         m_settings.addAction(act_web)
+
+        act_calib_open = QAction("開啟 rPPG 心率校準器…", self)
+        act_calib_open.triggered.connect(self._on_open_rppg_calibration_dialog)
+        m_calib = self.menuBar().addMenu("校準")
+        m_calib.addAction(act_calib_open)
 
         act_start = QAction("開始／停止", self)
         act_start.setShortcut(QKeySequence(self._hotkeys.start_stop))
@@ -1134,7 +1148,10 @@ class MainWindow(QMainWindow):
             "perclos": perclos_pct,
             "blink_count": int(getattr(f, "blink_count", 0) or 0),
             "status": str(getattr(f, "status", "NO_FACE") or "NO_FACE"),
-            "stress_bpm": float(getattr(r, "bpm", 0.0) or 0.0),
+            "stress_bpm": effective_bpm(r) if r else 0.0,
+            "stress_bpm_raw": float(getattr(r, "bpm", 0.0) or 0.0) if r else 0.0,
+            "stress_bpm_calibrated": float(getattr(r, "bpm_calibrated", 0.0) or 0.0) if r else 0.0,
+            "calibration_version_id": str(getattr(r, "calibration_version_id", "") or "") if r else "",
             "stress_raw_bpm": float(getattr(r, "raw_bpm", 0.0) or 0.0),
             "stress_bpm_delta": float(getattr(r, "bpm_delta", 0.0) or 0.0),
             "stress_bpm_guarded": bool(getattr(r, "bpm_guarded", False)) if r else False,
@@ -1321,6 +1338,9 @@ class MainWindow(QMainWindow):
             "camera_label": str(self._cmb_camera.currentText() or ""),
             "rppg_face_detected": 1 if getattr(r, "face_detected", False) else 0,
             "bpm": float(getattr(r, "bpm", 0.0) or 0.0),
+            "bpm_calibrated": float(getattr(r, "bpm_calibrated", 0.0) or 0.0),
+            "calibration_version_id": str(getattr(r, "calibration_version_id", "") or ""),
+            "peak_freq_hz_calibrated": float(getattr(r, "peak_freq_hz_calibrated", 0.0) or 0.0),
             "raw_bpm": float(getattr(r, "raw_bpm", 0.0) or 0.0),
             "bpm_delta": float(getattr(r, "bpm_delta", 0.0) or 0.0),
             "bpm_guarded": 1 if getattr(r, "bpm_guarded", False) else 0,
@@ -1971,6 +1991,8 @@ class MainWindow(QMainWindow):
             self._combined_queue,
             enable_rppg=True, enable_fatigue=True,
             target_fps=30.0, buffer_sec=12.0,
+            calibration_loader=self._load_rppg_calibration_version,
+            live_feed_writer=write_live_feed,
         )
         worker.moveToThread(thread)
 
@@ -2079,7 +2101,51 @@ class MainWindow(QMainWindow):
         self._append_log(f"[UI] 壓力／HRV → {'開啟' if checked else '關閉'}")
         self._restart_analysis_workers()
 
+    def _load_rppg_calibration_version(self):
+        self._rppg_calibration_store.reload()
+        return self._rppg_calibration_store.get_active_version()
+
+    def _apply_rppg_calibration(self, metrics: object) -> object:
+        if metrics is None:
+            return metrics
+        version = self._load_rppg_calibration_version()
+        return apply_calibration_to_metrics(metrics, version)
+
+    def _on_open_rppg_calibration_dialog(self) -> None:
+        if self._calibration_dialog is None:
+            self._calibration_dialog = RppgCalibrationDialog(
+                self._rppg_calibration_store,
+                self,
+            )
+            self._calibration_dialog.version_changed.connect(
+                self._on_rppg_calibration_version_changed
+            )
+            self._calibration_dialog.destroyed.connect(self._on_calibration_dialog_destroyed)
+        self._calibration_dialog.show()
+        self._calibration_dialog.raise_()
+        self._calibration_dialog.activateWindow()
+
+    def _on_calibration_dialog_destroyed(self) -> None:
+        self._calibration_dialog = None
+
+    def _on_rppg_calibration_version_changed(self, version_id: str, version_name: str) -> None:
+        self._append_log(f"[校準] 已切換 rPPG 版本：{version_id} ({version_name})")
+        try:
+            version = self._rppg_calibration_store.get_version(version_id)
+        except Exception:
+            return
+        if version.is_identity:
+            self.statusBar().showMessage("rPPG 心率：使用未校準原始值", 5000)
+        else:
+            self.statusBar().showMessage(
+                f"rPPG 心率校準：{version_name}  offset {version.params.bpm_offset:+.1f} BPM",
+                5000,
+            )
+
     def _on_rppg_metrics(self, metrics: object) -> None:
+        if self._combined_worker is None:
+            write_live_feed(metrics)  # type: ignore[arg-type]
+            metrics = self._apply_rppg_calibration(metrics)
         self._preview_overlay.update_rppg_metrics(metrics)  # type: ignore[arg-type]
         self._latest_rppg_metrics = metrics
         self._record_metrics()

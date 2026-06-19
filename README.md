@@ -126,7 +126,17 @@ rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等
 
 個人化 baseline 會自動儲存在 `config/mediapipe_calibration.json`，此檔案包含使用者/環境校準結果，不納入版本控制。
 
-錄製後可用回放校準摘要工具檢查品質：
+## rPPG BPM 校準（手錶參考）
+
+手錶心率僅用於**校準 session**；日常疲勞監測不戴手錶，主程式會讀取 `config/rppg_calibration/manifest.json` 的 active 版本並套用 BPM 偏移。
+
+在 `main.py` 中開啟 **校準 → 開啟 rPPG 心率校準器…**，即可：
+
+- 接收手錶 `POST /hr` HTTP 資料
+- 即時比對手錶 BPM 與 rPPG BPM
+- 儲存校準版本、切換版本（含回到未校準的 `v000_origin`）
+
+校準資料儲存於 `config/rppg_calibration/`（不納入版本控制）。
 
 ```bash
 .venv/bin/python scripts/replay_calibration_summary.py recordings/metrics_YYYYMMDD_HHMMSS.db

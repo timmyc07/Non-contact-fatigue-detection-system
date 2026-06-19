@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import queue
 import time
-from typing import Optional
+from typing import Optional, Callable
 
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
@@ -47,6 +47,7 @@ from rppg.rppg_worker import (
     RoiGeometryTracker, collect_rppg_roi_sample,
     ensure_face_model, _MODELS_DIR,
 )
+from rppg.calibration import apply_calibration_to_metrics
 
 
 class CombinedWorker(QObject):
@@ -70,6 +71,10 @@ class CombinedWorker(QObject):
         rPPG temporal buffer length in seconds.
     fatigue_params : FatigueParams | None
         Custom fatigue parameters; defaults are used when None.
+    calibration_loader : callable | None
+        Returns active :class:`CalibrationVersion` for BPM correction.
+    live_feed_writer : callable | None
+        Called with raw (uncalibrated) :class:`RppgMetrics` for GUI calibration live feed.
     """
 
     rppg_metrics_ready:    Signal = Signal(object)   # RppgMetrics
@@ -89,6 +94,8 @@ class CombinedWorker(QObject):
         target_fps:  float = 30.0,
         buffer_sec:  float = 12.0,
         fatigue_params: Optional[FatigueParams] = None,
+        calibration_loader: Optional[Callable[[], object]] = None,
+        live_feed_writer: Optional[Callable[[RppgMetrics], None]] = None,
     ) -> None:
         super().__init__()
         self._queue          = frame_queue
@@ -98,6 +105,8 @@ class CombinedWorker(QObject):
         self._buffer_sec     = buffer_sec
         self._fatigue_params = fatigue_params or FatigueParams()
         self._fuser          = FatigueFuser()
+        self._calibration_loader = calibration_loader
+        self._live_feed_writer = live_feed_writer
         self._stop           = False
         self._tuning         = load_mediapipe_tuning()
 
@@ -233,6 +242,15 @@ class CombinedWorker(QObject):
                         )
                         r_metrics.roi_valid_count = roi_valid_count
                         r_metrics.face_detected = True
+                        if self._live_feed_writer is not None:
+                            self._live_feed_writer(r_metrics)
+                        if self._calibration_loader is not None:
+                            try:
+                                version = self._calibration_loader()
+                                if version is not None:
+                                    r_metrics = apply_calibration_to_metrics(r_metrics, version)
+                            except Exception:
+                                pass
                         self.rppg_metrics_ready.emit(r_metrics)
 
                     # ── Composite status line ─────────────────────────────────
@@ -247,6 +265,8 @@ class CombinedWorker(QObject):
                         if roi_tracker is not None:
                             roi_tracker.reset()
                         r_metrics = RppgMetrics(face_detected=False)
+                        if self._live_feed_writer is not None:
+                            self._live_feed_writer(r_metrics)
                         self.rppg_metrics_ready.emit(r_metrics)
                     self.status_changed.emit("未偵測到臉部…")
 
@@ -285,5 +305,6 @@ class CombinedWorker(QObject):
             if rm.warmup_progress < 1.0:
                 parts.append(f"rPPG暖機 {rm.warmup_progress*100:.0f}%")
             elif rm.bpm > 0:
-                parts.append(f"❤ {rm.bpm:.0f}bpm")
+                disp = rm.bpm_calibrated if rm.bpm_calibrated > 0 else rm.bpm
+                parts.append(f"❤ {disp:.0f}bpm")
         self.status_changed.emit("  │  ".join(parts) if parts else "偵測中…")

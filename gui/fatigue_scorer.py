@@ -191,14 +191,18 @@ class FatigueFuser:
         # BPM deviation
         if r.bpm <= 0:
             bpm_s = 0.0
-        elif r.bpm < cfg.bpm_normal_lo:
-            dev = cfg.bpm_normal_lo - r.bpm
-            bpm_s = _clamp(dev / cfg.bpm_max_dev)
-        elif r.bpm > cfg.bpm_normal_hi:
-            dev = r.bpm - cfg.bpm_normal_hi
-            bpm_s = _clamp(dev / cfg.bpm_max_dev)
         else:
-            bpm_s = 0.0
+            bpm_val = float(getattr(r, "bpm_calibrated", 0.0) or 0.0)
+            if bpm_val <= 0:
+                bpm_val = float(r.bpm)
+            if bpm_val < cfg.bpm_normal_lo:
+                dev = cfg.bpm_normal_lo - bpm_val
+                bpm_s = _clamp(dev / cfg.bpm_max_dev)
+            elif bpm_val > cfg.bpm_normal_hi:
+                dev = bpm_val - cfg.bpm_normal_hi
+                bpm_s = _clamp(dev / cfg.bpm_max_dev)
+            else:
+                bpm_s = 0.0
 
         # LF/HF
         if r.lf_hf > 0:

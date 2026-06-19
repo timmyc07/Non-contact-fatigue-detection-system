@@ -25,6 +25,9 @@ htmlcov/
 recordings/
 settings.json
 config/mediapipe_calibration.json
+config/rppg_calibration/
+config/rppg_live_feed.json
+config/rppg_calibration_feed.enabled
 docs/
 !docs/
 !docs/rppg_technical_report.md

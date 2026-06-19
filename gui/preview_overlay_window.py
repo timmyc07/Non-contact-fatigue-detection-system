@@ -592,9 +592,10 @@ class PreviewOverlayWindow(QWidget):
             self._lbl_face_status.setStyleSheet("color: #868e96; font-size: 11px;")
 
         # BPM
-        if metrics.bpm > 0:
-            bpm_color = "#ff6b6b" if metrics.bpm > 100 else "#40c057" if metrics.bpm > 50 else "#4dabf7"
-            self._lbl_bpm.setText(f"{metrics.bpm:.0f} BPM")
+        disp_bpm = metrics.bpm_calibrated if metrics.bpm_calibrated > 0 else metrics.bpm
+        if disp_bpm > 0:
+            bpm_color = "#ff6b6b" if disp_bpm > 100 else "#40c057" if disp_bpm > 50 else "#4dabf7"
+            self._lbl_bpm.setText(f"{disp_bpm:.0f} BPM")
             self._lbl_bpm.setStyleSheet(
                 f"color: {bpm_color}; font-size: 22px; font-weight: bold;"
             )
