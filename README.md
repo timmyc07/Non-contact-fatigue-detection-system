@@ -228,6 +228,10 @@ fuser /dev/video0
 .venv/bin/python scripts/build_technical_report_pdfs.py
 ```
 
+## Poster design artifacts
+- `docs/rppg_fatigue_monitoring_poster_design.md`: 依競賽海報範本撰寫的無人機操作員疲勞監測系統海報製作稿，包含標題、摘要、研究方法、成果、SDG 與製作步驟。
+- `output/pdf/rppg_fatigue_monitoring_poster_design.pdf`: 海報 PDF 預覽稿，可用於檢查版面配置、文字密度與後續替換 GUI/Web dashboard 截圖。
+
 ## Notes
 - Recordings are saved under the `recordings/` folder.
 - If playback video is needed in the web dashboard, make sure ffmpeg is available (imageio-ffmpeg is supported via requirements).
