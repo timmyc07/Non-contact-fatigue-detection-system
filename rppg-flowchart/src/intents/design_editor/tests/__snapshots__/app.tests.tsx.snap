@@ -1,0 +1,95 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`System flowchart Canva app should have a consistent snapshot 1`] = `
+<div>
+  <div
+    class="scrollContainer"
+  >
+    <div
+      class="jv_R6g"
+      style="--NZu1Zw: 16px;"
+    >
+      <div
+        class="header"
+      >
+        <p
+          class="VgvqkQ aZskFA Yrg82w"
+        >
+          系統流程圖設計
+        </p>
+        <p
+          class="JYIidw aZskFA my05ww"
+        >
+          影像辨識、rPPG 生理訊號、品質評估與疲勞融合評分
+        </p>
+      </div>
+      <div
+        class="previewFrame"
+      >
+        <div
+          class=""
+        >
+          <div
+            class="AakfMw lveDKg tEle5Q xbDyRw DTa6aA"
+            role="group"
+          >
+            <div
+              class="XkVKzg dUWjTg sMv3zw"
+            >
+              <div
+                style="height: 180px; width: 289.2857142857143px; flex-shrink: 0;"
+              >
+                <div
+                  class="gVI_3Q sMv3zw"
+                >
+                  <div
+                    class="DUDBPQ qyOqcQ"
+                  >
+                    <div
+                      class="qyOqcQ"
+                    >
+                      <div
+                        class="IwXXkw _qImYg JbJFjg _CObZw"
+                      />
+                      <noscript />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div
+        class="A628dw"
+      >
+        <button
+          aria-describedby="_r_6_"
+          class="_5KtATA LQzFZw VgvqkQ _8ERLTg hw3gKA rV61VQ LQzFZw VgvqkQ _4_iekA _3oHQrw j34Zww aqbYPg _3FvZZg"
+          type="button"
+        >
+          <span
+            class="khPe7Q"
+          >
+            插入流程圖到 Canva
+          </span>
+        </button>
+      </div>
+      <div
+        class="summaryCard"
+      >
+        <p
+          class="_2a6tNg aZskFA Yrg82w"
+        >
+          流程圖區塊
+        </p>
+        <p
+          class="JYIidw aZskFA my05ww"
+        >
+          一般攝影機輸入、共用臉部推論、行為疲勞分析、rPPG 生理訊號估測、品質守門、融合評分、即時告警、記錄、Web 與回放。
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+`;

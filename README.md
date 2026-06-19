@@ -80,6 +80,29 @@ Optional demo:
 python -m rppg.demo_rppg_live
 ```
 
+## Canva 系統流程圖 App
+
+`rppg-flowchart/` 是以 Canva CLI 建立的流程圖插入 App，用於把本專案的系統流程圖放入 Canva 設計頁面。流程圖節點以用途描述呈現，例如影像輸入、臉部推論、行為疲勞分析、rPPG 生理訊號估測、品質守門、融合評分、即時告警、記錄、Web 與回放，不以實際程式檔名作為區塊名稱。
+
+```powershell
+cd rppg-flowchart
+npm install
+npm start
+```
+
+Canva App ID 為 `AAHAACArWJM`，可在 Developer Portal 檢查設定：https://www.canva.com/developers/app/AAHAACArWJM
+
+常用檢查：
+
+```powershell
+npm run lint
+npm run lint:types
+npm test -- --runInBand
+npm run build
+canva apps config status --lite
+canva apps doctor --ci
+```
+
 ## UTA-RLDD replay
 
 本專案可把 UTA-RLDD 影片當作可重現的「離線鏡頭」來批次測試，不會改動即時攝影機 worker。UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：https://sites.google.com/view/utarldd/home。回放模式會使用影片 FPS 產生 deterministic timestamp，疲勞校準起點會對齊第一個有效人臉 frame 的時間，因此前約 5 秒為 `CALIBRATING`，後續才進入 `OK / LOW_VIGILANCE / DROWSY / CRITICAL` 等狀態統計。
