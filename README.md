@@ -229,6 +229,8 @@ fuser /dev/video0
 - `scripts/utarldd_csv_report.py`: 將 UTA-RLDD summary CSV 轉成單檔 HTML 可視化報表，整理趨勢圖、判斷依據與優化建議。
 
 ## Technical reports
+- `docs/無人機駕駛員疲勞狀態監測系統_實務專題報告.pdf`: 依電子工程系實務專題報告格式產生的完整 PDF 書面報告，包含首頁、中文摘要、英文摘要、目錄、圖目錄、緒言、簡介、理論、軟硬體分析、測試結果、結論、建議、附錄與參考資料。
+- `scripts/build_practical_project_report_pdf.py`: 從 repo 既有技術文件與 UTA-RLDD 回測 CSV 重新產生正式 PDF 報告。
 - `docs/system_overview_technical_report.md`: 系統總報告書，整合 rPPG、MediaPipe 疲勞偵測、融合分數、架構、驗證與限制。
 - `docs/rppg_technical_report_v2.md`: rPPG 子系統報告書，整理模型、演算法、input/output、架構與可信度驗證方式。
 - `docs/rppg_heart_rate_calibrator_technical_analysis.md`: rPPG 心跳校準器技術分析報告，整理手錶參考校準、offset 演算法、品質 gate、文獻支持與限制。
@@ -249,6 +251,12 @@ fuser /dev/video0
 
 ```bash
 .venv/bin/python scripts/build_technical_report_pdfs.py
+```
+
+正式實務專題 PDF 報告可使用下列指令重新產生：
+
+```bash
+.venv/bin/python scripts/build_practical_project_report_pdf.py
 ```
 
 ## Poster design artifacts
