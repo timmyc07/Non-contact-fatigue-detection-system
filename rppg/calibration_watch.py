@@ -10,13 +10,67 @@ from typing import Any
 
 
 class WatchSample:
-    __slots__ = ("received_at", "bpm", "ts_ms", "interval_ms")
+    __slots__ = (
+        "received_at",
+        "bpm",
+        "ts_ms",
+        "interval_ms",
+        "ax",
+        "ay",
+        "az",
+        "motion_level",
+    )
 
-    def __init__(self, received_at: float, bpm: int, ts_ms: int, interval_ms: int) -> None:
+    def __init__(
+        self,
+        received_at: float,
+        bpm: int,
+        ts_ms: int,
+        interval_ms: int,
+        ax: float | None = None,
+        ay: float | None = None,
+        az: float | None = None,
+        motion_level: float | None = None,
+    ) -> None:
         self.received_at = received_at
         self.bpm = int(bpm)
         self.ts_ms = int(ts_ms)
         self.interval_ms = int(interval_ms)
+        self.ax = float(ax) if ax is not None else None
+        self.ay = float(ay) if ay is not None else None
+        self.az = float(az) if az is not None else None
+        self.motion_level = float(motion_level) if motion_level is not None else None
+
+    @property
+    def has_imu(self) -> bool:
+        return self.motion_level is not None
+
+
+def parse_watch_hr_payload(data: dict[str, Any]) -> WatchSample:
+    """Parse ``POST /hr`` JSON body into a :class:`WatchSample`."""
+    bpm = int(data["bpm"])
+    ts_ms = int(data.get("ts", 0) or 0)
+    interval_ms = int(data.get("interval_ms", 1000) or 1000)
+    imu = data.get("imu") or {}
+    ax = ay = az = motion_level = None
+    if isinstance(imu, dict) and imu:
+        try:
+            ax = float(imu["ax"])
+            ay = float(imu["ay"])
+            az = float(imu["az"])
+            motion_level = float(imu.get("motion_level", 0.0) or 0.0)
+        except (KeyError, TypeError, ValueError):
+            ax = ay = az = motion_level = None
+    return WatchSample(
+        time.time(),
+        bpm,
+        ts_ms,
+        interval_ms,
+        ax=ax,
+        ay=ay,
+        az=az,
+        motion_level=motion_level,
+    )
 
 
 class WatchHrHub:
@@ -48,7 +102,7 @@ class WatchHrHub:
             self._last = None
             self.total_received = 0
 
-    def is_connected(self, stale_multiplier: float = 3.0) -> bool:
+    def is_connected(self, stale_multiplier: float = 6.0) -> bool:
         last = self.latest()
         if last is None:
             return False
@@ -93,17 +147,15 @@ def _make_handler(hub: WatchHrHub, on_received: Any | None = None, on_request: A
             body = self.rfile.read(length)
             try:
                 data = json.loads(body.decode("utf-8"))
-                bpm = int(data["bpm"])
-                ts_ms = int(data.get("ts", 0) or 0)
-                interval_ms = int(data.get("interval_ms", 1000) or 1000)
+                sample = parse_watch_hr_payload(data)
             except Exception:
                 self.send_error(400)
                 self._emit_request(400)
                 return
-            hub.add(WatchSample(time.time(), bpm, ts_ms, interval_ms))
+            hub.add(sample)
             if on_received is not None:
                 try:
-                    on_received(bpm)
+                    on_received(sample.bpm)
                 except Exception:
                     pass
             self.send_response(200)

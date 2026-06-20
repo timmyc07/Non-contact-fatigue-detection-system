@@ -129,6 +129,7 @@ class RppgMetrics:
     waveform:  list[float] = field(default_factory=list)
     psd_freqs: list[float] = field(default_factory=list)
     psd_vals:  list[float] = field(default_factory=list)
+    physio_source: str = "rppg"   # "rppg" | "watch"
 
 
 # ── Signal processing helpers ────────────────────────────────────────────────

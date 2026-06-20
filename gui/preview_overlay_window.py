@@ -493,6 +493,7 @@ class PreviewOverlayWindow(QWidget):
         lbl_rppg_bar.setStyleSheet(
             "color: #ff6b6b; font-size: 10px; min-width: 100px; border: none;"
         )
+        self._lbl_rppg_bar = lbl_rppg_bar
         self._bar_rppg_sub = _ScoreBar()
         rppg_bar_row.addWidget(lbl_rppg_bar)
         rppg_bar_row.addWidget(self._bar_rppg_sub, 1)
@@ -583,12 +584,17 @@ class PreviewOverlayWindow(QWidget):
 
     def update_rppg_metrics(self, metrics: "RppgMetrics") -> None:
         """Update all rPPG metric labels from a RppgMetrics instance."""
-        # Face status
+        from_watch = getattr(metrics, "physio_source", "rppg") == "watch"
+
+        # Face / watch link status
         if metrics.face_detected:
-            self._lbl_face_status.setText("臉部偵測中 ✓")
+            if from_watch:
+                self._lbl_face_status.setText("手錶連線中 ✓")
+            else:
+                self._lbl_face_status.setText("臉部偵測中 ✓")
             self._lbl_face_status.setStyleSheet("color: #40c057; font-size: 11px;")
         else:
-            self._lbl_face_status.setText("未偵測到臉部")
+            self._lbl_face_status.setText("手錶未連線" if from_watch else "未偵測到臉部")
             self._lbl_face_status.setStyleSheet("color: #868e96; font-size: 11px;")
 
         # BPM
@@ -621,14 +627,21 @@ class PreviewOverlayWindow(QWidget):
         q_str = f"{metrics.quality_score:.2f}" if metrics.quality_score > 0 else "—"
         self._set_metric(self._lbl_rppg_q, "品質", q_str)
         self._lbl_rppg_diag.setText(
-            "Pose R/Y/P: "
-            f"{metrics.pose_roll_deg:+.0f}/{metrics.pose_yaw_deg:+.0f}/{metrics.pose_pitch_deg:+.0f}  "
-            f"ROI: {metrics.roi_valid_count}  "
-            "W "
-            f"F:{metrics.roi_weight_forehead:.2f} "
-            f"L:{metrics.roi_weight_l_cheek:.2f} "
-            f"R:{metrics.roi_weight_r_cheek:.2f} "
-            f"G:{metrics.roi_weight_glabella:.2f}"
+            (
+                f"IMU motion {metrics.landmark_jitter_norm:.2f}  gate {1.0 - min(1.0, metrics.landmark_jitter_norm / 1.5):.2f}  "
+                f"Pose R/Y/P: {metrics.pose_roll_deg:+.0f}/{metrics.pose_yaw_deg:+.0f}/{metrics.pose_pitch_deg:+.0f}"
+            )
+            if from_watch
+            else (
+                "Pose R/Y/P: "
+                f"{metrics.pose_roll_deg:+.0f}/{metrics.pose_yaw_deg:+.0f}/{metrics.pose_pitch_deg:+.0f}  "
+                f"ROI: {metrics.roi_valid_count}  "
+                "W "
+                f"F:{metrics.roi_weight_forehead:.2f} "
+                f"L:{metrics.roi_weight_l_cheek:.2f} "
+                f"R:{metrics.roi_weight_r_cheek:.2f} "
+                f"G:{metrics.roi_weight_glabella:.2f}"
+            )
         )
 
         # HRV confidence
@@ -658,16 +671,31 @@ class PreviewOverlayWindow(QWidget):
 
         self._gauge.set_value(score.score, gauge_col, score.level)
 
-        # rPPG sub-bar colour
-        rppg_col = QColor(
-            int(255 * score.rppg_sub),
-            int(255 * (1.0 - score.rppg_sub)),
-            80,
-        )
-        self._bar_rppg_sub.set_value(
-            score.rppg_sub,
-            rppg_col if score.rppg_available else QColor("#495057"),
-        )
+        watch_mode = getattr(score, "fatigue_mode", "rppg") == "watch"
+        if watch_mode:
+            self._lbl_rppg_bar.setText(
+                f"⌚  手錶 × {int(score.watch_weight_eff * 100)}%"
+            )
+            watch_col = QColor(
+                int(255 * score.watch_sub),
+                int(255 * (1.0 - score.watch_sub)),
+                160,
+            )
+            self._bar_rppg_sub.set_value(
+                score.watch_sub,
+                watch_col if score.watch_available else QColor("#495057"),
+            )
+        else:
+            self._lbl_rppg_bar.setText("❤  rPPG × 40%")
+            rppg_col = QColor(
+                int(255 * score.rppg_sub),
+                int(255 * (1.0 - score.rppg_sub)),
+                80,
+            )
+            self._bar_rppg_sub.set_value(
+                score.rppg_sub,
+                rppg_col if score.rppg_available else QColor("#495057"),
+            )
 
         # Behaviour sub-bar colour
         beh_col = QColor(
@@ -704,11 +732,23 @@ class PreviewOverlayWindow(QWidget):
         ]
         factors.sort(reverse=True)
         top_two = [t for _, t in factors[:2] if _ > 0.05]
-        rppg_txt = (
-            f"壓力 {score.rppg_stress_score*100:.0f}%  "
-            f"心率偏差 {score.rppg_bpm_score*100:.0f}%"
-        ) if score.rppg_available else "rPPG 暖機中"
-        detail = ("  |  ".join(top_two) if top_two else "行為指標正常") + f"\n{rppg_txt}"
+        if watch_mode:
+            if score.watch_hrv_ready or score.rppg_available:
+                watch_txt = (
+                    f"壓力 {score.watch_hrv_score*100:.0f}%  "
+                    f"心率偏差 {score.watch_bpm_score*100:.0f}%  "
+                    f"RMSSD {score.watch_rmssd:.0f}  LF/HF {score.watch_lf_hf:.2f}"
+                )
+            else:
+                watch_txt = "手錶生理暖機中（HR／HRV）"
+        elif score.rppg_available:
+            watch_txt = (
+                f"壓力 {score.rppg_stress_score*100:.0f}%  "
+                f"心率偏差 {score.rppg_bpm_score*100:.0f}%"
+            )
+        else:
+            watch_txt = "rPPG 暖機中"
+        detail = ("  |  ".join(top_two) if top_two else "行為指標正常") + f"\n{watch_txt}"
         self._lbl_fused_detail.setText(detail)
 
     def show_fatigue_panel(self, visible: bool) -> None:

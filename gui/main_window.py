@@ -41,8 +41,10 @@ from gui.alarm_player import FatigueAlarmController
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.combined_worker import CombinedWorker
 from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserProfileDialog
+from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
+from gui.watch_runtime import WatchRuntime
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.rppg_calibration_dialog import RppgCalibrationDialog
 from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
@@ -287,11 +289,13 @@ class MainWindow(QMainWindow):
         self._alarm_config = AlarmConfig.defaults()
         self._rppg_calibration_store = CalibrationVersionStore()
         self._calibration_dialog: RppgCalibrationDialog | None = None
+        self._watch_runtime = WatchRuntime(port=8080)
 
         self._build_menu()
         self._build_central()
 
         self._load_settings()
+        self._apply_fatigue_mode_ui()
         self._alarm_controller = FatigueAlarmController(self._alarm_config, self)
         self._apply_hotkey_shortcuts()
         self._apply_overlay_state()
@@ -503,6 +507,23 @@ class MainWindow(QMainWindow):
         row_b.addStretch(1)
         ctl.addLayout(row_b)
 
+        row_mode = QHBoxLayout()
+        row_mode.addWidget(QLabel("疲勞融合模式："))
+        self._cmb_fatigue_mode = QComboBox()
+        self._cmb_fatigue_mode.addItem("rPPG 模式（85% 行為 + 15% rPPG）", "rppg")
+        self._cmb_fatigue_mode.addItem("手錶模式（70% 行為 + 30% 穿戴）", "watch")
+        self._cmb_fatigue_mode.setToolTip(
+            "手錶模式會關閉 rPPG，改由手錶 HR／HRV／IMU 佔 30% 融合權重；"
+            "HRV 由 PC 依手錶 BPM 時間序列估算（約需 8 筆以上樣本）。"
+            "請確認手錶 App 已指向本機 IP 且埠 8080 未被佔用。"
+        )
+        self._lbl_watch_http = QLabel("手錶 HTTP：停止")
+        self._lbl_watch_http.setObjectName("hintLabel")
+        row_mode.addWidget(self._cmb_fatigue_mode)
+        row_mode.addWidget(self._lbl_watch_http)
+        row_mode.addStretch(1)
+        ctl.addLayout(row_mode)
+
         row_c = QHBoxLayout()
         self._btn_record = QPushButton("開始記錄")
         self._btn_record.clicked.connect(self._toggle_recording)
@@ -547,6 +568,7 @@ class MainWindow(QMainWindow):
         )
         # rPPG stress/HRV toggle — functional
         self._chk_stress.toggled.connect(self._on_stress_toggled)
+        self._cmb_fatigue_mode.currentIndexChanged.connect(self._on_fatigue_mode_changed)
 
         body_layout.addWidget(gb_ctl)
 
@@ -901,6 +923,11 @@ class MainWindow(QMainWindow):
                     chk.setChecked(val)
                     chk.blockSignals(False)
 
+            fatigue_mode = toggles.get("fatigue_mode")
+            if isinstance(fatigue_mode, str):
+                self._select_combo_by_data(self._cmb_fatigue_mode, fatigue_mode)
+            self._apply_fatigue_mode_ui()
+
         opacity = overlay.get("opacity")
         if isinstance(opacity, int):
             self._sld_opacity.setValue(opacity)
@@ -943,6 +970,7 @@ class MainWindow(QMainWindow):
                 "behavior": self._chk_behavior.isChecked(),
                 "stress": self._chk_stress.isChecked(),
                 "auto_record": self._chk_auto_record.isChecked(),
+                "fatigue_mode": self._fatigue_mode(),
             },
             "hotkeys": {
                 "toggle_metrics": self._hotkeys.toggle_metrics,
@@ -1112,11 +1140,13 @@ class MainWindow(QMainWindow):
 
     def _build_web_metrics(self) -> dict:
         pipeline_running = bool(self._pipeline_running)
-        stress_enabled = self._chk_stress.isChecked()
+        watch_mode = self._is_watch_mode()
+        stress_enabled = self._chk_stress.isChecked() or watch_mode
         behavior_enabled = self._chk_behavior.isChecked()
-        r = self._latest_rppg_metrics if pipeline_running and stress_enabled else None
+        r = self._latest_rppg_metrics if pipeline_running and (self._chk_stress.isChecked() or watch_mode) else None
         f = self._latest_fatigue_metrics if pipeline_running and behavior_enabled else None
-        z = self._latest_fused_score if pipeline_running and stress_enabled and behavior_enabled else None
+        fusion_on = behavior_enabled and (self._chk_stress.isChecked() or watch_mode)
+        z = self._latest_fused_score if pipeline_running and fusion_on else None
         info = self._last_camera_info
 
         face_r = bool(getattr(r, "face_detected", False)) if r else False
@@ -1126,6 +1156,7 @@ class MainWindow(QMainWindow):
         calib_samples = int(round(calib_progress * calib_target)) if f else 0
         warmup_progress = float(getattr(r, "warmup_progress", 0.0) or 0.0) if r else 0.0
         perclos_pct = float(getattr(f, "perclos", 0.0) or 0.0) * 100.0 if f else 0.0
+        from_watch = bool(getattr(r, "physio_source", "rppg") == "watch") if r else False
 
         return {
             "timestamp": time.time(),
@@ -1152,15 +1183,15 @@ class MainWindow(QMainWindow):
             "stress_bpm_raw": float(getattr(r, "bpm", 0.0) or 0.0) if r else 0.0,
             "stress_bpm_calibrated": float(getattr(r, "bpm_calibrated", 0.0) or 0.0) if r else 0.0,
             "calibration_version_id": str(getattr(r, "calibration_version_id", "") or "") if r else "",
-            "stress_raw_bpm": float(getattr(r, "raw_bpm", 0.0) or 0.0),
-            "stress_bpm_delta": float(getattr(r, "bpm_delta", 0.0) or 0.0),
+            "stress_raw_bpm": float(getattr(r, "raw_bpm", 0.0) or 0.0) if r else 0.0,
+            "stress_bpm_delta": float(getattr(r, "bpm_delta", 0.0) or 0.0) if r else 0.0,
             "stress_bpm_guarded": bool(getattr(r, "bpm_guarded", False)) if r else False,
-            "stress_bpm_guard_reason": str(getattr(r, "bpm_guard_reason", "") or ""),
-            "stress_rmssd": float(getattr(r, "rmssd", 0.0) or 0.0),
-            "stress_sdnn": float(getattr(r, "sdnn", 0.0) or 0.0),
-            "stress_lf_hf": float(getattr(r, "lf_hf", 0.0) or 0.0),
-            "stress_sqi": float(getattr(r, "sqi", 0.0) or 0.0),
-            "stress_quality_score": float(getattr(r, "quality_score", 0.0) or 0.0),
+            "stress_bpm_guard_reason": str(getattr(r, "bpm_guard_reason", "") or "") if r else "",
+            "stress_rmssd": float(getattr(r, "rmssd", 0.0) or 0.0) if r else 0.0,
+            "stress_sdnn": float(getattr(r, "sdnn", 0.0) or 0.0) if r else 0.0,
+            "stress_lf_hf": float(getattr(r, "lf_hf", 0.0) or 0.0) if r else 0.0,
+            "stress_sqi": float(getattr(r, "sqi", 0.0) or 0.0) if r else 0.0,
+            "stress_quality_score": float(getattr(r, "quality_score", 0.0) or 0.0) if r else 0.0,
             "stress_pose_roll_deg": float(getattr(r, "pose_roll_deg", 0.0) or 0.0),
             "stress_pose_yaw_deg": float(getattr(r, "pose_yaw_deg", 0.0) or 0.0),
             "stress_pose_pitch_deg": float(getattr(r, "pose_pitch_deg", 0.0) or 0.0),
@@ -1175,16 +1206,22 @@ class MainWindow(QMainWindow):
             "stress_roi_smoothing_applied": bool(getattr(r, "roi_smoothing_applied", False)) if r else False,
             "stress_canonical_roi_warp_used": bool(getattr(r, "canonical_roi_warp_used", False)) if r else False,
             "stress_peak_freq": float(getattr(r, "peak_freq_hz", 0.0) or 0.0),
-            "stress_hrv_confidence": str(getattr(r, "hrv_confidence", "") or ""),
-            "stress_ibi_artifact_ratio": float(getattr(r, "ibi_artifact_ratio", 0.0) or 0.0),
-            "stress_prob": float(getattr(r, "stress_prob", 0.0) or 0.0),
-            "stress_waveform": list(getattr(r, "waveform", []) or []),
-            "stress_psd_freqs": list(getattr(r, "psd_freqs", []) or []),
-            "stress_psd_values": list(getattr(r, "psd_vals", []) or []),
+            "stress_hrv_confidence": str(getattr(r, "hrv_confidence", "") or "") if r else "",
+            "stress_ibi_artifact_ratio": float(getattr(r, "ibi_artifact_ratio", 0.0) or 0.0) if r else 0.0,
+            "stress_prob": float(getattr(r, "stress_prob", 0.0) or 0.0) if r else 0.0,
+            "stress_waveform": list(getattr(r, "waveform", []) or []) if r else [],
+            "stress_psd_freqs": list(getattr(r, "psd_freqs", []) or []) if r else [],
+            "stress_psd_values": list(getattr(r, "psd_vals", []) or []) if r else [],
+            "stress_lf_hf_window_ok": bool(
+                getattr(r, "lf_hf", 0.0) and getattr(r, "warmup_progress", 0.0) >= 0.99
+            ) if r else False,
             "stress_enabled": stress_enabled,
-            "stress_has_face": face_r,
+            "stress_has_face": face_r if not from_watch else bool(face_r or (r and r.bpm > 0)),
             "stress_warmup_progress": warmup_progress,
             "stress_warmup_done": warmup_progress >= 0.99,
+            "fatigue_mode": self._fatigue_mode(),
+            "physio_source": str(getattr(r, "physio_source", "rppg") or "rppg") if r else "rppg",
+            "watch_connected": from_watch and bool(face_r),
             "fusion_state_zh": str(getattr(z, "level", "") or ""),
             "fusion_confidence": float(getattr(z, "score", 0.0) or 0.0),
             "head_pitch": float(getattr(f, "head_pitch", 0.0) or 0.0),
@@ -1937,9 +1974,51 @@ class MainWindow(QMainWindow):
 
     # ── Analysis workers (rPPG / fatigue / combined) ──────────────────────────
 
+    def _fatigue_mode(self) -> str:
+        data = self._cmb_fatigue_mode.currentData()
+        return str(data) if data else "rppg"
+
+    def _is_watch_mode(self) -> bool:
+        return self._fatigue_mode() == "watch"
+
+    def _apply_fatigue_mode_ui(self) -> None:
+        watch = self._is_watch_mode()
+        self._chk_stress.setEnabled(not watch)
+        if watch and self._chk_stress.isChecked():
+            self._chk_stress.blockSignals(True)
+            self._chk_stress.setChecked(False)
+            self._chk_stress.blockSignals(False)
+
+    def _on_fatigue_mode_changed(self, _index: int = 0) -> None:
+        watch = self._is_watch_mode()
+        self._apply_fatigue_mode_ui()
+        label = "手錶模式" if watch else "rPPG 模式"
+        self._append_log(f"[UI] 疲勞融合 → {label}")
+        if self._pipeline_running:
+            self._ensure_watch_http(watch)
+            self._restart_analysis_workers()
+
+    def _ensure_watch_http(self, enabled: bool) -> None:
+        if enabled:
+            if not self._watch_runtime.running:
+                err = self._watch_runtime.start()
+                if err:
+                    self._append_log(f"⚠ 手錶 HTTP 啟動失敗：{err}")
+                    self._lbl_watch_http.setText("手錶 HTTP：啟動失敗")
+                    return
+                self._append_log(f"▶ 手錶 HTTP 監聽 :{self._watch_runtime.port}")
+            self._lbl_watch_http.setText(f"手錶 HTTP：:{self._watch_runtime.port} 運行中")
+            return
+        if self._watch_runtime.running:
+            self._watch_runtime.stop()
+        self._lbl_watch_http.setText("手錶 HTTP：停止")
+
     def _analysis_needed(self) -> tuple[bool, bool]:
         """Return (want_rppg, want_fatigue) from checkbox state."""
-        return self._chk_stress.isChecked(), self._chk_behavior.isChecked()
+        want_fatigue = self._chk_behavior.isChecked()
+        if self._is_watch_mode():
+            return False, want_fatigue
+        return self._chk_stress.isChecked(), want_fatigue
 
     def _stop_analysis_workers(self) -> None:
         """Stop ALL analysis workers in the correct order."""
@@ -1964,11 +2043,17 @@ class MainWindow(QMainWindow):
         self._latest_fatigue_metrics = None
         self._latest_fused_score = None
         want_rppg, want_fatigue = self._analysis_needed()
-        if want_rppg and want_fatigue:
-            self._start_combined_worker()
+        if self._is_watch_mode() and want_fatigue:
+            self._ensure_watch_http(True)
+            self._start_combined_worker(enable_rppg=False)
+        elif want_rppg and want_fatigue:
+            self._ensure_watch_http(False)
+            self._start_combined_worker(enable_rppg=True)
         elif want_rppg:
+            self._ensure_watch_http(False)
             self._start_rppg_worker()
         elif want_fatigue:
+            self._ensure_watch_http(False)
             self._start_fatigue_worker()
         else:
             self._update_frame_routing()   # restore raw camera feed
@@ -1976,7 +2061,7 @@ class MainWindow(QMainWindow):
 
     # ── Combined worker ───────────────────────────────────────────────────────
 
-    def _start_combined_worker(self) -> None:
+    def _start_combined_worker(self, enable_rppg: bool = True) -> None:
         if self._combined_worker is not None:
             return
         if self._cam_worker is None:
@@ -1986,13 +2071,22 @@ class MainWindow(QMainWindow):
         self._combined_queue = queue.Queue(maxsize=2)
         self._cam_worker.attach_bgr_queue(self._combined_queue)
 
+        watch_mode = self._is_watch_mode()
+        fuser_cfg = FuserConfig.for_watch() if watch_mode else FuserConfig.for_rppg()
+        watch_loader = (
+            lambda: self._watch_runtime.latest_rppg_metrics(self._load_rppg_calibration_version)
+            if watch_mode else None
+        )
+
         thread = QThread(self)
         worker = CombinedWorker(
             self._combined_queue,
-            enable_rppg=True, enable_fatigue=True,
+            enable_rppg=enable_rppg, enable_fatigue=True,
             target_fps=30.0, buffer_sec=12.0,
             calibration_loader=self._load_rppg_calibration_version,
             live_feed_writer=write_live_feed,
+            fuser_config=fuser_cfg,
+            watch_rppg_loader=watch_loader,
         )
         worker.moveToThread(thread)
 
@@ -2012,10 +2106,13 @@ class MainWindow(QMainWindow):
         thread.start()
 
         self._update_frame_routing()
-        self._preview_overlay.show_rppg_panel(True)
+        self._preview_overlay.show_rppg_panel(enable_rppg or watch_mode)
         self._preview_overlay.show_fatigue_panel(True)
         self._preview_overlay.show_fused_panel(True)
-        self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
+        if watch_mode:
+            self._append_log("▶ 合併引擎啟動（行為警覺 + 手錶穿戴柱，單 MediaPipe 實例）")
+        else:
+            self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
     def _stop_combined_worker(self) -> None:
         if self._combined_worker is not None:
@@ -2315,11 +2412,17 @@ class MainWindow(QMainWindow):
                 return
             # Start the appropriate analysis worker(s) based on checkbox state
             want_rppg, want_fatigue = self._analysis_needed()
-            if want_rppg and want_fatigue:
-                self._start_combined_worker()
+            if self._is_watch_mode() and want_fatigue:
+                self._ensure_watch_http(True)
+                self._start_combined_worker(enable_rppg=False)
+            elif want_rppg and want_fatigue:
+                self._ensure_watch_http(False)
+                self._start_combined_worker(enable_rppg=True)
             elif want_rppg:
+                self._ensure_watch_http(False)
                 self._start_rppg_worker()
             elif want_fatigue:
+                self._ensure_watch_http(False)
                 self._start_fatigue_worker()
             self._sync_overlay_visibility()
             if self._chk_auto_record.isChecked() and not self._recording:
@@ -2336,6 +2439,7 @@ class MainWindow(QMainWindow):
             self._lbl_fps.setText("FPS：—")
             self._lbl_codec.setText("編碼：—")
             self._stop_camera_worker()
+            self._ensure_watch_http(False)
             self._sync_overlay_visibility()
             self._append_log("■ 管線停止。")
             if self._recording:

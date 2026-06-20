@@ -75,6 +75,12 @@ class CombinedWorker(QObject):
         Returns active :class:`CalibrationVersion` for BPM correction.
     live_feed_writer : callable | None
         Called with raw (uncalibrated) :class:`RppgMetrics` for GUI calibration live feed.
+    fuser_config : FuserConfig | None
+        Fatigue fusion weights / mode (rPPG vs watch).
+    watch_metrics_loader : callable | None
+        Deprecated; use ``watch_rppg_loader`` returning :class:`RppgMetrics`.
+    watch_rppg_loader : callable | None
+        Returns watch-derived :class:`RppgMetrics` when running in watch mode.
     """
 
     rppg_metrics_ready:    Signal = Signal(object)   # RppgMetrics
@@ -96,6 +102,9 @@ class CombinedWorker(QObject):
         fatigue_params: Optional[FatigueParams] = None,
         calibration_loader: Optional[Callable[[], object]] = None,
         live_feed_writer: Optional[Callable[[RppgMetrics], None]] = None,
+        fuser_config: Optional[FuserConfig] = None,
+        watch_metrics_loader: Optional[Callable[[], object]] = None,
+        watch_rppg_loader: Optional[Callable[[], RppgMetrics]] = None,
     ) -> None:
         super().__init__()
         self._queue          = frame_queue
@@ -104,9 +113,11 @@ class CombinedWorker(QObject):
         self._target_fps     = target_fps
         self._buffer_sec     = buffer_sec
         self._fatigue_params = fatigue_params or FatigueParams()
-        self._fuser          = FatigueFuser()
+        self._fuser          = FatigueFuser(fuser_config or FuserConfig())
         self._calibration_loader = calibration_loader
         self._live_feed_writer = live_feed_writer
+        self._watch_metrics_loader = watch_metrics_loader
+        self._watch_rppg_loader = watch_rppg_loader
         self._stop           = False
         self._tuning         = load_mediapipe_tuning()
 
@@ -165,9 +176,14 @@ class CombinedWorker(QObject):
         last_preview_emit = 0.0
         preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
 
+        watch_mode = self._fuser.cfg.fatigue_mode == "watch"
         parts = []
-        if self._enable_rppg:    parts.append("rPPG")
-        if self._enable_fatigue: parts.append("行為警覺")
+        if self._enable_rppg:
+            parts.append("rPPG")
+        elif watch_mode:
+            parts.append("手錶生理")
+        if self._enable_fatigue:
+            parts.append("行為警覺")
         self.status_changed.emit(f"合併引擎就緒（{' + '.join(parts)}），等待幀資料…")
 
         with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
@@ -205,6 +221,13 @@ class CombinedWorker(QObject):
 
                 r_metrics: Optional[RppgMetrics]    = None
                 f_metrics: Optional[FatigueMetrics] = None
+
+                if watch_mode and self._watch_rppg_loader is not None:
+                    try:
+                        r_metrics = self._watch_rppg_loader()
+                    except Exception:
+                        r_metrics = RppgMetrics(face_detected=False, physio_source="watch")
+                    self.rppg_metrics_ready.emit(r_metrics)
 
                 if has_face:
                     lm       = result.face_landmarks[0]
