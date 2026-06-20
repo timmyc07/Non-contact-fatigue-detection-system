@@ -652,6 +652,8 @@ class PreviewOverlayWindow(QWidget):
             f"<span style='color:#868e96;font-size:10px;'>HRV 信心</span><br>"
             f"<span style='color:{conf_color};font-size:12px;font-weight:600;'>"
             f"{metrics.hrv_confidence}</span>"
+            f"<span style='color:#868e96;font-size:9px;'>"
+            f"  art {metrics.ibi_artifact_ratio:.0%}</span>"
         )
 
         # Waveform

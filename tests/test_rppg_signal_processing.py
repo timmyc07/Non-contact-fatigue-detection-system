@@ -14,10 +14,13 @@ from rppg.rppg_worker import (  # noqa: E402
     butter_bandpass,
     compute_sqi,
     ibi_artifact_ratio,
+    ibi_from_peaks,
     lf_hf_from_tachogram,
+    resolve_rppg_hrv_metrics,
     validate_ibi_intervals,
     welch_peak_hz,
 )
+from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rppg  # noqa: E402
 from rppg.demo_rppg_live import RppgDemo  # noqa: E402
 
 
@@ -76,7 +79,7 @@ def test_ibi_artifact_ratio_uses_cleaned_count() -> None:
 
 
 def test_demo_trim_buffer_keeps_channels_aligned() -> None:
-    demo = RppgDemo(buffer_sec=1.0, target_fps=30.0)
+    demo = RppgDemo(buffer_sec=1.0, target_fps=30.0, hrv_window_sec=1.0)
     demo.push(0.0, 1.0, 2.0, 3.0)
     demo.push(0.5, 4.0, 5.0, 6.0)
     demo.push(1.5, 7.0, 8.0, 9.0)
@@ -138,3 +141,109 @@ def test_bpm_stabilizer_accepts_high_but_plausible_bpm() -> None:
     bpm = engine._stabilize_bpm(1.0, 188.0)
 
     assert bpm == 188.0
+
+
+def _synthetic_variable_hr_pulse(fs: float = 30.0, duration_sec: float = 35.0) -> np.ndarray:
+    rng = np.random.default_rng(7)
+    t = np.arange(0.0, duration_sec, 1.0 / fs)
+    hr_hz = 1.2 + 0.05 * np.sin(2.0 * np.pi * 0.05 * t)
+    phase = np.cumsum(hr_hz / fs) * 2.0 * np.pi
+    return np.sin(phase) + 0.05 * rng.standard_normal(t.size)
+
+
+def test_adaptive_hrv_engine_returns_metrics_after_window() -> None:
+    fs = 30.0
+    pulse = _synthetic_variable_hr_pulse(fs=fs, duration_sec=35.0)
+    filt = butter_bandpass(pulse, fs, 0.65, 3.7)
+
+    result = compute_rppg_hrv_from_pulse(filt, fs, min_window_sec=30.0, bpm_hint=72.0)
+
+    assert result.status == "SUCCESS"
+    assert result.rmssd > 0.0
+    assert result.sdnn > 0.0
+    assert result.n_ibis >= 5
+    assert result.artifact_ratio < 0.35
+
+
+def test_adaptive_hrv_engine_buffers_short_signal() -> None:
+    fs = 30.0
+    pulse = _synthetic_variable_hr_pulse(fs=fs, duration_sec=10.0)
+    filt = butter_bandpass(pulse, fs, 0.65, 3.7)
+
+    result = compute_rppg_hrv_from_pulse(filt, fs, min_window_sec=30.0)
+
+    assert result.status == "BUFFERING"
+    assert result.progress < 1.0
+
+
+def test_resolve_rppg_hrv_metrics_uses_adaptive_engine() -> None:
+    fs = 30.0
+    pulse = _synthetic_variable_hr_pulse(fs=fs, duration_sec=35.0)
+    filt = butter_bandpass(pulse, fs, 0.65, 3.7)
+    sqi = compute_sqi(filt, fs)
+
+    rmssd, sdnn, lf_hf, art, conf = resolve_rppg_hrv_metrics(
+        pulse,
+        filt,
+        fs,
+        sqi,
+        hrv_window_sec=30.0,
+        bpm_hint=72.0,
+    )
+
+    assert rmssd > 0.0
+    assert sdnn > 0.0
+    assert 0.0 <= art < 0.35
+    assert conf in {"MEDIUM", "HIGH"}
+
+
+def test_hrv_confidence_rppg_medium_with_spectral_override() -> None:
+    conf = hrv_confidence_rppg(
+        n_ibis=40,
+        spectral_sqi=0.98,
+        art_ratio=0.30,
+        rmssd=40.3,
+        sdnn=113.8,
+        ibi_sqi=0.70,
+    )
+
+    assert conf == "MEDIUM"
+
+
+def test_hrv_confidence_rppg_low_when_artifact_high() -> None:
+    conf = hrv_confidence_rppg(
+        n_ibis=40,
+        spectral_sqi=0.99,
+        art_ratio=0.50,
+        rmssd=99.8,
+        sdnn=183.5,
+        ibi_sqi=0.50,
+    )
+
+    assert conf == "LOW"
+
+
+def test_hrv_confidence_rppg_high_when_artifacts_low() -> None:
+    conf = hrv_confidence_rppg(
+        n_ibis=40,
+        spectral_sqi=0.98,
+        art_ratio=0.08,
+        rmssd=40.3,
+        sdnn=113.8,
+        ibi_sqi=0.92,
+    )
+
+    assert conf == "HIGH"
+
+
+def test_ibi_from_peaks_uses_bpm_hint_for_spacing() -> None:
+    fs = 30.0
+    t = np.arange(0.0, 20.0, 1.0 / fs)
+    sig = np.sin(2.0 * np.pi * (72.0 / 60.0) * t)
+
+    ibis_hint = ibi_from_peaks(sig, fs, bpm_hint=72.0)
+    ibis_plain = ibi_from_peaks(sig, fs)
+
+    assert ibis_hint.size >= 2
+    assert ibis_plain.size >= 2
+    assert float(np.median(ibis_hint)) > 700.0

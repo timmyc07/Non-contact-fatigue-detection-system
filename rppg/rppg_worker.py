@@ -37,6 +37,7 @@ from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 
 from gui.frame_queue import get_latest
 from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
+from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rppg
 
 _HAS_MP = True
 _HAS_SCIPY = True
@@ -657,10 +658,18 @@ def compute_sqi(sig: np.ndarray, fs: float) -> float:
     return float(np.clip(inband / total, 0.0, 1.0))
 
 
-def ibi_from_peaks(sig: np.ndarray, fs: float) -> np.ndarray:
+def ibi_from_peaks(
+    sig: np.ndarray,
+    fs: float,
+    bpm_hint: float = 0.0,
+) -> np.ndarray:
     if not _HAS_SCIPY:
         return np.array([], dtype=np.float64)
-    dist = int(max(3, fs * 0.35))
+    if bpm_hint > 0.0:
+        beat_sec = 60.0 / float(np.clip(bpm_hint, 42.0, 190.0))
+        dist = int(max(3, fs * beat_sec * 0.55))
+    else:
+        dist = int(max(3, fs * 0.35))
     prom = float(np.std(sig) * 0.35 + 1e-6)
     peaks, _ = find_peaks(sig, distance=dist, prominence=prom)
     if len(peaks) < 2:
@@ -769,6 +778,49 @@ def hrv_confidence(n_ibis: int, sqi: float, art_ratio: float) -> str:
     return "HIGH"
 
 
+def resolve_rppg_hrv_metrics(
+    pulse_raw: np.ndarray,
+    filt: np.ndarray,
+    fs: float,
+    sqi: float,
+    *,
+    hrv_window_sec: float = 30.0,
+    bpm_hint: float = 0.0,
+) -> tuple[float, float, float, float, str]:
+    """Adaptive MAD HRV on bandpassed POS pulse (Gemini-aligned engine)."""
+    window_samples = int(max(8, fs * hrv_window_sec))
+    sig = np.asarray(filt, dtype=np.float64)
+    sig = sig[np.isfinite(sig)]
+    if sig.size < window_samples:
+        return 0.0, 0.0, 0.0, 1.0, "LOW"
+    if sig.size > window_samples:
+        sig = sig[-window_samples:]
+
+    hrv = compute_rppg_hrv_from_pulse(
+        sig,
+        fs,
+        min_window_sec=hrv_window_sec,
+        bpm_hint=bpm_hint,
+    )
+
+    if hrv.status == "SUCCESS":
+        conf = hrv_confidence_rppg(
+            hrv.n_ibis,
+            sqi,
+            hrv.artifact_ratio,
+            rmssd=hrv.rmssd,
+            sdnn=hrv.sdnn,
+            ibi_sqi=hrv.ibi_sqi,
+        )
+        return hrv.rmssd, hrv.sdnn, hrv.lf_hf, hrv.artifact_ratio, conf
+
+    if hrv.status == "BUFFERING":
+        return 0.0, 0.0, 0.0, 1.0, "LOW"
+
+    # 高 artifact 時仍回傳 BPM 相關診斷，但 HRV 指標歸零
+    return 0.0, 0.0, 0.0, float(hrv.artifact_ratio), "LOW"
+
+
 # ── Model download ───────────────────────────────────────────────────────────
 
 def ensure_face_model(
@@ -802,9 +854,15 @@ class RppgEngine:
     _BPM_JUMP_CLUSTER_DELTA = 8.0
     _BPM_COMPUTE_INTERVAL_SEC = 5.0
 
-    def __init__(self, buffer_sec: float = 12.0, target_fps: float = 30.0) -> None:
+    def __init__(
+        self,
+        buffer_sec: float = 12.0,
+        target_fps: float = 30.0,
+        hrv_window_sec: float = 30.0,
+    ) -> None:
         self.buffer_sec = buffer_sec
         self.target_fps = target_fps
+        self.hrv_window_sec = hrv_window_sec
         self._r: deque[float] = deque(maxlen=100_000)
         self._g: deque[float] = deque(maxlen=100_000)
         self._b: deque[float] = deque(maxlen=100_000)
@@ -844,7 +902,8 @@ class RppgEngine:
         self._b.append(b); self._t.append(t)
 
     def _trim(self, t_now: float) -> None:
-        cutoff = t_now - self.buffer_sec
+        keep_sec = max(self.buffer_sec, self.hrv_window_sec)
+        cutoff = t_now - keep_sec
         while self._t and self._t[0] < cutoff:
             self._t.popleft(); self._r.popleft()
             self._g.popleft(); self._b.popleft()
@@ -1064,13 +1123,15 @@ class RppgEngine:
         raw_bpm = peak_f * 60.0 if peak_f > 0 else 0.0
         sqi = compute_sqi(filt, fs)
 
-        ibis = ibi_from_peaks(filt, fs)
-        ibis_clean = validate_ibi_intervals(ibis)
-        art = ibi_artifact_ratio(ibis, ibis_clean)
-        rmssd, sdnn = hrv_time_domain(ibis_clean)
-        lf_hf = lf_hf_from_tachogram(ibis_clean)
+        rmssd, sdnn, lf_hf, art, conf = resolve_rppg_hrv_metrics(
+            raw,
+            filt,
+            fs,
+            sqi,
+            hrv_window_sec=self.hrv_window_sec,
+            bpm_hint=raw_bpm,
+        )
         prob, st = stress_heuristic(lf_hf, rmssd)
-        conf = hrv_confidence(ibis_clean.size, sqi, art)
         signal_quality = _clamp(0.60 * sqi + 0.40 * (1.0 - art))
         quality_score = _face_quality_from_pose(
             roll_deg,

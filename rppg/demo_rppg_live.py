@@ -42,6 +42,7 @@ from rppg.rppg_worker import (
     _pose_from_matrix,
     _roi_weights_from_pose,
     _rotate_points,
+    resolve_rppg_hrv_metrics,
 )
 from gui.mediapipe_tuning import load_mediapipe_tuning
 
@@ -428,9 +429,15 @@ class Metrics:
 
 
 class RppgDemo:
-    def __init__(self, buffer_sec: float = 12.0, target_fps: float = 30.0):
+    def __init__(
+        self,
+        buffer_sec: float = 12.0,
+        target_fps: float = 30.0,
+        hrv_window_sec: float = 30.0,
+    ):
         self.buffer_sec = buffer_sec
         self.target_fps = target_fps
+        self.hrv_window_sec = hrv_window_sec
         self._r: deque[float] = deque(maxlen=100000)
         self._g: deque[float] = deque(maxlen=100000)
         self._b: deque[float] = deque(maxlen=100000)
@@ -456,7 +463,8 @@ class RppgDemo:
         self._t.append(t)
 
     def _trim_buffer(self, t_now: float) -> None:
-        cutoff = t_now - self.buffer_sec
+        keep_sec = max(self.buffer_sec, self.hrv_window_sec)
+        cutoff = t_now - keep_sec
         while self._t and self._t[0] < cutoff:
             self._t.popleft()
             self._r.popleft()
@@ -539,13 +547,15 @@ class RppgDemo:
         bpm = peak_f * 60.0 if peak_f > 0 else 0.0
         sqi = compute_sqi(filt, fs)
 
-        ibis = ibi_from_peaks(filt, fs)
-        art = ibi_artifact_ratio(ibis)
-        ibis_clean = ibis[(ibis >= 300.0) & (ibis <= 2000.0)]
-        rmssd, sdnn = hrv_time_domain(ibis_clean)
-        lf_hf = lf_hf_from_tachogram(ibis_clean)
+        rmssd, sdnn, lf_hf, art, conf = resolve_rppg_hrv_metrics(
+            raw,
+            filt,
+            fs,
+            sqi,
+            hrv_window_sec=self.hrv_window_sec,
+            bpm_hint=bpm,
+        )
         prob, st_label = stress_heuristic(lf_hf, rmssd)
-        conf = hrv_confidence(ibis_clean.size, sqi, art)
         signal_q = float(np.clip(0.60 * sqi + 0.40 * (1.0 - art), 0.0, 1.0))
         pose_q = float(np.clip(
             0.40 * (1.0 - abs(roll_deg) / 48.0)
