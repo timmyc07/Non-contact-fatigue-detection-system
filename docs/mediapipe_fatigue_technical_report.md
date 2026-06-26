@@ -607,6 +607,8 @@ GUI replay 會同步顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，目
 
 但融合分數沒有跟著資料集標籤穩定上升：平均融合分數在 Alert、Low Vigilant、Drowsy 分別約為 0.060、0.048、0.054；95 分位融合分數約為 0.156、0.144、0.134。這與 `0 -> 5 -> 10` 的理論警覺度下降方向不一致，validation report 因此判定「目前不支持分類有效」。
 
+若依展示需求把 UTA-RLDD 影片級標籤二元化成「未疲勞 / 低警覺或嗜睡」，並把本系統 `快速判讀` 二元化成「未見明顯疲勞 / 可能低警覺或高疲勞跡象」，本批 36 支影片的粗略對照為：Alert 相符 2/12、Alert 不相符 10/12、Low Vigilant + Drowsy 相符 21/24、Low Vigilant + Drowsy 不相符 3/24，合計相符 23/36（63.89%）。此數字只代表影片級二元粗略對齊，不是逐幀 accuracy、precision、recall 或三分類準確率；完整表格與分母定義見 `docs/2026-06-07-utarldd-analysis.md` 的「UTA-RLDD 影片級二元對照表」。
+
 這份結果暴露三個需要在畢專報告誠實揭露的限制：
 
 1. `LOW_VIGILANCE` 對 Alert 影片偏敏感，容易造成早期警示誤報。
