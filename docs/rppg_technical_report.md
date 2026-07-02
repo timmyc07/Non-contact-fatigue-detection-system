@@ -3,7 +3,7 @@
 產生日期：2026-05-21
 更新日期：2026-06-16
 
-本文件整理目前 `mediapipe_rppg_system_v2` 專案中 rPPG 模組實際使用到的技術、演算法、模型、資料流、計算方式與系統運作邏輯。內容以現有程式碼為準，主要來源為 `rppg/rppg_worker.py`、`rppg/demo_rppg_live.py`、`gui/camera_stream_worker.py`、`gui/combined_worker.py`、`gui/main_window.py`、`gui/fatigue_scorer.py` 與 `gui/metrics_recorder.py`。
+本文件整理目前 `non_contact_fatigue_detection_system` 專案中 rPPG 模組實際使用到的技術、演算法、模型、資料流、計算方式與系統運作邏輯。內容以現有程式碼為準，主要來源為 `rppg/rppg_worker.py`、`rppg/demo_rppg_live.py`、`gui/camera_stream_worker.py`、`gui/combined_worker.py`、`gui/main_window.py`、`gui/fatigue_scorer.py` 與 `gui/metrics_recorder.py`。
 
 ## 1. 系統定位
 

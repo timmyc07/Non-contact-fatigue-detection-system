@@ -1,7 +1,7 @@
 """
 Live rPPG demo: MediaPipe Face Landmarker ROIs + POS pulse + HRV-style metrics.
 
-Metrics (aligned with mediapipe_rppg_system stress_* fields, minus enable flags):
+Metrics (aligned with non_contact_fatigue_detection_system stress_* fields, minus enable flags):
   BPM, RMSSD, SDNN, LF/HF, SQI, stress_prob, stress_status_text,
   HRV confidence, IBI artifact ratio, peak frequency,
   optional waveform + PSD preview, frame brightness.
@@ -56,7 +56,7 @@ except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# Landmark ROI indices (same as mediapipe_rppg_system fatigue_engine.py)
+# Landmark ROI indices (same as non_contact_fatigue_detection_system fatigue_engine.py)
 # -----------------------------------------------------------------------------
 FOREHEAD_ROI_IDX = [107, 66, 69, 109, 10, 338, 299, 296, 336, 9]
 LEFT_CHEEK_ROI_IDX = [118, 119, 100, 126, 209, 49, 129, 203, 205, 50]

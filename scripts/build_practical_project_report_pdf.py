@@ -246,7 +246,7 @@ class ProjectDocTemplate(BaseDocTemplate):
             topMargin=2.54 * cm,
             bottomMargin=2.91 * cm,
             title="無人機駕駛員疲勞狀態監測系統_實務專題報告",
-            author="mediapipe_rppg_system_v2",
+            author="non_contact_fatigue_detection_system",
         )
         frame = Frame(self.leftMargin, self.bottomMargin, self.width, self.height, id="normal")
         self.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=self.draw_footer)])
