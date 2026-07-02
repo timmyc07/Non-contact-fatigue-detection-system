@@ -181,7 +181,7 @@ rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等
 
 - 協定：Heart Rate Service `0x180D`，訂閱 Heart Rate Measurement `0x2A37` notification 解析 BPM 與 RR-Interval（1/1024 秒解析度），並 best-effort 讀取電量 `0x2A19` 與配戴位置 `0x2A38`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`（RHYTHM+2.0 / R+2.0 2248）。
 - 裝置挑選：優先連線名稱以 `R+` 開頭的裝置，否則挑選廣播 Heart Rate Service 且訊號最強者；斷線會自動重新掃描連線。
-- HRV：心跳帶回報實測 RR-Interval 時直接以 RR 計算 HRV（精度優於手錶模式以 BPM 反推）；無 RR 時退回 BPM 反推，行為與手錶模式一致。
+- HRV：心跳帶回報實測 RR-Interval 時直接以 RR 計算 HRV（精度優於手錶模式以 BPM 反推）；無 RR 時退回 BPM 反推，行為與手錶模式一致。實測 RHYTHM+2.0（R+2.0 2248）notification 僅帶 BPM 不含 RR-Interval（`flags=0x06`，約 2 Hz），因此該裝置的 HRV 走 BPM 反推路徑。
 - 可視化：GUI 狀態列顯示連線狀態／BPM／RR 數／電量／接觸狀態；Web dashboard「生理壓力指標」卡片顯示生理來源與心跳帶狀態、電量。連線中若超過 5 秒沒有有效心率，GUI 與 dashboard 會顯示「無心率資料」警告（裝置可能未正確配戴）。
 - 使用流程：開啟心跳帶並穿戴 → 模式選「心跳帶模式」→ 按「開始」。狀態列顯示「掃描中… → 已連線」後即開始融合。
 

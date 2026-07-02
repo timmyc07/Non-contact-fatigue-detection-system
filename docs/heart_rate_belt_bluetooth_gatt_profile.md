@@ -87,6 +87,14 @@ PDF 末頁顯示：
 | Flags bit 3 | Energy Expended 欄位是否存在；若存在，為 little-endian `uint16`。 |
 | Flags bit 4 | RR-Interval 欄位是否存在；若存在，後續可有多組 little-endian `uint16`，單位為 `1/1024` 秒。 |
 
+實機 notification 實測（2026-07-03，R+2.0 2248，Windows 11 + bleak/WinRT，抓取原始 payload 40 筆）：
+
+- payload 固定 2 bytes：`flags=0x06`（bit1+bit2：支援且偵測到皮膚接觸）+ `uint8` BPM，例如 `06 4E` = 78 BPM。
+- **未帶 RR-Interval**（bit 4 恆為 0）、無 Energy Expended；HRV 因此走 60000/BPM 反推路徑（`rppg/watch_physio.py`），與手錶模式一致。
+- notification 頻率約 2 Hz（同一 BPM 值連續重複約 2 筆）。
+- Body Sensor Location `2A38` 實測回報 `Wrist`（韌體標示與實際胸帶配戴不符，僅供顯示參考）。
+- Battery Level `2A19` 可正常讀取（實測 91%）。
+
 整合此心跳帶時，最小可用流程是：
 
 1. 掃描或連線到裝置。
@@ -175,7 +183,7 @@ PDF 中所有 Notify 或 Indicate characteristic 都有 Client Characteristic Co
 
 - [x] 讀取 `2A38` Body Sensor Location — 已由 `HrBeltBleClient._prime_connection` 於連線時 best-effort 讀取並顯示。
 - [x] 讀取 `2A19` Battery Level — 已於連線時讀取並訂閱 notification，GUI 與 dashboard 顯示電量。
-- [x] 訂閱 `2A37` 並解析 flags / BPM 格式 / RR-Interval — 解析器 `parse_heart_rate_measurement` 依 HRS 1.0 實作，單元測試覆蓋各 flags 組合；實機 notification 內容待配戴實測記錄。
+- [x] 訂閱 `2A37` 並解析 flags / BPM 格式 / RR-Interval — 解析器 `parse_heart_rate_measurement` 依 HRS 1.0 實作，單元測試覆蓋各 flags 組合；2026-07-03 已配戴實測：`flags=0x06` + `uint8` BPM、約 2 Hz、無 RR-Interval（詳見上方「實機 notification 實測」）。
 - [ ] 若要使用自訂 service，需先收集 `fce61002/fce61003` 與 `fce640xx` notification 原始 bytes，建立協議文件（目前整合不使用）。
 - [ ] 用程式重新掃描一次 GATT profile，確認 PDF 影像判讀的 `fce640xx` 清單是否與實機完全一致（不影響標準 HRS 整合）。
 
