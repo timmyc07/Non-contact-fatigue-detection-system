@@ -1,9 +1,19 @@
 # R+2.0 2248 心跳帶 BLE GATT 資訊整理
 
 整理日期：2026-07-02
-資料來源：`C:\Users\USER\Desktop\專題書面\r20_bt.pdf`。
+資料來源：`C:\Users\USER\Desktop\專題書面\r20_bt.pdf`（僅為內部資料來源標記，非程式引用路徑）。
 PDF 型態：影像型 PDF，共 8 頁，無可抽取文字；本文件依 8 倍渲染後的頁面圖逐段讀取整理。
-用途：作為後續將心跳帶接入本專案 watch/HR 參考來源時的 GATT 對照文件。
+用途：作為心跳帶接入本專案 watch/HR 參考來源的 GATT 對照文件。
+
+## 實作狀態（2026-07-02）
+
+本文件描述的整合已實作於：
+
+- `rppg/hr_belt_ble.py` — `2A37` payload 解析（flags / uint8 / uint16 / Energy Expended / RR-Interval）、`2A19` 電量、`2A38` 配戴位置解析，與 `HrBeltBleClient`（bleak 掃描 → 連線 → 訂閱 → 自動重連）。
+- `gui/watch_runtime.py` + `gui/main_window.py` — GUI「心跳帶模式」，樣本推入 `WatchHrHub` 沿用 watch pillar 融合與 Web dashboard 可視化。
+- `tests/test_hr_belt_ble.py` — 協定邊界案例、裝置挑選、hub 整合與 client 生命週期單元測試。
+
+整合僅使用標準 Heart Rate Service 路徑；`FE59` 與 `fce6xxxx` vendor-specific service 依本文件建議**不讀不寫**。
 
 ## 裝置概況
 
@@ -163,11 +173,11 @@ PDF 中所有 Notify 或 Indicate characteristic 都有 Client Characteristic Co
 
 ## 待補驗證清單
 
-- 實際讀取 `2A38` Body Sensor Location 的 value。
-- 實際讀取 `2A19` Battery Level 的 value。
-- 實際訂閱 `2A37` 並保存數筆 notification 原始 bytes，確認 flags、BPM 格式與是否含 RR-Interval。
-- 若要使用自訂 service，需先收集 `fce61002/fce61003` 與 `fce640xx` notification 原始 bytes，建立協議文件。
-- 用程式重新掃描一次 GATT profile，確認 PDF 影像判讀的 `fce640xx` 清單是否與實機完全一致。
+- [x] 讀取 `2A38` Body Sensor Location — 已由 `HrBeltBleClient._prime_connection` 於連線時 best-effort 讀取並顯示。
+- [x] 讀取 `2A19` Battery Level — 已於連線時讀取並訂閱 notification，GUI 與 dashboard 顯示電量。
+- [x] 訂閱 `2A37` 並解析 flags / BPM 格式 / RR-Interval — 解析器 `parse_heart_rate_measurement` 依 HRS 1.0 實作，單元測試覆蓋各 flags 組合；實機 notification 內容待配戴實測記錄。
+- [ ] 若要使用自訂 service，需先收集 `fce61002/fce61003` 與 `fce640xx` notification 原始 bytes，建立協議文件（目前整合不使用）。
+- [ ] 用程式重新掃描一次 GATT profile，確認 PDF 影像判讀的 `fce640xx` 清單是否與實機完全一致（不影響標準 HRS 整合）。
 
 ## 參考資料
 

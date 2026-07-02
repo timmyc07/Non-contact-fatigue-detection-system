@@ -24,6 +24,7 @@ class WatchSample:
         "ay",
         "az",
         "motion_level",
+        "rr_intervals_ms",
     )
 
     def __init__(
@@ -36,6 +37,7 @@ class WatchSample:
         ay: float | None = None,
         az: float | None = None,
         motion_level: float | None = None,
+        rr_intervals_ms: "tuple[float, ...] | list[float] | None" = None,
     ) -> None:
         self.received_at = received_at
         self.bpm = int(bpm)
@@ -45,10 +47,16 @@ class WatchSample:
         self.ay = float(ay) if ay is not None else None
         self.az = float(az) if az is not None else None
         self.motion_level = float(motion_level) if motion_level is not None else None
+        # BLE 心跳帶（2A37）可回報實測 RR-Interval（ms）；HTTP 手錶來源為 None。
+        self.rr_intervals_ms = tuple(float(rr) for rr in rr_intervals_ms) if rr_intervals_ms else None
 
     @property
     def has_imu(self) -> bool:
         return self.motion_level is not None
+
+    @property
+    def has_rr(self) -> bool:
+        return bool(self.rr_intervals_ms)
 
 
 def parse_watch_hr_payload(data: dict[str, Any]) -> WatchSample:

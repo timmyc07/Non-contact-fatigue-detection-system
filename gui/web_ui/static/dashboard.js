@@ -222,6 +222,39 @@ function updateMetricsDisplay(m) {
         if (m.stress_enabled) { ss.textContent = m.stress_has_face ? '運行中' : '等待臉部'; ss.style.color = m.stress_has_face ? '#22c55e' : '#f59e0b'; }
         else { ss.textContent = '未啟用'; ss.style.color = '#94a3b8'; }
     }
+    // 生理來源（rPPG / 手錶 / 心跳帶）與心跳帶狀態可視化
+    const physioSourceLabel = m.fatigue_mode === 'belt' ? '心跳帶 BLE'
+        : (m.fatigue_mode === 'watch' ? '手錶' : 'rPPG');
+    const srcColor = m.fatigue_mode === 'belt' ? '#ef4444' : (m.fatigue_mode === 'watch' ? '#3b82f6' : '#22c55e');
+    ['physio-source-compact', 'physio-source-value'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.textContent = physioSourceLabel; el.style.color = srcColor; }
+    });
+    const cardSrc = document.getElementById('physio-card-source');
+    if (cardSrc) cardSrc.textContent = physioSourceLabel;
+    const beltStateMap = {
+        connected: '已連線', scanning: '掃描中', connecting: '連線中',
+        reconnecting: '重連中', error: '錯誤', idle: '待命', stopped: '停止',
+    };
+    const beltEl = document.getElementById('belt-status-value');
+    if (beltEl) {
+        if (m.belt_enabled) {
+            let text = beltStateMap[m.belt_state] || m.belt_state || '--';
+            if (m.belt_state === 'connected' && m.belt_device_name) text = m.belt_device_name;
+            if (m.belt_state === 'connected' && !m.belt_contact_ok) text += '（接觸不良）';
+            beltEl.textContent = text;
+            beltEl.style.color = m.belt_state === 'connected' ? (m.belt_contact_ok ? '#22c55e' : '#f59e0b')
+                : (m.belt_state === 'error' ? '#ef4444' : '#f59e0b');
+        } else { beltEl.textContent = '--'; beltEl.style.color = '#94a3b8'; }
+    }
+    ['belt-battery-compact', 'belt-battery-value'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (m.belt_enabled && m.belt_battery >= 0) {
+            el.textContent = m.belt_battery + '%';
+            el.style.color = m.belt_battery <= 15 ? '#ef4444' : m.belt_battery <= 30 ? '#f59e0b' : '#22c55e';
+        } else { el.textContent = '--'; el.style.color = '#94a3b8'; }
+    });
     const fs = document.getElementById('fusion-state');
     if (fs && m.fusion_state_zh) { fs.textContent = m.fusion_state_zh; fs.style.color = statusColor(m.fusion_state_zh); }
     setVal('fusion-confidence', m.fusion_confidence, v => (v*100).toFixed(0)+'%');

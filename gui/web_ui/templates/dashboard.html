@@ -793,6 +793,8 @@
                         <div class="metric-grid">
                             <div class="metric-item"><div class="metric-label">SQI 品質</div><div class="metric-value" id="sqi-compact">--</div></div>
                             <div class="metric-item"><div class="metric-label">rPPG 模組</div><div class="metric-value" id="stress-enabled-compact" style="font-size: 1.1rem;">--</div></div>
+                            <div class="metric-item"><div class="metric-label">生理來源</div><div class="metric-value" id="physio-source-compact" style="font-size: 1.1rem;">--</div></div>
+                            <div class="metric-item"><div class="metric-label">心跳帶電量</div><div class="metric-value" id="belt-battery-compact">--</div></div>
                         </div>
                     </section>
                 </div>
@@ -891,10 +893,13 @@
                 <section class="card">
                     <div class="card-title">
                         <div class="icon-circle heart"><i class="fas fa-heartbeat"></i></div>
-                        生理壓力指標 (rPPG)
+                        生理壓力指標 (<span id="physio-card-source">rPPG</span>)
                     </div>
                     <div class="metric-grid">
                         <div class="metric-item"><div class="metric-label">心率 BPM</div><div class="metric-value" id="bpm-value" style="color: var(--color-heart);">--</div></div>
+                        <div class="metric-item"><div class="metric-label">生理來源</div><div class="metric-value" id="physio-source-value" style="font-size: 1.1rem;">--</div></div>
+                        <div class="metric-item"><div class="metric-label">心跳帶狀態</div><div class="metric-value" id="belt-status-value" style="font-size: 1.1rem;">--</div></div>
+                        <div class="metric-item"><div class="metric-label">心跳帶電量</div><div class="metric-value" id="belt-battery-value">--</div></div>
                         <div class="metric-item"><div class="metric-label">HRV 信心</div><div class="metric-value" id="hrv-confidence-value" style="font-size: 1.1rem;">--</div></div>
                         <div class="metric-item"><div class="metric-label">RMSSD (ms)</div><div class="metric-value" id="rmssd-value">--</div></div>
                         <div class="metric-item"><div class="metric-label">SDNN (ms)</div><div class="metric-value" id="sdnn-value">--</div></div>

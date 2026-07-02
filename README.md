@@ -17,11 +17,13 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
 - MediaPipe 姿態補償、ROI 動態權重、遮擋降權與品質診斷
 - Blendshape 個人化 baseline 校準與跨 session 持久化
+- 心跳帶模式：BLE 直連標準 Heart Rate Service 心跳帶（如 RHYTHM+2.0），以實測 RR-Interval 計算 HRV，融合權重同手錶模式（70% 行為 + 30% 穿戴）
 
 ## Requirements
 - Python 3.10+ recommended
 - Windows and Ubuntu Linux supported
 - Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
+- 心跳帶模式需要主機具備 Bluetooth LE 介面（Windows 10 1903+ 使用 WinRT；Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
 
 ## Setup
 Windows:
@@ -172,6 +174,16 @@ rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等
 ```
 
 調整 tuning 會影響新錄製資料與舊錄製資料的可比性；需要比較精準度或穩定度時，請使用同一段錄影回放 sweep。
+
+## 心跳帶模式（BLE Heart Rate Belt）
+
+疲勞融合模式下拉選單提供「心跳帶模式（70% 行為 + 30% 心跳帶 BLE）」：關閉 rPPG，改由 BLE 心跳帶提供 HR/HRV 生理柱，行為疲勞仍由 MediaPipe 分析。與手錶模式差異在於資料來源：手錶走 `POST /hr` HTTP（:8080），心跳帶由本機直接以 BLE 訂閱標準 Heart Rate Service。
+
+- 協定：Heart Rate Service `0x180D`，訂閱 Heart Rate Measurement `0x2A37` notification 解析 BPM 與 RR-Interval（1/1024 秒解析度），並 best-effort 讀取電量 `0x2A19` 與配戴位置 `0x2A38`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`（RHYTHM+2.0 / R+2.0 2248）。
+- 裝置挑選：優先連線名稱以 `R+` 開頭的裝置，否則挑選廣播 Heart Rate Service 且訊號最強者；斷線會自動重新掃描連線。
+- HRV：心跳帶回報實測 RR-Interval 時直接以 RR 計算 HRV（精度優於手錶模式以 BPM 反推）；無 RR 時退回 BPM 反推，行為與手錶模式一致。
+- 可視化：GUI 狀態列顯示連線狀態／BPM／RR 數／電量／接觸狀態；Web dashboard「生理壓力指標」卡片顯示生理來源與心跳帶狀態、電量。
+- 使用流程：開啟心跳帶並穿戴 → 模式選「心跳帶模式」→ 按「開始」。狀態列顯示「掃描中… → 已連線」後即開始融合。
 
 On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
 ```bash

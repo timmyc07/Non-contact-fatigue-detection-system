@@ -86,6 +86,8 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 
 手錶（watch）路徑為選配的 HR 參考來源：`rppg/watch_*.py` + `gui/watch_runtime.py`，僅在 watch 模式或 rPPG 校準時使用。
 
+心跳帶（belt）為 watch pillar 的第二種資料來源：`rppg/hr_belt_ble.py`（BLE Heart Rate Service `0x180D` / `0x2A37` 協定解析 + `HrBeltBleClient` 背景執行緒，bleak 為 `start()` 時才匯入的選配依賴）。GUI「心跳帶模式」（data=`belt`）與「手錶模式」共用 `WatchHrHub` → `compute_watch_physio` → `FatigueFuser（for_watch）` 下游路徑；差異僅在來源（BLE vs HTTP :8080）與 HRV 計算（心跳帶有實測 RR-Interval 時優先使用，無 RR 退回 60000/BPM 反推，與手錶路徑數值行為一致）。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。
+
 ## 設定與校準檔（config/）
 
 - `config/mediapipe_tuning.json`（**納入版控**）— 集中所有可調參數：`face_landmarker`（confidence）、`rppg_roi`（ROI 權重/姿態懲罰/遮擋門檻/EMA 平滑/jitter 門檻）、`quality`（品質分數組合權重）、`blendshape`（baseline 校準）、`active_profile` + `profiles`（`default` / `stable_indoor`（預設）/ `low_light` / `high_motion`）。切換 profile 需重啟 worker，FaceLandmarker options **不做熱更新**。`canonical_roi_warp_enabled` 為實驗開關，預設關閉（正式比較前保持關閉）。

@@ -58,8 +58,18 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 
 def ibis_from_watch_samples(samples: list[WatchSample]) -> np.ndarray:
+    """由 watch 樣本組出 IBI（ms）序列。
+
+    BLE 心跳帶樣本帶有實測 RR-Interval 時優先使用（HRV 精度遠高於
+    以 BPM 反推）；無 RR 的樣本（HTTP 手錶來源）維持 60000/BPM 反推，
+    數值行為與既有手錶路徑完全一致。
+    """
     ibis: list[float] = []
     for sample in samples:
+        rrs = getattr(sample, "rr_intervals_ms", None)
+        if rrs:
+            ibis.extend(float(rr) for rr in rrs if rr > 0)
+            continue
         bpm = int(sample.bpm)
         if bpm <= 0:
             continue

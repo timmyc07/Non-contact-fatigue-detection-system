@@ -290,6 +290,9 @@ class MainWindow(QMainWindow):
         self._rppg_calibration_store = CalibrationVersionStore()
         self._calibration_dialog: RppgCalibrationDialog | None = None
         self._watch_runtime = WatchRuntime(port=8080)
+        self._belt_ui_timer = QTimer(self)
+        self._belt_ui_timer.setInterval(1000)
+        self._belt_ui_timer.timeout.connect(self._update_belt_status_label)
 
         self._build_menu()
         self._build_central()
@@ -512,10 +515,14 @@ class MainWindow(QMainWindow):
         self._cmb_fatigue_mode = QComboBox()
         self._cmb_fatigue_mode.addItem("rPPG 模式（85% 行為 + 15% rPPG）", "rppg")
         self._cmb_fatigue_mode.addItem("手錶模式（70% 行為 + 30% 穿戴）", "watch")
+        self._cmb_fatigue_mode.addItem("心跳帶模式（70% 行為 + 30% 心跳帶 BLE）", "belt")
         self._cmb_fatigue_mode.setToolTip(
             "手錶模式會關閉 rPPG，改由手錶 HR／HRV／IMU 佔 30% 融合權重；"
             "HRV 由 PC 依手錶 BPM 時間序列估算（約需 8 筆以上樣本）。"
-            "請確認手錶 App 已指向本機 IP 且埠 8080 未被佔用。"
+            "請確認手錶 App 已指向本機 IP 且埠 8080 未被佔用。\n"
+            "心跳帶模式改用 BLE 直連標準 Heart Rate Service 心跳帶（如 R+2.0），"
+            "訂閱 2A37 notification 取得 BPM 與 RR-Interval，HRV 以實測 RR 計算，"
+            "融合權重與手錶模式相同。"
         )
         self._lbl_watch_http = QLabel("手錶 HTTP：停止")
         self._lbl_watch_http.setObjectName("hintLabel")
@@ -1157,6 +1164,7 @@ class MainWindow(QMainWindow):
         warmup_progress = float(getattr(r, "warmup_progress", 0.0) or 0.0) if r else 0.0
         perclos_pct = float(getattr(f, "perclos", 0.0) or 0.0) * 100.0 if f else 0.0
         from_watch = bool(getattr(r, "physio_source", "rppg") == "watch") if r else False
+        belt_st = self._watch_runtime.belt_status() if self._is_belt_source() else None
 
         return {
             "timestamp": time.time(),
@@ -1222,6 +1230,16 @@ class MainWindow(QMainWindow):
             "fatigue_mode": self._fatigue_mode(),
             "physio_source": str(getattr(r, "physio_source", "rppg") or "rppg") if r else "rppg",
             "watch_connected": from_watch and bool(face_r),
+            "belt_enabled": belt_st is not None,
+            "belt_state": str(belt_st.state) if belt_st else "",
+            "belt_device_name": str(belt_st.device_name) if belt_st else "",
+            "belt_battery": int(belt_st.battery_level) if belt_st and belt_st.battery_level is not None else -1,
+            "belt_bpm": int(belt_st.bpm) if belt_st else 0,
+            "belt_rr_count": int(belt_st.rr_count) if belt_st else 0,
+            "belt_sensor_location": str(belt_st.sensor_location) if belt_st else "",
+            "belt_contact_ok": bool(
+                belt_st.sensor_contact_detected or not belt_st.sensor_contact_supported
+            ) if belt_st else False,
             "fusion_state_zh": str(getattr(z, "level", "") or ""),
             "fusion_confidence": float(getattr(z, "score", 0.0) or 0.0),
             "head_pitch": float(getattr(f, "head_pitch", 0.0) or 0.0),
@@ -1979,7 +1997,11 @@ class MainWindow(QMainWindow):
         return str(data) if data else "rppg"
 
     def _is_watch_mode(self) -> bool:
-        return self._fatigue_mode() == "watch"
+        """watch 家族模式（手錶 HTTP 或心跳帶 BLE）皆走 watch pillar 融合。"""
+        return self._fatigue_mode() in ("watch", "belt")
+
+    def _is_belt_source(self) -> bool:
+        return self._fatigue_mode() == "belt"
 
     def _apply_fatigue_mode_ui(self) -> None:
         watch = self._is_watch_mode()
@@ -1992,15 +2014,40 @@ class MainWindow(QMainWindow):
     def _on_fatigue_mode_changed(self, _index: int = 0) -> None:
         watch = self._is_watch_mode()
         self._apply_fatigue_mode_ui()
-        label = "手錶模式" if watch else "rPPG 模式"
-        self._append_log(f"[UI] 疲勞融合 → {label}")
+        labels = {"rppg": "rPPG 模式", "watch": "手錶模式", "belt": "心跳帶模式"}
+        self._append_log(f"[UI] 疲勞融合 → {labels.get(self._fatigue_mode(), 'rPPG 模式')}")
         if self._pipeline_running:
-            self._ensure_watch_http(watch)
+            self._ensure_watch_source(watch)
             self._restart_analysis_workers()
 
-    def _ensure_watch_http(self, enabled: bool) -> None:
+    def _ensure_watch_source(self, enabled: bool) -> None:
+        """依目前模式啟停 watch pillar 的資料來源（HTTP 手錶或 BLE 心跳帶）。"""
+        if enabled and self._is_belt_source():
+            if self._watch_runtime.running:
+                self._watch_runtime.stop()
+                self._watch_runtime.hub.clear()
+                self._append_log("■ 手錶 HTTP 停止（切換為心跳帶 BLE）")
+            if not self._watch_runtime.belt_running:
+                self._watch_runtime.hub.clear()
+                err = self._watch_runtime.start_belt()
+                if err:
+                    self._append_log(f"⚠ 心跳帶 BLE 啟動失敗：{err}")
+                    self._lbl_watch_http.setText("心跳帶：啟動失敗")
+                    self._belt_ui_timer.stop()
+                    return
+                self._append_log("▶ 心跳帶 BLE 啟動（掃描標準 Heart Rate Service 裝置）")
+            self._belt_ui_timer.start()
+            self._update_belt_status_label()
+            return
         if enabled:
+            if self._watch_runtime.belt_running:
+                self._belt_ui_timer.stop()
+                self._watch_runtime.stop_belt()
+                self._append_log("■ 心跳帶 BLE 停止（切換為手錶 HTTP）")
             if not self._watch_runtime.running:
+                # 無條件清空：避免先前來源（心跳帶）殘留樣本與 HTTP 樣本
+                # 在 90 秒 HRV 視窗內混算。
+                self._watch_runtime.hub.clear()
                 err = self._watch_runtime.start()
                 if err:
                     self._append_log(f"⚠ 手錶 HTTP 啟動失敗：{err}")
@@ -2009,9 +2056,41 @@ class MainWindow(QMainWindow):
                 self._append_log(f"▶ 手錶 HTTP 監聽 :{self._watch_runtime.port}")
             self._lbl_watch_http.setText(f"手錶 HTTP：:{self._watch_runtime.port} 運行中")
             return
+        self._belt_ui_timer.stop()
+        if self._watch_runtime.belt_running:
+            self._watch_runtime.stop_belt()
+            self._append_log("■ 心跳帶 BLE 停止")
         if self._watch_runtime.running:
             self._watch_runtime.stop()
-        self._lbl_watch_http.setText("手錶 HTTP：停止")
+        self._lbl_watch_http.setText("手錶／心跳帶：停止")
+
+    def _update_belt_status_label(self) -> None:
+        """輪詢心跳帶連線狀態並更新狀態列（QTimer 每秒觸發）。"""
+        st = self._watch_runtime.belt_status()
+        if st is None:
+            self._lbl_watch_http.setText("心跳帶：停止")
+            return
+        if st.state == "connected":
+            name = st.device_name or st.device_address or "未知裝置"
+            parts = [f"心跳帶：{name}"]
+            parts.append(f"{st.bpm} BPM" if st.bpm > 0 else "等待心率…")
+            if st.rr_count > 0:
+                parts.append(f"RR×{st.rr_count}")
+            if st.battery_level is not None:
+                parts.append(f"電量 {st.battery_level}%")
+            if st.sensor_contact_supported and not st.sensor_contact_detected:
+                parts.append("⚠ 接觸不良")
+            self._lbl_watch_http.setText("｜".join(parts))
+            return
+        state_text = {
+            "idle": "待命",
+            "scanning": "掃描中…",
+            "connecting": f"連線中…（{st.device_name or st.device_address}）",
+            "reconnecting": "斷線，重新連線中…",
+            "error": f"錯誤：{st.last_error}" if st.last_error else "錯誤",
+            "stopped": "停止",
+        }.get(st.state, st.state)
+        self._lbl_watch_http.setText(f"心跳帶：{state_text}")
 
     def _analysis_needed(self) -> tuple[bool, bool]:
         """Return (want_rppg, want_fatigue) from checkbox state."""
@@ -2044,16 +2123,16 @@ class MainWindow(QMainWindow):
         self._latest_fused_score = None
         want_rppg, want_fatigue = self._analysis_needed()
         if self._is_watch_mode() and want_fatigue:
-            self._ensure_watch_http(True)
+            self._ensure_watch_source(True)
             self._start_combined_worker(enable_rppg=False)
         elif want_rppg and want_fatigue:
-            self._ensure_watch_http(False)
+            self._ensure_watch_source(False)
             self._start_combined_worker(enable_rppg=True)
         elif want_rppg:
-            self._ensure_watch_http(False)
+            self._ensure_watch_source(False)
             self._start_rppg_worker()
         elif want_fatigue:
-            self._ensure_watch_http(False)
+            self._ensure_watch_source(False)
             self._start_fatigue_worker()
         else:
             self._update_frame_routing()   # restore raw camera feed
@@ -2110,7 +2189,8 @@ class MainWindow(QMainWindow):
         self._preview_overlay.show_fatigue_panel(True)
         self._preview_overlay.show_fused_panel(True)
         if watch_mode:
-            self._append_log("▶ 合併引擎啟動（行為警覺 + 手錶穿戴柱，單 MediaPipe 實例）")
+            source_label = "心跳帶 BLE" if self._is_belt_source() else "手錶"
+            self._append_log(f"▶ 合併引擎啟動（行為警覺 + {source_label}穿戴柱，單 MediaPipe 實例）")
         else:
             self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
@@ -2413,16 +2493,16 @@ class MainWindow(QMainWindow):
             # Start the appropriate analysis worker(s) based on checkbox state
             want_rppg, want_fatigue = self._analysis_needed()
             if self._is_watch_mode() and want_fatigue:
-                self._ensure_watch_http(True)
+                self._ensure_watch_source(True)
                 self._start_combined_worker(enable_rppg=False)
             elif want_rppg and want_fatigue:
-                self._ensure_watch_http(False)
+                self._ensure_watch_source(False)
                 self._start_combined_worker(enable_rppg=True)
             elif want_rppg:
-                self._ensure_watch_http(False)
+                self._ensure_watch_source(False)
                 self._start_rppg_worker()
             elif want_fatigue:
-                self._ensure_watch_http(False)
+                self._ensure_watch_source(False)
                 self._start_fatigue_worker()
             self._sync_overlay_visibility()
             if self._chk_auto_record.isChecked() and not self._recording:
@@ -2439,7 +2519,7 @@ class MainWindow(QMainWindow):
             self._lbl_fps.setText("FPS：—")
             self._lbl_codec.setText("編碼：—")
             self._stop_camera_worker()
-            self._ensure_watch_http(False)
+            self._ensure_watch_source(False)
             self._sync_overlay_visibility()
             self._append_log("■ 管線停止。")
             if self._recording:
@@ -2683,6 +2763,9 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._unregister_global_hotkeys()
+        self._belt_ui_timer.stop()
+        self._watch_runtime.stop_belt()
+        self._watch_runtime.stop()
         self._stop_web_server()
         self._stop_recording()
         self._stop_camera_worker()
