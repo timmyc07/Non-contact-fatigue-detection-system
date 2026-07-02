@@ -11,7 +11,7 @@ PDF 型態：影像型 PDF，共 8 頁，無可抽取文字；本文件依 8 倍
 
 - `rppg/hr_belt_ble.py` — `2A37` payload 解析（flags / uint8 / uint16 / Energy Expended / RR-Interval）、`2A19` 電量、`2A38` 配戴位置解析，與 `HrBeltBleClient`（bleak 掃描 → 連線 → 訂閱 → 自動重連）。
 - `rppg/adaptive_calibration.py` — `OnlineBpmCalibrator`：以心跳帶 BPM 為真值，線上低增益 EMA 自適應微調 rPPG BPM offset（純運算，**不進**疲勞融合分數）。
-- `gui/watch_runtime.py` + `gui/main_window.py` — GUI「心跳帶真值校準（背景）」勾選框：心跳帶為 rPPG 真值參考，透過 `_load_rppg_calibration_version` 疊加進既有 rPPG calibration 鏈路；收斂後存成新的校準版本。與手錶模式互斥（共用 `WatchHrHub`）。Web dashboard 顯示連線狀態、電量與即時校正量。
+- `gui/belt_runtime.py` + `gui/main_window.py` — `BeltRuntime` 持有 hub + belt client；GUI「心跳帶真值校準（背景）」勾選框：心跳帶為 rPPG 真值參考，透過 `_load_rppg_calibration_version` 疊加進既有 rPPG calibration 鏈路；收斂後存成新的校準版本。Web dashboard 顯示連線狀態、電量與即時校正量。
 - `tests/test_hr_belt_ble.py`、`tests/test_adaptive_calibration.py` — 協定邊界／裝置挑選／hub 整合／client 生命週期，以及自適應校準的收斂、分歧、節流、持久化邊界單元測試。
 
 整合僅使用標準 Heart Rate Service 路徑；`FE59` 與 `fce6xxxx` vendor-specific service 依本文件建議**不讀不寫**。
@@ -91,7 +91,7 @@ PDF 末頁顯示：
 實機 notification 實測（2026-07-03，R+2.0 2248，Windows 11 + bleak/WinRT，抓取原始 payload 40 筆）：
 
 - payload 固定 2 bytes：`flags=0x06`（bit1+bit2：支援且偵測到皮膚接觸）+ `uint8` BPM，例如 `06 4E` = 78 BPM。
-- **未帶 RR-Interval**（bit 4 恆為 0）、無 Energy Expended；HRV 因此走 60000/BPM 反推路徑（`rppg/watch_physio.py`），與手錶模式一致。
+- 一般心率模式下**未帶 RR-Interval**（bit 4 恆為 0）、無 Energy Expended；三連按進入 HRV 模式後 `2A37` 才帶實測 RR-Interval（`flags=0x16`）。目前心跳帶校準只用 BPM，故一般模式即可。
 - notification 頻率約 2 Hz（同一 BPM 值連續重複約 2 筆）。
 - Body Sensor Location `2A38` 實測回報 `Wrist`（韌體標示與實際胸帶配戴不符，僅供顯示參考）。
 - Battery Level `2A19` 可正常讀取（實測 91%）。

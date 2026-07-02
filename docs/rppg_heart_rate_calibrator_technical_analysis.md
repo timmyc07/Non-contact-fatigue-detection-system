@@ -1,5 +1,7 @@
 # rPPG 心跳校準器技術分析報告
 
+> **歷史文件（已被取代）**：本文件描述的是 2026-06 的「手動手錶 HTTP 參考校準器」（`gui/rppg_calibration_dialog.py` + `POST /hr` :8080），該工具與「手錶模式」已於 2026-07-03 移除。現行版本改為 **BLE 心跳帶背景自動校準**（`rppg/adaptive_calibration.py` + `gui/belt_runtime.py`），以心跳帶實測心率為真值、線上低增益 EMA 自動微調 rPPG BPM offset 並自動存版本。offset 演算法（殘差中位數 → bias 校準）與品質 gate 概念仍延續，可作背景參考；GUI 流程與資料來源以現行版本為準（見 `README.md`「心跳帶真值校準」與 `docs/heart_rate_belt_bluetooth_gatt_profile.md`）。
+
 日期：2026-06-19  
 分析對象：目前 `main` 分支最新提交 `71baa5d feat(calibration): 新增 rPPG 心率校準器 GUI（測試版 beta）`
 

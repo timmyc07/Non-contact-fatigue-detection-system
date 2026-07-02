@@ -133,6 +133,8 @@ class RppgMetrics:
     waveform:  list[float] = field(default_factory=list)
     psd_freqs: list[float] = field(default_factory=list)
     psd_vals:  list[float] = field(default_factory=list)
+    # 生產路徑恆為 "rppg"；"watch" 僅由 rppg/watch_adapter.py（HRV 接口，無生產
+    # 呼叫者）設置，保留供未來 HRV 比對重用。手錶融合模式已移除。
     physio_source: str = "rppg"   # "rppg" | "watch"
 
 

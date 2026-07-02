@@ -151,15 +151,9 @@ rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等
 
 個人化 baseline 會自動儲存在 `config/mediapipe_calibration.json`，此檔案包含使用者/環境校準結果，不納入版本控制。
 
-## rPPG BPM 校準（手錶參考）
+## rPPG BPM 校準（心跳帶真值參考）
 
-手錶心率僅用於**校準 session**；日常疲勞監測不戴手錶，主程式會讀取 `config/rppg_calibration/manifest.json` 的 active 版本並套用 BPM 偏移。
-
-在 `main.py` 中開啟 **校準 → 開啟 rPPG 心率校準器…**，即可：
-
-- 接收手錶 `POST /hr` HTTP 資料
-- 即時比對手錶 BPM 與 rPPG BPM
-- 儲存校準版本、切換版本（含回到未校準的 `v000_origin`）
+rPPG BPM 校準以 bias 模型 `scale*bpm+offset` 修正 rPPG 心率；日常疲勞監測不需戴心跳帶，主程式會讀取 `config/rppg_calibration/manifest.json` 的 active 版本並套用 BPM 偏移。校準的參考真值來源為 BLE 心跳帶背景自動校準（見下節「心跳帶真值校準」）——它會在收斂後自動存成新版本並設為使用中。舊版靠手機/手錶 HTTP :8080 的手動校準對話框與「手錶模式」已移除。
 
 校準資料儲存於 `config/rppg_calibration/`（不納入版本控制）。
 
@@ -179,7 +173,7 @@ rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等
 
 系統以 rPPG + MediaPipe 臉部特徵為疲勞判斷主體。心跳帶（Scosche Rhythm+ 2.0 等標準 Heart Rate Service 裝置）**不是**疲勞融合的獨立權重，而是 rPPG 的「真值參考」：勾選控制列的「心跳帶真值校準（背景）」後，系統在背景連線心跳帶、持續比對它的實測心率與 rPPG 偵測到的心率，並以低增益自適應（線上 EMA）慢速微調 rPPG 的 BPM 校正量，讓 rPPG 逐漸趨近真值。**心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞分數。**
 
-- 前提：需同時啟用 rPPG（勾選「壓力／HRV」且非手錶模式）才會開始比對；心跳帶校準與手錶模式互斥（手錶模式停用此勾選框）。
+- 前提：需同時啟用 rPPG（勾選「壓力／HRV（心率估測）」）才會開始比對。
 - 協定：Heart Rate Service `0x180D`，訂閱 Heart Rate Measurement `0x2A37` notification 解析 BPM 與 RR-Interval（1/1024 秒解析度），並 best-effort 讀取電量 `0x2A19` 與配戴位置 `0x2A38`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`（Scosche Rhythm+ 2.0 / R+2.0 2248）。
 - 裝置挑選：優先連線名稱以 `R+` 開頭的裝置，否則挑選廣播 Heart Rate Service 且訊號最強者；斷線會自動重新掃描連線。
 - 校正演算法（`rppg/adaptive_calibration.py` `OnlineBpmCalibrator`，純運算）：以心跳帶 BPM 與 rPPG **原始** BPM 的中位殘差為目標，低增益 EMA 慢速調整 offset（沿用既有 `rppg/calibration.py` bias 模型 `scale*bpm+offset`，本階段只動 offset）。品質門檻（rPPG SQI／quality／warmup／ROI，心跳帶接觸與新鮮度）不過關的樣本不納入；offset 有絕對值上限防呆。比對用原始 BPM，不會自我回饋。

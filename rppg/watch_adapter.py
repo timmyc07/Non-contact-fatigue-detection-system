@@ -1,4 +1,11 @@
-"""Map watch HTTP samples to :class:`RppgMetrics` for full UI / fusion parity."""
+"""Map HR-reference hub samples to :class:`RppgMetrics`（HRV 接口，非疲勞融合輸入）。
+
+手錶融合模式已移除，本模組目前**無生產呼叫者**（只有 HRV 接口單元測試使用）。
+保留為未來「HRV 比對」的候選介面：把心跳帶樣本轉成 RppgMetrics 形狀，方便沿用
+既有 rPPG 下游顯示/比對。若確定 HRV 比對只需 :class:`WatchPhysioState`
+（`rppg/watch_physio.py`），本模組可整支移除。純 HRV 計算入口為
+`rppg/watch_physio.py` / `rppg/watch_hrv.py`。
+"""
 
 from __future__ import annotations
 

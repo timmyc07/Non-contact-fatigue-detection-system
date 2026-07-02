@@ -1,12 +1,10 @@
-"""Tests for watch → RppgMetrics adapter (full physiological parity)."""
+"""Tests for hub-sample → RppgMetrics adapter (HRV port for belt samples)."""
 
 from __future__ import annotations
 
 import time
 
-from gui.fatigue_scorer import FatigueFuser, FuserConfig
 from rppg.calibration_watch import WatchHrHub, WatchSample
-from rppg.rppg_worker import RppgMetrics
 from rppg.watch_adapter import build_watch_rppg_metrics
 
 
@@ -39,17 +37,6 @@ def test_build_watch_rppg_metrics_populates_core_fields():
     assert m.quality_score > 0
     assert m.roi_valid_count >= 3
     assert m.peak_freq_hz > 0
-
-
-def test_fuser_watch_mode_uses_rppg_sub_score_path():
-    hub = WatchHrHub()
-    _feed_hub(hub, n=20)
-    m = build_watch_rppg_metrics(hub)
-    fuser = FatigueFuser(FuserConfig.for_watch())
-    fused = fuser.update(rppg=m, fatigue=None)
-    assert fused.fatigue_mode == "watch"
-    assert fused.watch_available is True
-    assert fused.score >= 0.0
 
 
 def test_watch_disconnected_returns_empty_rppg():

@@ -17,10 +17,6 @@ Weight split
     rPPG pillar     : 15 %  (adjustable via FuserConfig)
     Behaviour pillar: 85 %
 
-Watch mode (``fatigue_mode="watch"``):
-    Behaviour pillar: 70 %
-    Watch pillar    : 30 %  (HR + IMU gate; rPPG disabled)
-
 Both pillars return a 0–1 normalised value; weights are applied and summed.
 When one pillar's data is unavailable or unreliable, its weight falls back
 to zero and the other pillar carries 100 % of the composite score.
@@ -36,7 +32,6 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from rppg.rppg_worker import RppgMetrics
     from gui.fatigue_engine import FatigueMetrics
-    from rppg.watch_metrics import WatchMetrics
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -47,16 +42,9 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 @dataclass
 class FuserConfig:
-    # Fusion mode: "rppg" (default) or "watch"
-    fatigue_mode:     str   = "rppg"
-
-    # Pillar weights (must sum to 1.0 for active mode)
+    # Pillar weights (must sum to 1.0)
     rppg_weight:      float = 0.15
     behavior_weight:  float = 0.85
-    watch_weight:     float = 0.30
-
-    # Watch-mode behaviour weight (watch_weight + behavior_weight_watch = 1.0)
-    behavior_weight_watch: float = 0.70
 
     # ── rPPG sub-weights (internal, sum = 1.0) ────────────────────────────────
     # stress_prob score
@@ -114,21 +102,9 @@ class FuserConfig:
     # ── Trend window (seconds) ────────────────────────────────────────────────
     trend_window_sec: float = 30.0
 
-    # ── Watch pillar (HR + HRV + IMU gate) ──────────────────────────────────
-    motion_still_max: float = 0.35
-    motion_active_min: float = 1.5
-    watch_w_bpm:      float = 0.35
-    watch_w_hrv:      float = 0.35
-    watch_w_motion:   float = 0.30
-    watch_rmssd_low:  float = 25.0   # below → elevated fatigue contribution
-
     @classmethod
     def for_rppg(cls) -> "FuserConfig":
-        return cls(fatigue_mode="rppg")
-
-    @classmethod
-    def for_watch(cls) -> "FuserConfig":
-        return cls(fatigue_mode="watch")
+        return cls()
 
 
 # ── Output dataclass ──────────────────────────────────────────────────────────
@@ -144,12 +120,10 @@ class FusedFatigueScore:
     # Sub-scores
     rppg_sub:      float = 0.0    # 0–1 (pillar score before weighting)
     behavior_sub:  float = 0.0    # 0–1
-    watch_sub:     float = 0.0    # 0–1
 
     # Effective weights (may differ from config when data unavailable)
     rppg_weight_eff:     float = 0.15
     behavior_weight_eff: float = 0.85
-    watch_weight_eff:    float = 0.0
 
     # Trend
     trend:         float = 0.0    # delta per 30 s; positive = worsening
@@ -158,19 +132,10 @@ class FusedFatigueScore:
     # Data availability flags
     rppg_available:     bool = False
     behavior_available: bool = False
-    watch_available:    bool = False
-    fatigue_mode:       str   = "rppg"
 
     # Component breakdown (for detailed display)
     rppg_stress_score:  float = 0.0
     rppg_bpm_score:     float = 0.0
-    watch_bpm_score:    float = 0.0
-    watch_motion_score: float = 0.0
-    watch_hrv_score:    float = 0.0
-    watch_imu_gate:     float = 1.0
-    watch_rmssd:        float = 0.0
-    watch_lf_hf:        float = 0.0
-    watch_hrv_ready:    bool = False
     beh_perclos_score:  float = 0.0
     beh_blink_temporal_score: float = 0.0
     beh_squint_score:   float = 0.0
@@ -257,33 +222,6 @@ class FatigueFuser:
         pillar = _clamp(raw * sqi_w * quality_w)
         return pillar, stress_s, bpm_s, sqi_w
 
-    def _watch_sub_score(self, w: "WatchMetrics") -> tuple[float, float, float, float, float]:
-        """Returns (pillar_score, bpm_score, motion_score, imu_gate, hrv_score).
-
-        NOTE: 目前為死碼——watch 模式的 update() 直接內聯呼叫 _rppg_sub_score，
-        並未使用本方法。此外 line 270 的 ``hrv_ready == bool(getattr(w, "hrv_ready", False))``
-        兩側同源、恆為 True，條件寫錯，重新啟用前需先修正該分支邏輯。
-        """
-        cfg = self.cfg
-        bpm_s = float(getattr(w, "bpm_score", 0.0) or 0.0)
-        motion_s = float(getattr(w, "motion_score", 0.0) or 0.0)
-        gate = float(getattr(w, "imu_gate", 1.0) or 1.0)
-        hrv_ready = bool(getattr(w, "hrv_ready", False))
-        hrv_s = float(getattr(w, "hrv_score", 0.0) or getattr(w, "stress_prob", 0.0) or 0.0)
-        if not hrv_ready:
-            hrv_s = 0.0
-        if getattr(w, "watch_sub", 0.0) and hrv_ready == bool(getattr(w, "hrv_ready", False)):
-            pillar = _clamp(float(w.watch_sub))
-        else:
-            if hrv_ready:
-                raw = cfg.watch_w_bpm * bpm_s + cfg.watch_w_hrv * hrv_s + cfg.watch_w_motion * motion_s
-            else:
-                bw = cfg.watch_w_bpm + cfg.watch_w_hrv
-                denom = bw + cfg.watch_w_motion
-                raw = ((bw / denom) * bpm_s + (cfg.watch_w_motion / denom) * motion_s) if denom > 0 else 0.0
-            pillar = _clamp(raw * gate)
-        return pillar, bpm_s, motion_s, gate, hrv_s
-
     # ── Behaviour pillar ──────────────────────────────────────────────────────
 
     def _behavior_sub_score(self, f: "FatigueMetrics") -> tuple[float, ...]:
@@ -349,14 +287,11 @@ class FatigueFuser:
         self,
         rppg:    "Optional[RppgMetrics]"    = None,
         fatigue: "Optional[FatigueMetrics]" = None,
-        watch:   "Optional[WatchMetrics]"   = None,
     ) -> FusedFatigueScore:
         cfg = self.cfg
         t_now = time.perf_counter()
-        watch_mode = cfg.fatigue_mode == "watch"
-        _ = watch  # legacy arg; watch mode uses rppg-shaped metrics
 
-        # ── Physiological pillar (rPPG or watch-as-rPPG) ─────────────────────
+        # ── Physiological pillar (rPPG) ──────────────────────────────────────
         rppg_avail   = False
         rppg_sub     = 0.0
         stress_s = bpm_s = 0.0
@@ -372,26 +307,6 @@ class FatigueFuser:
         ):
             rppg_sub, stress_s, bpm_s, _ = self._rppg_sub_score(physio)
             rppg_avail = True
-
-        watch_avail = False
-        watch_sub = 0.0
-        watch_bpm_s = watch_motion_s = watch_hrv_s = 0.0
-        watch_gate = 1.0
-        watch_rmssd = watch_lf_hf = 0.0
-        watch_hrv_ready = False
-
-        if watch_mode and physio is not None and physio.face_detected and physio.bpm > 0:
-            sub, stress_s_w, bpm_s_w, _ = self._rppg_sub_score(physio)
-            watch_bpm_s = bpm_s_w
-            watch_hrv_s = stress_s_w
-            watch_rmssd = float(physio.rmssd)
-            watch_lf_hf = float(physio.lf_hf)
-            watch_hrv_ready = physio.rmssd > 0 and physio.hrv_confidence != "LOW"
-            motion = float(getattr(physio, "landmark_jitter_norm", 0.0) or 0.0)
-            watch_gate = _clamp(1.0 - motion / 1.5) if motion > 0 else 1.0
-            watch_motion_s = _clamp(motion / 1.5)
-            watch_sub = sub if rppg_avail else _clamp(sub * max(0.35, physio.warmup_progress))
-            watch_avail = True
 
         # ── Behaviour pillar ──────────────────────────────────────────────────
         beh_avail    = False
@@ -409,29 +324,17 @@ class FatigueFuser:
             beh_sub = _clamp(0.70 * beh_sub + 0.30 * fatigue.fatigue_level)
 
         # ── Effective weights ─────────────────────────────────────────────────
-        if watch_mode:
-            bw_cfg = cfg.behavior_weight_watch
-            ww_cfg = cfg.watch_weight
-            if watch_avail and beh_avail:
-                ww, bw, rw = ww_cfg, bw_cfg, 0.0
-            elif watch_avail:
-                ww, bw, rw = 1.0, 0.0, 0.0
-            elif beh_avail:
-                ww, bw, rw = 0.0, 1.0, 0.0
-            else:
-                ww, bw, rw = 0.0, 0.0, 0.0
-            score = _clamp(ww * watch_sub + bw * beh_sub)
-        elif rppg_avail and beh_avail:
-            rw, bw, ww = cfg.rppg_weight, cfg.behavior_weight, 0.0
+        if rppg_avail and beh_avail:
+            rw, bw = cfg.rppg_weight, cfg.behavior_weight
             score = _clamp(rw * rppg_sub + bw * beh_sub)
         elif rppg_avail:
-            rw, bw, ww = 1.0, 0.0, 0.0
+            rw, bw = 1.0, 0.0
             score = _clamp(rppg_sub)
         elif beh_avail:
-            rw, bw, ww = 0.0, 1.0, 0.0
+            rw, bw = 0.0, 1.0
             score = _clamp(beh_sub)
         else:
-            rw, bw, ww = 0.0, 0.0, 0.0
+            rw, bw = 0.0, 0.0
             score = 0.0
 
         # ── Trend (30-s sliding delta) ────────────────────────────────────────
@@ -456,17 +359,11 @@ class FatigueFuser:
 
         return FusedFatigueScore(
             score=score, level=zh, level_en=en, color_bgr=col,
-            rppg_sub=rppg_sub, behavior_sub=beh_sub, watch_sub=watch_sub,
-            rppg_weight_eff=rw, behavior_weight_eff=bw, watch_weight_eff=ww,
+            rppg_sub=rppg_sub, behavior_sub=beh_sub,
+            rppg_weight_eff=rw, behavior_weight_eff=bw,
             trend=trend, trend_symbol=trend_sym,
             rppg_available=rppg_avail, behavior_available=beh_avail,
-            watch_available=watch_avail, fatigue_mode=cfg.fatigue_mode,
             rppg_stress_score=stress_s,   rppg_bpm_score=bpm_s,
-            watch_bpm_score=watch_bpm_s, watch_motion_score=watch_motion_s,
-            watch_hrv_score=watch_hrv_s,
-            watch_imu_gate=watch_gate,
-            watch_rmssd=watch_rmssd, watch_lf_hf=watch_lf_hf,
-            watch_hrv_ready=watch_hrv_ready,
             beh_perclos_score=perc_s,     beh_blink_temporal_score=blink_s,
             beh_squint_score=squint_s,
             beh_microsleep_score=micro_s, beh_gaze_score=gaze_s,

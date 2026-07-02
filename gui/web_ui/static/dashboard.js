@@ -222,9 +222,9 @@ function updateMetricsDisplay(m) {
         if (m.stress_enabled) { ss.textContent = m.stress_has_face ? '運行中' : '等待臉部'; ss.style.color = m.stress_has_face ? '#22c55e' : '#f59e0b'; }
         else { ss.textContent = '未啟用'; ss.style.color = '#94a3b8'; }
     }
-    // 生理來源（rPPG / 手錶）與心跳帶校準狀態可視化
-    const physioSourceLabel = m.fatigue_mode === 'watch' ? '手錶' : 'rPPG';
-    const srcColor = m.fatigue_mode === 'watch' ? '#3b82f6' : '#22c55e';
+    // 生理來源（rPPG）與心跳帶校準狀態可視化
+    const physioSourceLabel = 'rPPG';
+    const srcColor = '#22c55e';
     ['physio-source-compact', 'physio-source-value'].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.textContent = physioSourceLabel; el.style.color = srcColor; }

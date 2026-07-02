@@ -80,13 +80,13 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 
 核心運算模組皆為 **pure computation（無 Qt / 無 UI / 無 thread）**，worker 只負責包裝執行緒與訊號：
 - `gui/fatigue_engine.py` — 行為疲勞引擎。Frame interleaving 設計：HIGH_FREQ（每幀 EAR/眨眼/凝視/瞳孔/瞇眼）、LOW_FREQ（每 N 幀 head pose solvePnP / 眉間 / PERCLOS）、LATE_STAGE（低權重哈欠 MAR）。MediaPipe 478 點 landmark 索引常數定義於檔案上方。
-- `gui/fatigue_scorer.py` — `FatigueFuser` 融合分數。預設 rPPG 15% + 行為 85%；watch 模式為行為 70% + 手錶 30%（rPPG 停用）。SQI/quality/ROI 數不足時該 pillar 權重降為 0，由另一 pillar 承擔 100%。輸出 5 段狀態（清醒 / 輕度 / 中度 / 高度 / 極度危險）。
+- `gui/fatigue_scorer.py` — `FatigueFuser` 融合分數。rPPG 15% + 行為 85%（唯一融合模式；手錶模式已移除）。SQI/quality/ROI 數不足時該 pillar 權重降為 0，由另一 pillar 承擔 100%。輸出 5 段狀態（清醒 / 輕度 / 中度 / 高度 / 極度危險）。
 - `rppg/rppg_worker.py` — `RppgEngine`：ROI 抽取（forehead / L_cheek / R_cheek / glabella，索引與 base weight 定義於檔案上方）→ POS 演算法 → Butterworth band-pass → Welch PSD → BPM/HRV。BPM 以第一版基準為準（有效 ROI 等權平均、Welch peak，峰值插值 + 輕量平滑）。
 - `rppg/rppg_hrv_engine.py` — HRV 計算與信心值。
 
-手錶（watch）路徑為選配的 HR 參考來源：`rppg/watch_*.py` + `gui/watch_runtime.py`，僅在 watch 模式或 rPPG 校準時使用。
+心率參考的純運算層：`rppg/calibration_watch.py`（`WatchHrHub` / `WatchSample`）+ `rppg/watch_physio.py` / `watch_adapter.py` / `watch_hrv.py`（由 hub 樣本計算 HRV/指標）。這些是心跳帶樣本與「未來 HRV 比對」的共用資料結構（HRV 接口），非疲勞融合輸入。手錶 HTTP 模式（`WatchHrHttpServer`、`gui/watch_runtime.py`、手動校準對話框）已移除。
 
-心跳帶（belt）為 rPPG 的**背景真值校準來源**（非疲勞融合權重）：`rppg/hr_belt_ble.py`（BLE Heart Rate Service `0x180D` / `0x2A37` 協定解析 + `HrBeltBleClient` 背景執行緒，bleak 為 `start()` 時才匯入的選配依賴）。GUI 控制列「心跳帶真值校準（背景）」勾選框啟停：勾選且 rPPG 運行（非手錶模式）時，`rppg/adaptive_calibration.py` 的 `OnlineBpmCalibrator`（純運算）以心跳帶 BPM 為真值、比對 rPPG **原始** BPM 的中位殘差，低增益 EMA 慢速微調 offset，透過 `_load_rppg_calibration_version` 回傳的即時版本疊加進既有 rPPG `calibration_loader` 鏈路（bias 模型 `scale*bpm+offset`，只動 offset）。**心跳帶數值絕不進疲勞融合分數**；比對用原始 BPM 故無自我回饋。收斂到足夠信心後（停止時）存成新的 `CalibrationVersionStore` 版本並設為使用中，跨 session 持續改善。心跳帶校準與手錶模式互斥（皆用 `WatchHrHub`，進手錶模式前 `_ensure_watch_source` 會先 `_stop_belt_calibration`）。裝置設定走 `config/hr_belt.json`（機器特定、不入版控，`load_hr_belt_config()` 容錯載入）；連線中超過 `HR_STALE_AFTER_SEC` 無有效心率由 `hr_is_stale()` 判定並在 GUI/dashboard 顯示警告；免 GUI 診斷用 `python -m scripts.hr_belt_monitor`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。
+心跳帶（belt）為 rPPG 的**背景真值校準來源**（非疲勞融合權重）：`rppg/hr_belt_ble.py`（BLE Heart Rate Service `0x180D` / `0x2A37` 協定解析 + `HrBeltBleClient` 背景執行緒，bleak 為 `start()` 時才匯入的選配依賴）。GUI 控制列「心跳帶真值校準（背景）」勾選框啟停（`gui/belt_runtime.py` `BeltRuntime` 管理 hub + belt client）：勾選且 rPPG 運行時，`rppg/adaptive_calibration.py` 的 `OnlineBpmCalibrator`（純運算）以心跳帶 BPM 為真值、比對 rPPG **原始** BPM 的中位殘差，低增益 EMA 慢速微調 offset，透過 `_load_rppg_calibration_version` 回傳的即時版本疊加進既有 rPPG `calibration_loader` 鏈路（bias 模型 `scale*bpm+offset`，只動 offset）。**心跳帶數值絕不進疲勞融合分數**；比對用原始 BPM 故無自我回饋。收斂到足夠信心後（停止時）存成新的 `CalibrationVersionStore` 版本並設為使用中，跨 session 持續改善。系統只有兩種配置：行為+rPPG 判斷疲勞、行為+rPPG+心跳帶校正優化 rPPG（無手錶模式）。裝置設定走 `config/hr_belt.json`（機器特定、不入版控，`load_hr_belt_config()` 容錯載入）；連線中超過 `HR_STALE_AFTER_SEC` 無有效心率由 `hr_is_stale()` 判定並在 GUI/dashboard 顯示警告；免 GUI 診斷用 `python -m scripts.hr_belt_monitor`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。
 
 ## 設定與校準檔（config/）
 

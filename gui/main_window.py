@@ -44,9 +44,8 @@ from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserPro
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
-from gui.watch_runtime import WatchRuntime
+from gui.belt_runtime import BeltRuntime
 from gui.preview_overlay_window import PreviewOverlayWindow
-from gui.rppg_calibration_dialog import RppgCalibrationDialog
 from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
 from rppg.hr_belt_ble import hr_is_stale, load_hr_belt_config
 from rppg.rppg_worker import RppgWorker
@@ -291,8 +290,7 @@ class MainWindow(QMainWindow):
         self._utarldd_recent_done: list[str] = []
         self._alarm_config = AlarmConfig.defaults()
         self._rppg_calibration_store = CalibrationVersionStore()
-        self._calibration_dialog: RppgCalibrationDialog | None = None
-        self._watch_runtime = WatchRuntime(port=8080)
+        self._belt_runtime = BeltRuntime()
         # 心跳帶真值校準（背景）：心跳帶 HR 當參考，線上微調 rPPG BPM offset，
         # 不進疲勞融合分數（見 _ensure_belt_calibration / OnlineBpmCalibrator）。
         self._belt_calibrator: OnlineBpmCalibrator | None = None
@@ -307,7 +305,6 @@ class MainWindow(QMainWindow):
         self._build_central()
 
         self._load_settings()
-        self._apply_fatigue_mode_ui()
         self._alarm_controller = FatigueAlarmController(self._alarm_config, self)
         self._apply_hotkey_shortcuts()
         self._apply_overlay_state()
@@ -357,11 +354,6 @@ class MainWindow(QMainWindow):
         m_settings.addSeparator()
         m_settings.addAction(self._act_web_allow_lan)
         m_settings.addAction(act_web)
-
-        act_calib_open = QAction("開啟 rPPG 心率校準器…", self)
-        act_calib_open.triggered.connect(self._on_open_rppg_calibration_dialog)
-        m_calib = self.menuBar().addMenu("校準")
-        m_calib.addAction(act_calib_open)
 
         act_start = QAction("開始／停止", self)
         act_start.setShortcut(QKeySequence(self._hotkeys.start_stop))
@@ -517,7 +509,7 @@ class MainWindow(QMainWindow):
             "「真值參考」，在背景持續比對 rPPG 偵測到的心率，並以低增益慢速微調 rPPG 的 BPM"
             "校正量，讓 rPPG 逐漸趨近真值。\n"
             "心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞判斷。"
-            "需搭配「壓力／HRV」啟用 rPPG（非手錶模式）才會開始比對。"
+            "需勾選「壓力／HRV（心率估測）」啟用 rPPG 才會開始比對。"
         )
         self._chk_lock = QCheckBox("Overlay 鎖定（穿透點擊）")
         self._chk_lock.setChecked(True)
@@ -529,19 +521,10 @@ class MainWindow(QMainWindow):
         ctl.addLayout(row_b)
 
         row_mode = QHBoxLayout()
-        row_mode.addWidget(QLabel("疲勞融合模式："))
-        self._cmb_fatigue_mode = QComboBox()
-        self._cmb_fatigue_mode.addItem("rPPG 模式（85% 行為 + 15% rPPG）", "rppg")
-        self._cmb_fatigue_mode.addItem("手錶模式（70% 行為 + 30% 穿戴）", "watch")
-        self._cmb_fatigue_mode.setToolTip(
-            "手錶模式會關閉 rPPG，改由手錶 HR／HRV／IMU 佔 30% 融合權重；"
-            "HRV 由 PC 依手錶 BPM 時間序列估算（約需 8 筆以上樣本）。"
-            "請確認手錶 App 已指向本機 IP 且埠 8080 未被佔用。"
-        )
-        self._lbl_watch_http = QLabel("手錶 HTTP：停止")
-        self._lbl_watch_http.setObjectName("hintLabel")
-        row_mode.addWidget(self._cmb_fatigue_mode)
-        row_mode.addWidget(self._lbl_watch_http)
+        row_mode.addWidget(QLabel("心跳帶校準："))
+        self._lbl_belt_status = QLabel("未啟用")
+        self._lbl_belt_status.setObjectName("hintLabel")
+        row_mode.addWidget(self._lbl_belt_status)
         row_mode.addStretch(1)
         ctl.addLayout(row_mode)
 
@@ -590,7 +573,6 @@ class MainWindow(QMainWindow):
         # rPPG stress/HRV toggle — functional
         self._chk_stress.toggled.connect(self._on_stress_toggled)
         self._chk_belt_calib.toggled.connect(self._on_belt_calib_toggled)
-        self._cmb_fatigue_mode.currentIndexChanged.connect(self._on_fatigue_mode_changed)
 
         body_layout.addWidget(gb_ctl)
 
@@ -946,11 +928,6 @@ class MainWindow(QMainWindow):
                     chk.setChecked(val)
                     chk.blockSignals(False)
 
-            fatigue_mode = toggles.get("fatigue_mode")
-            if isinstance(fatigue_mode, str):
-                self._select_combo_by_data(self._cmb_fatigue_mode, fatigue_mode)
-            self._apply_fatigue_mode_ui()
-
         opacity = overlay.get("opacity")
         if isinstance(opacity, int):
             self._sld_opacity.setValue(opacity)
@@ -994,7 +971,6 @@ class MainWindow(QMainWindow):
                 "stress": self._chk_stress.isChecked(),
                 "belt_calib": self._chk_belt_calib.isChecked(),
                 "auto_record": self._chk_auto_record.isChecked(),
-                "fatigue_mode": self._fatigue_mode(),
             },
             "hotkeys": {
                 "toggle_metrics": self._hotkeys.toggle_metrics,
@@ -1164,12 +1140,11 @@ class MainWindow(QMainWindow):
 
     def _build_web_metrics(self) -> dict:
         pipeline_running = bool(self._pipeline_running)
-        watch_mode = self._is_watch_mode()
-        stress_enabled = self._chk_stress.isChecked() or watch_mode
+        stress_enabled = self._chk_stress.isChecked()
         behavior_enabled = self._chk_behavior.isChecked()
-        r = self._latest_rppg_metrics if pipeline_running and (self._chk_stress.isChecked() or watch_mode) else None
+        r = self._latest_rppg_metrics if pipeline_running and stress_enabled else None
         f = self._latest_fatigue_metrics if pipeline_running and behavior_enabled else None
-        fusion_on = behavior_enabled and (self._chk_stress.isChecked() or watch_mode)
+        fusion_on = behavior_enabled and stress_enabled
         z = self._latest_fused_score if pipeline_running and fusion_on else None
         info = self._last_camera_info
 
@@ -1180,8 +1155,7 @@ class MainWindow(QMainWindow):
         calib_samples = int(round(calib_progress * calib_target)) if f else 0
         warmup_progress = float(getattr(r, "warmup_progress", 0.0) or 0.0) if r else 0.0
         perclos_pct = float(getattr(f, "perclos", 0.0) or 0.0) * 100.0 if f else 0.0
-        from_watch = bool(getattr(r, "physio_source", "rppg") == "watch") if r else False
-        belt_st = self._watch_runtime.belt_status() if self._watch_runtime.belt_running else None
+        belt_st = self._belt_runtime.belt_status() if self._belt_runtime.belt_running else None
         # 校準資訊僅在心跳帶已連線時視為 active（與 GUI 狀態列一致，避免掃描中
         # 就顯示「校正 +0.0｜0 配對」）。
         belt_connected = belt_st is not None and belt_st.state == "connected"
@@ -1249,12 +1223,10 @@ class MainWindow(QMainWindow):
                 getattr(r, "lf_hf", 0.0) and getattr(r, "warmup_progress", 0.0) >= 0.99
             ) if r else False,
             "stress_enabled": stress_enabled,
-            "stress_has_face": face_r if not from_watch else bool(face_r or (r and r.bpm > 0)),
+            "stress_has_face": face_r,
             "stress_warmup_progress": warmup_progress,
             "stress_warmup_done": warmup_progress >= 0.99,
-            "fatigue_mode": self._fatigue_mode(),
-            "physio_source": str(getattr(r, "physio_source", "rppg") or "rppg") if r else "rppg",
-            "watch_connected": from_watch and bool(face_r),
+            "physio_source": "rppg",
             "belt_enabled": belt_st is not None,
             "belt_state": str(belt_st.state) if belt_st else "",
             "belt_device_name": str(belt_st.device_name) if belt_st else "",
@@ -2026,57 +1998,6 @@ class MainWindow(QMainWindow):
 
     # ── Analysis workers (rPPG / fatigue / combined) ──────────────────────────
 
-    def _fatigue_mode(self) -> str:
-        data = self._cmb_fatigue_mode.currentData()
-        return str(data) if data else "rppg"
-
-    def _is_watch_mode(self) -> bool:
-        """手錶模式：關閉 rPPG，改由手錶 HTTP HR 走 watch pillar 融合。"""
-        return self._fatigue_mode() == "watch"
-
-    def _apply_fatigue_mode_ui(self) -> None:
-        watch = self._is_watch_mode()
-        self._chk_stress.setEnabled(not watch)
-        if watch and self._chk_stress.isChecked():
-            self._chk_stress.blockSignals(True)
-            self._chk_stress.setChecked(False)
-            self._chk_stress.blockSignals(False)
-        # 心跳帶校準需要 rPPG，手錶模式下停用該勾選框（僅視覺提示，不改狀態值）。
-        self._chk_belt_calib.setEnabled(not watch)
-
-    def _on_fatigue_mode_changed(self, _index: int = 0) -> None:
-        watch = self._is_watch_mode()
-        self._apply_fatigue_mode_ui()
-        labels = {"rppg": "rPPG 模式", "watch": "手錶模式"}
-        self._append_log(f"[UI] 疲勞融合 → {labels.get(self._fatigue_mode(), 'rPPG 模式')}")
-        if self._pipeline_running:
-            self._ensure_watch_source(watch)
-            self._restart_analysis_workers()
-
-    def _ensure_watch_source(self, enabled: bool) -> None:
-        """啟停 watch pillar 的 HTTP 手錶來源（心跳帶校準走獨立背景路徑）。"""
-        if enabled:
-            # 進入手錶模式前，務必先停掉背景心跳帶校準：兩者共用同一個
-            # WatchHrHub，若心跳帶 client 還在推樣本，會在 hub.clear() 後、
-            # HTTP 啟動的空窗把心跳帶樣本混進手錶融合柱（污染疲勞分數）。
-            if self._belt_calibrator is not None:
-                self._stop_belt_calibration()
-            if not self._watch_runtime.running:
-                # 清空 hub 避免心跳帶校準殘留樣本與 HTTP 樣本在 HRV 視窗內混算。
-                self._watch_runtime.hub.clear()
-                err = self._watch_runtime.start()
-                if err:
-                    self._append_log(f"⚠ 手錶 HTTP 啟動失敗：{err}")
-                    self._lbl_watch_http.setText("手錶 HTTP：啟動失敗")
-                    return
-                self._append_log(f"▶ 手錶 HTTP 監聽 :{self._watch_runtime.port}")
-            self._lbl_watch_http.setText(f"手錶 HTTP：:{self._watch_runtime.port} 運行中")
-            return
-        if self._watch_runtime.running:
-            self._watch_runtime.stop()
-        if self._belt_calibrator is None:
-            self._lbl_watch_http.setText("手錶／心跳帶：停止")
-
     # ── 心跳帶真值校準（背景參考，不進疲勞分數）─────────────────────────────
 
     def _rppg_active(self) -> bool:
@@ -2088,7 +2009,7 @@ class MainWindow(QMainWindow):
         self._append_log(f"[UI] 心跳帶真值校準 → {'開啟' if checked else '關閉'}")
         if checked and self._pipeline_running and not self._rppg_active():
             self._append_log(
-                "⚠ 心跳帶校準需要 rPPG：請勾選「壓力／HRV」且非手錶模式，rPPG 啟用後才會開始比對。"
+                "⚠ 心跳帶校準需要 rPPG：請勾選「壓力／HRV（心率估測）」，rPPG 啟用後才會開始比對。"
             )
         self._ensure_belt_calibration()
 
@@ -2106,12 +2027,12 @@ class MainWindow(QMainWindow):
 
     def _start_belt_calibration(self) -> None:
         belt_cfg = load_hr_belt_config()
-        if not self._watch_runtime.belt_running:
-            self._watch_runtime.hub.clear()
-            err = self._watch_runtime.start_belt(belt_cfg)
+        if not self._belt_runtime.belt_running:
+            self._belt_runtime.hub.clear()
+            err = self._belt_runtime.start_belt(belt_cfg)
             if err:
                 self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
-                self._lbl_watch_http.setText("心跳帶校準：啟動失敗")
+                self._lbl_belt_status.setText("心跳帶校準：啟動失敗")
                 self._chk_belt_calib.blockSignals(True)
                 self._chk_belt_calib.setChecked(False)
                 self._chk_belt_calib.blockSignals(False)
@@ -2140,11 +2061,10 @@ class MainWindow(QMainWindow):
         self._belt_ui_timer.stop()
         self._persist_belt_calibration()
         self._belt_calibrator = None
-        if self._watch_runtime.belt_running:
-            self._watch_runtime.stop_belt()
+        if self._belt_runtime.belt_running:
+            self._belt_runtime.stop_belt()
         self._append_log("■ 心跳帶真值校準停止。")
-        if not self._watch_runtime.running:
-            self._lbl_watch_http.setText("手錶／心跳帶：停止")
+        self._lbl_belt_status.setText("未啟用")
 
     def _persist_belt_calibration(self) -> None:
         """把本次收斂的 offset 存成新的自適應校準版本（信心足夠時）。"""
@@ -2184,7 +2104,7 @@ class MainWindow(QMainWindow):
     def _tick_belt_calibration(self) -> None:
         """QTimer 每秒：餵一筆配對觀測給校正器並更新狀態列。"""
         cal = self._belt_calibrator
-        st = self._watch_runtime.belt_status()
+        st = self._belt_runtime.belt_status()
         if cal is not None and st is not None and st.state == "connected" and st.bpm > 0:
             r = self._latest_rppg_metrics
             # 只在 rPPG 產出「新」樣本時餵入：物件相同代表 rPPG 這秒沒更新
@@ -2198,10 +2118,10 @@ class MainWindow(QMainWindow):
 
     def _update_belt_status_label(self) -> None:
         """輪詢心跳帶連線與校準狀態並更新狀態列（QTimer 每秒觸發）。"""
-        st = self._watch_runtime.belt_status()
+        st = self._belt_runtime.belt_status()
         cal = self._belt_calibrator
         if st is None:
-            self._lbl_watch_http.setText("心跳帶校準：停止")
+            self._lbl_belt_status.setText("心跳帶校準：停止")
             return
         if st.state != "connected":
             state_text = {
@@ -2212,7 +2132,7 @@ class MainWindow(QMainWindow):
                 "error": f"錯誤：{st.last_error}" if st.last_error else "錯誤",
                 "stopped": "停止",
             }.get(st.state, st.state)
-            self._lbl_watch_http.setText(f"心跳帶校準：{state_text}")
+            self._lbl_belt_status.setText(f"心跳帶校準：{state_text}")
             return
         name = st.device_name or st.device_address or "未知裝置"
         parts = [f"心跳帶 {name}"]
@@ -2236,13 +2156,11 @@ class MainWindow(QMainWindow):
                 parts.append(f"已收斂（信心 {cs.confidence}）")
             else:
                 parts.append(f"收斂中 {cs.pairs_used} 配對")
-        self._lbl_watch_http.setText("｜".join(parts))
+        self._lbl_belt_status.setText("｜".join(parts))
 
     def _analysis_needed(self) -> tuple[bool, bool]:
         """Return (want_rppg, want_fatigue) from checkbox state."""
         want_fatigue = self._chk_behavior.isChecked()
-        if self._is_watch_mode():
-            return False, want_fatigue
         return self._chk_stress.isChecked(), want_fatigue
 
     def _stop_analysis_workers(self) -> None:
@@ -2268,17 +2186,11 @@ class MainWindow(QMainWindow):
         self._latest_fatigue_metrics = None
         self._latest_fused_score = None
         want_rppg, want_fatigue = self._analysis_needed()
-        if self._is_watch_mode() and want_fatigue:
-            self._ensure_watch_source(True)
-            self._start_combined_worker(enable_rppg=False)
-        elif want_rppg and want_fatigue:
-            self._ensure_watch_source(False)
+        if want_rppg and want_fatigue:
             self._start_combined_worker(enable_rppg=True)
         elif want_rppg:
-            self._ensure_watch_source(False)
             self._start_rppg_worker()
         elif want_fatigue:
-            self._ensure_watch_source(False)
             self._start_fatigue_worker()
         else:
             self._update_frame_routing()   # restore raw camera feed
@@ -2297,13 +2209,6 @@ class MainWindow(QMainWindow):
         self._combined_queue = queue.Queue(maxsize=2)
         self._cam_worker.attach_bgr_queue(self._combined_queue)
 
-        watch_mode = self._is_watch_mode()
-        fuser_cfg = FuserConfig.for_watch() if watch_mode else FuserConfig.for_rppg()
-        watch_loader = (
-            lambda: self._watch_runtime.latest_rppg_metrics(self._load_rppg_calibration_version)
-            if watch_mode else None
-        )
-
         thread = QThread(self)
         worker = CombinedWorker(
             self._combined_queue,
@@ -2311,8 +2216,7 @@ class MainWindow(QMainWindow):
             target_fps=30.0, buffer_sec=12.0,
             calibration_loader=self._load_rppg_calibration_version,
             live_feed_writer=write_live_feed,
-            fuser_config=fuser_cfg,
-            watch_rppg_loader=watch_loader,
+            fuser_config=FuserConfig.for_rppg(),
         )
         worker.moveToThread(thread)
 
@@ -2332,13 +2236,10 @@ class MainWindow(QMainWindow):
         thread.start()
 
         self._update_frame_routing()
-        self._preview_overlay.show_rppg_panel(enable_rppg or watch_mode)
+        self._preview_overlay.show_rppg_panel(enable_rppg)
         self._preview_overlay.show_fatigue_panel(True)
         self._preview_overlay.show_fused_panel(True)
-        if watch_mode:
-            self._append_log("▶ 合併引擎啟動（行為警覺 + 手錶穿戴柱，單 MediaPipe 實例）")
-        else:
-            self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
+        self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
     def _stop_combined_worker(self) -> None:
         if self._combined_worker is not None:
@@ -2438,37 +2339,6 @@ class MainWindow(QMainWindow):
             return metrics
         version = self._load_rppg_calibration_version()
         return apply_calibration_to_metrics(metrics, version)
-
-    def _on_open_rppg_calibration_dialog(self) -> None:
-        if self._calibration_dialog is None:
-            self._calibration_dialog = RppgCalibrationDialog(
-                self._rppg_calibration_store,
-                self,
-            )
-            self._calibration_dialog.version_changed.connect(
-                self._on_rppg_calibration_version_changed
-            )
-            self._calibration_dialog.destroyed.connect(self._on_calibration_dialog_destroyed)
-        self._calibration_dialog.show()
-        self._calibration_dialog.raise_()
-        self._calibration_dialog.activateWindow()
-
-    def _on_calibration_dialog_destroyed(self) -> None:
-        self._calibration_dialog = None
-
-    def _on_rppg_calibration_version_changed(self, version_id: str, version_name: str) -> None:
-        self._append_log(f"[校準] 已切換 rPPG 版本：{version_id} ({version_name})")
-        try:
-            version = self._rppg_calibration_store.get_version(version_id)
-        except Exception:
-            return
-        if version.is_identity:
-            self.statusBar().showMessage("rPPG 心率：使用未校準原始值", 5000)
-        else:
-            self.statusBar().showMessage(
-                f"rPPG 心率校準：{version_name}  offset {version.params.bpm_offset:+.1f} BPM",
-                5000,
-            )
 
     def _on_rppg_metrics(self, metrics: object) -> None:
         if self._combined_worker is None:
@@ -2645,17 +2515,11 @@ class MainWindow(QMainWindow):
                 return
             # Start the appropriate analysis worker(s) based on checkbox state
             want_rppg, want_fatigue = self._analysis_needed()
-            if self._is_watch_mode() and want_fatigue:
-                self._ensure_watch_source(True)
-                self._start_combined_worker(enable_rppg=False)
-            elif want_rppg and want_fatigue:
-                self._ensure_watch_source(False)
+            if want_rppg and want_fatigue:
                 self._start_combined_worker(enable_rppg=True)
             elif want_rppg:
-                self._ensure_watch_source(False)
                 self._start_rppg_worker()
             elif want_fatigue:
-                self._ensure_watch_source(False)
                 self._start_fatigue_worker()
             self._ensure_belt_calibration()   # rPPG 運行時視勾選啟動背景校準
             self._sync_overlay_visibility()
@@ -2675,7 +2539,6 @@ class MainWindow(QMainWindow):
             if self._belt_calibrator is not None:
                 self._stop_belt_calibration()   # 停止前先存本次 session 校準版本
             self._stop_camera_worker()
-            self._ensure_watch_source(False)
             self._sync_overlay_visibility()
             self._append_log("■ 管線停止。")
             if self._recording:
@@ -2922,8 +2785,7 @@ class MainWindow(QMainWindow):
         if self._belt_calibrator is not None:
             self._stop_belt_calibration()   # 存本次 session 校準版本
         self._belt_ui_timer.stop()
-        self._watch_runtime.stop_belt()
-        self._watch_runtime.stop()
+        self._belt_runtime.stop_belt()
         self._stop_web_server()
         self._stop_recording()
         self._stop_camera_worker()
