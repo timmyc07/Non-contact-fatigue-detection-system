@@ -258,7 +258,12 @@ class FatigueFuser:
         return pillar, stress_s, bpm_s, sqi_w
 
     def _watch_sub_score(self, w: "WatchMetrics") -> tuple[float, float, float, float, float]:
-        """Returns (pillar_score, bpm_score, motion_score, imu_gate, hrv_score)."""
+        """Returns (pillar_score, bpm_score, motion_score, imu_gate, hrv_score).
+
+        NOTE: 目前為死碼——watch 模式的 update() 直接內聯呼叫 _rppg_sub_score，
+        並未使用本方法。此外 line 270 的 ``hrv_ready == bool(getattr(w, "hrv_ready", False))``
+        兩側同源、恆為 True，條件寫錯，重新啟用前需先修正該分支邏輯。
+        """
         cfg = self.cfg
         bpm_s = float(getattr(w, "bpm_score", 0.0) or 0.0)
         motion_s = float(getattr(w, "motion_score", 0.0) or 0.0)

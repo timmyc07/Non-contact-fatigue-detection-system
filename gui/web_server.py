@@ -68,6 +68,22 @@ def format_web_dashboard_urls(
     return urls
 
 
+def _build_allowed_origins(host: str, port: int) -> list[str]:
+    """Socket.IO 允許連線的 Origin 白名單。
+
+    本機一律允許；僅在 LAN 模式（host 綁非 loopback）時再加入各 LAN IPv4，
+    避免使用萬用字元 ``*`` 讓任意惡意網頁連上本機竊取即時生理資料。
+    以主機 IP 連線（README 建議方式）仍可正常運作；若以主機名稱連線則需自行加入。
+    """
+    origins = [
+        f"http://127.0.0.1:{port}",
+        f"http://localhost:{port}",
+    ]
+    if host not in ("127.0.0.1", "localhost", ""):
+        origins.extend(f"http://{ip}:{port}" for ip in get_lan_ipv4_addresses())
+    return origins
+
+
 def _is_local_request() -> bool:
     remote_addr = (request.remote_addr or "").strip()
     if remote_addr in _LOCAL_HOSTS:
@@ -306,6 +322,7 @@ def create_app(
     recording_manager: Optional[Any] = None,
     get_latest_packet: Optional[Callable] = None,
     shutdown_token: Optional[str] = None,
+    allowed_origins: Optional[list[str]] = None,
 ) -> tuple[Flask, SocketIO]:
     _fb_client = FileBrowserClient()
     _fb_lock = threading.Lock()
@@ -335,12 +352,22 @@ def create_app(
 
     socketio = SocketIO(
         app,
-        cors_allowed_origins="*",
+        # 收斂 CORS：正式路徑（WebServerThread）會傳入本機 + LAN Origin 白名單；
+        # 未指定時（如直接建立/測試）才退回 "*"。
+        cors_allowed_origins=allowed_origins if allowed_origins is not None else "*",
         async_mode="threading",
         ping_timeout=60,
         ping_interval=25,
         max_http_buffer_size=10_000_000,
     )
+
+    @app.before_request
+    def _restrict_fb_endpoints() -> Optional[Response]:
+        # File Browser 端點操作伺服器端共用的遠端憑證；限制為本機發起，
+        # 避免同網段其他裝置盜用已登入的 File Browser session。
+        if request.path.startswith("/api/fb/") and not _is_local_request():
+            abort(403)
+        return None
 
     latest_packet_error_logged = False
 
@@ -840,6 +867,7 @@ class WebServerThread(threading.Thread):
             recording_manager,
             get_latest_packet,
             shutdown_token=self._shutdown_token,
+            allowed_origins=_build_allowed_origins(host, port),
         )
         self._stop_flag = threading.Event()
         self._stopped_event = threading.Event()
