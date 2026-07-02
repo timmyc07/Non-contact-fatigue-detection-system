@@ -86,7 +86,7 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 
 手錶（watch）路徑為選配的 HR 參考來源：`rppg/watch_*.py` + `gui/watch_runtime.py`，僅在 watch 模式或 rPPG 校準時使用。
 
-心跳帶（belt）為 watch pillar 的第二種資料來源：`rppg/hr_belt_ble.py`（BLE Heart Rate Service `0x180D` / `0x2A37` 協定解析 + `HrBeltBleClient` 背景執行緒，bleak 為 `start()` 時才匯入的選配依賴）。GUI「心跳帶模式」（data=`belt`）與「手錶模式」共用 `WatchHrHub` → `compute_watch_physio` → `FatigueFuser（for_watch）` 下游路徑；差異僅在來源（BLE vs HTTP :8080）與 HRV 計算（心跳帶有實測 RR-Interval 時優先使用，無 RR 退回 60000/BPM 反推，與手錶路徑數值行為一致）。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。
+心跳帶（belt）為 watch pillar 的第二種資料來源：`rppg/hr_belt_ble.py`（BLE Heart Rate Service `0x180D` / `0x2A37` 協定解析 + `HrBeltBleClient` 背景執行緒，bleak 為 `start()` 時才匯入的選配依賴）。GUI「心跳帶模式」（data=`belt`）與「手錶模式」共用 `WatchHrHub` → `compute_watch_physio` → `FatigueFuser（for_watch）` 下游路徑；差異僅在來源（BLE vs HTTP :8080）與 HRV 計算（心跳帶有實測 RR-Interval 時優先使用，無 RR 退回 60000/BPM 反推，與手錶路徑數值行為一致）。裝置設定走 `config/hr_belt.json`（機器特定、不入版控，`load_hr_belt_config()` 容錯載入）；連線中超過 `HR_STALE_AFTER_SEC` 無有效心率由 `hr_is_stale()` 判定並在 GUI/dashboard 顯示警告；免 GUI 診斷用 `python -m scripts.hr_belt_monitor`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。
 
 ## 設定與校準檔（config/）
 

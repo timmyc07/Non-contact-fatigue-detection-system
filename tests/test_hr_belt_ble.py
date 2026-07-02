@@ -13,7 +13,11 @@ from rppg.hr_belt_ble import (
     HEART_RATE_SERVICE_UUID,
     HeartRateMeasurement,
     HrBeltBleClient,
+    HrBeltConfig,
+    HrBeltStatus,
     body_sensor_location_label,
+    hr_is_stale,
+    load_hr_belt_config,
     measurement_to_watch_sample,
     parse_battery_level,
     parse_heart_rate_measurement,
@@ -274,3 +278,139 @@ def test_belt_client_rejects_notifications_after_stop():
     client._on_battery_notification(None, bytearray([50]))
     assert hub.latest() is None
     assert client.status().battery_level is None
+
+
+# ── 設定檔載入（config/hr_belt.json）────────────────────────────────────────
+
+def test_load_config_missing_file_returns_defaults(tmp_path):
+    cfg = load_hr_belt_config(tmp_path / "nope.json")
+    assert cfg == HrBeltConfig()
+    assert cfg.name_prefix == "R+"
+    assert cfg.address == ""
+
+
+def test_load_config_full_file(tmp_path):
+    path = tmp_path / "hr_belt.json"
+    path.write_text(
+        '{"name_prefix": "Polar", "address": " C1:3B:74:B8:F7:40 ",'
+        ' "scan_timeout_sec": 10, "reconnect_delay_sec": 5.5}',
+        encoding="utf-8",
+    )
+    cfg = load_hr_belt_config(path)
+    assert cfg.name_prefix == "Polar"
+    assert cfg.address == "C1:3B:74:B8:F7:40"  # 前後空白應被去除
+    assert cfg.scan_timeout_sec == 10.0
+    assert cfg.reconnect_delay_sec == 5.5
+
+
+def test_load_config_partial_file_keeps_defaults(tmp_path):
+    path = tmp_path / "hr_belt.json"
+    path.write_text('{"address": "AA:BB:CC:DD:EE:FF"}', encoding="utf-8")
+    cfg = load_hr_belt_config(path)
+    assert cfg.address == "AA:BB:CC:DD:EE:FF"
+    assert cfg.name_prefix == "R+"
+    assert cfg.scan_timeout_sec == 6.0
+    assert cfg.reconnect_delay_sec == 3.0
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["not json{", "[1, 2, 3]", '"just a string"'],
+)
+def test_load_config_invalid_content_returns_defaults(tmp_path, content):
+    path = tmp_path / "hr_belt.json"
+    path.write_text(content, encoding="utf-8")
+    assert load_hr_belt_config(path) == HrBeltConfig()
+
+
+def test_load_config_bad_field_types_fall_back(tmp_path):
+    path = tmp_path / "hr_belt.json"
+    path.write_text(
+        '{"name_prefix": 123, "address": null,'
+        ' "scan_timeout_sec": "fast", "reconnect_delay_sec": -1}',
+        encoding="utf-8",
+    )
+    cfg = load_hr_belt_config(path)
+    assert cfg == HrBeltConfig()  # 全部欄位皆退回預設
+
+
+def test_load_config_bool_timeout_rejected(tmp_path):
+    # JSON true 雖可被 float() 轉為 1.0，仍應視為非數值退回預設
+    path = tmp_path / "hr_belt.json"
+    path.write_text('{"scan_timeout_sec": true}', encoding="utf-8")
+    assert load_hr_belt_config(path).scan_timeout_sec == 6.0
+
+
+def test_load_config_out_of_range_timeout_falls_back_to_default(tmp_path):
+    path = tmp_path / "hr_belt.json"
+    path.write_text('{"scan_timeout_sec": 999, "reconnect_delay_sec": 0.1}', encoding="utf-8")
+    cfg = load_hr_belt_config(path)
+    assert cfg.scan_timeout_sec == 6.0
+    assert cfg.reconnect_delay_sec == 3.0
+
+
+# ── 心率資料停滯（stale）判斷 ────────────────────────────────────────────────
+
+def test_hr_is_stale_only_when_connected_sample_too_old():
+    now = 10_000.0
+    old = HrBeltStatus(state="connected", last_sample_at=now - 6.0)
+    fresh = HrBeltStatus(state="connected", last_sample_at=now - 1.0)
+    assert hr_is_stale(old, now=now) is True
+    assert hr_is_stale(fresh, now=now) is False
+
+
+def test_hr_is_stale_false_when_no_sample_or_not_connected():
+    now = 10_000.0
+    waiting = HrBeltStatus(state="connected", last_sample_at=None)
+    scanning = HrBeltStatus(state="scanning", last_sample_at=now - 60.0)
+    assert hr_is_stale(waiting, now=now) is False
+    assert hr_is_stale(scanning, now=now) is False
+
+
+def test_hr_is_stale_respects_custom_max_age():
+    now = 10_000.0
+    st = HrBeltStatus(state="connected", last_sample_at=now - 3.0)
+    assert hr_is_stale(st, now=now, max_age_sec=2.0) is True
+    assert hr_is_stale(st, now=now, max_age_sec=4.0) is False
+
+
+def test_belt_client_valid_notification_updates_last_sample_at():
+    client = HrBeltBleClient(WatchHrHub())
+    assert client.status().last_sample_at is None
+    before = time.time()
+    client._on_hr_notification(None, bytearray([0x00, 72]))
+    st = client.status()
+    assert st.last_sample_at is not None
+    assert st.last_sample_at >= before
+
+
+def test_belt_client_zero_bpm_notification_keeps_last_sample_at():
+    client = HrBeltBleClient(WatchHrHub())
+    client._on_hr_notification(None, bytearray([0x00, 72]))
+    stamp = client.status().last_sample_at
+    client._on_hr_notification(None, bytearray([0x00, 0x00]))
+    st = client.status()
+    assert st.last_sample_at == stamp  # 無效樣本不得刷新停滯計時
+    assert st.bpm == 0
+
+
+# ── scripts/hr_belt_monitor 設定解析 ─────────────────────────────────────────
+
+def test_monitor_cli_args_default_to_builtin_config():
+    from scripts.hr_belt_monitor import _parse_args, _resolve_config
+
+    cfg = _resolve_config(_parse_args([]))
+    assert cfg == HrBeltConfig()
+
+
+def test_monitor_cli_args_override_defaults():
+    from scripts.hr_belt_monitor import _parse_args, _resolve_config
+
+    args = _parse_args(
+        ["--address", "C1:3B:74:B8:F7:40", "--scan-timeout", "12", "--name-prefix", ""]
+    )
+    cfg = _resolve_config(args)
+    assert cfg.address == "C1:3B:74:B8:F7:40"
+    assert cfg.scan_timeout_sec == 12.0
+    assert cfg.name_prefix == ""
+    assert cfg.reconnect_delay_sec == 3.0

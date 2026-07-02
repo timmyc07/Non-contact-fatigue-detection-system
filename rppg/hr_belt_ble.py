@@ -19,10 +19,12 @@ bleak 為選配依賴：模組匯入不需要 bleak，僅在 ``HrBeltBleClient.s
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from rppg.calibration_watch import WatchHrHub, WatchSample
@@ -60,6 +62,76 @@ _FLAG_RR_PRESENT = 0x10        # bit4：RR-Interval（uint16, 1/1024 s）存在
 # RR-Interval 物理上合理範圍（ms）；超出者視為雜訊丟棄。
 _RR_MIN_MS = 200.0
 _RR_MAX_MS = 3000.0
+
+# 心跳帶裝置設定檔（機器特定，不納入版控；不存在時使用預設值）。
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "hr_belt.json"
+
+# 連線中超過此秒數沒有有效心率樣本即視為資料停滯（GUI / dashboard 顯示警告）。
+HR_STALE_AFTER_SEC = 5.0
+
+
+@dataclass(frozen=True)
+class HrBeltConfig:
+    """心跳帶連線設定（來源：``config/hr_belt.json``，缺項用預設值）。"""
+
+    name_prefix: str = DEFAULT_NAME_PREFIX
+    address: str = ""
+    scan_timeout_sec: float = 6.0
+    reconnect_delay_sec: float = 3.0
+
+
+def _validated_float(value: Any, default: float, lo: float, hi: float, label: str) -> float:
+    """驗證設定數值；非數值或超出範圍時整組退回預設值（非夾取到邊界）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        logger.warning("hr_belt 設定 %s=%r 非數值，改用預設 %.1f", label, value, default)
+        return default
+    num = float(value)
+    if not (lo <= num <= hi):
+        logger.warning("hr_belt 設定 %s=%.2f 超出範圍 [%.1f, %.1f]，改用預設 %.1f", label, num, lo, hi, default)
+        return default
+    return num
+
+
+def load_hr_belt_config(path: Path | str | None = None) -> HrBeltConfig:
+    """讀取心跳帶設定檔；檔案不存在或內容不合法時退回預設值（不丟例外）。
+
+    支援欄位：``name_prefix``（str）、``address``（str，指定 MAC/UUID 時
+    跳過名稱比對）、``scan_timeout_sec``（1–60）、``reconnect_delay_sec``（0.5–60）。
+    """
+    cfg_path = DEFAULT_CONFIG_PATH if path is None else Path(path)
+    defaults = HrBeltConfig()
+    if not cfg_path.exists():
+        return defaults
+    try:
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("hr_belt 設定檔 %s 讀取失敗，改用預設值：%s", cfg_path, exc)
+        return defaults
+    if not isinstance(data, dict):
+        logger.warning("hr_belt 設定檔 %s 頂層須為 JSON object，改用預設值", cfg_path)
+        return defaults
+
+    name_prefix = data.get("name_prefix", defaults.name_prefix)
+    if not isinstance(name_prefix, str):
+        logger.warning("hr_belt 設定 name_prefix=%r 非字串，改用預設 %r", name_prefix, defaults.name_prefix)
+        name_prefix = defaults.name_prefix
+    address = data.get("address", defaults.address)
+    if not isinstance(address, str):
+        logger.warning("hr_belt 設定 address=%r 非字串，改用預設空值", address)
+        address = defaults.address
+
+    return HrBeltConfig(
+        name_prefix=name_prefix.strip(),
+        address=address.strip(),
+        scan_timeout_sec=_validated_float(
+            data.get("scan_timeout_sec", defaults.scan_timeout_sec),
+            defaults.scan_timeout_sec, 1.0, 60.0, "scan_timeout_sec",
+        ),
+        reconnect_delay_sec=_validated_float(
+            data.get("reconnect_delay_sec", defaults.reconnect_delay_sec),
+            defaults.reconnect_delay_sec, 0.5, 60.0, "reconnect_delay_sec",
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -228,7 +300,24 @@ class HrBeltStatus:
     notifications: int = 0
     last_error: str = ""
     connected_since: float | None = None
+    last_sample_at: float | None = None  # 最後一筆有效（BPM>0）樣本時間
     updated_at: float = field(default_factory=time.time)
+
+
+def hr_is_stale(
+    status: HrBeltStatus,
+    now: float | None = None,
+    max_age_sec: float = HR_STALE_AFTER_SEC,
+) -> bool:
+    """判斷「連線中但心率資料停滯」：已連線、曾收到有效樣本、且樣本過舊。
+
+    尚未收到任何樣本（``last_sample_at is None``）由「等待心率」狀態呈現，
+    不屬於停滯；非 connected 狀態一律回傳 False。
+    """
+    if status.state != "connected" or status.last_sample_at is None:
+        return False
+    current = time.time() if now is None else float(now)
+    return (current - status.last_sample_at) > max_age_sec
 
 
 class HrBeltBleClient:
@@ -372,7 +461,10 @@ class HrBeltBleClient:
             return
 
         while not self._stop_event.is_set():
-            self._set_status(state="scanning", bpm=0, rr_count=0, connected_since=None)
+            self._set_status(
+                state="scanning", bpm=0, rr_count=0,
+                connected_since=None, last_sample_at=None,
+            )
             device = await self._discover(BleakScanner)
             if self._stop_event.is_set():
                 break
@@ -502,6 +594,9 @@ class HrBeltBleClient:
                 sensor_contact_supported=measurement.sensor_contact_supported,
                 sensor_contact_detected=measurement.sensor_contact_detected,
                 notifications=self._status.notifications + 1,
+                last_sample_at=(
+                    sample.received_at if sample is not None else self._status.last_sample_at
+                ),
             )
         if sample is None:
             return
@@ -525,13 +620,18 @@ __all__ = [
     "BATTERY_SERVICE_UUID",
     "BODY_SENSOR_LOCATION_LABELS",
     "BODY_SENSOR_LOCATION_UUID",
+    "DEFAULT_CONFIG_PATH",
     "DEFAULT_NAME_PREFIX",
     "HEART_RATE_MEASUREMENT_UUID",
     "HEART_RATE_SERVICE_UUID",
+    "HR_STALE_AFTER_SEC",
     "HeartRateMeasurement",
     "HrBeltBleClient",
+    "HrBeltConfig",
     "HrBeltStatus",
     "body_sensor_location_label",
+    "hr_is_stale",
+    "load_hr_belt_config",
     "measurement_to_watch_sample",
     "parse_battery_level",
     "parse_heart_rate_measurement",

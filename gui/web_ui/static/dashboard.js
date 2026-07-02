@@ -242,8 +242,10 @@ function updateMetricsDisplay(m) {
             let text = beltStateMap[m.belt_state] || m.belt_state || '--';
             if (m.belt_state === 'connected' && m.belt_device_name) text = m.belt_device_name;
             if (m.belt_state === 'connected' && !m.belt_contact_ok) text += '（接觸不良）';
+            if (m.belt_state === 'connected' && m.belt_stale) text += '（無心率資料）';
+            const beltOk = m.belt_contact_ok && !m.belt_stale;
             beltEl.textContent = text;
-            beltEl.style.color = m.belt_state === 'connected' ? (m.belt_contact_ok ? '#22c55e' : '#f59e0b')
+            beltEl.style.color = m.belt_state === 'connected' ? (beltOk ? '#22c55e' : '#f59e0b')
                 : (m.belt_state === 'error' ? '#ef4444' : '#f59e0b');
         } else { beltEl.textContent = '--'; beltEl.style.color = '#94a3b8'; }
     }

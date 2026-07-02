@@ -6,7 +6,7 @@ import logging
 from typing import Callable
 
 from rppg.calibration_watch import WatchHrHub, WatchHrHttpServer
-from rppg.hr_belt_ble import DEFAULT_NAME_PREFIX, HrBeltBleClient, HrBeltStatus
+from rppg.hr_belt_ble import HrBeltBleClient, HrBeltConfig, HrBeltStatus
 from rppg.rppg_worker import RppgMetrics
 from rppg.watch_adapter import build_watch_rppg_metrics
 from rppg.watch_metrics import WatchMetrics, metrics_from_hub
@@ -53,17 +53,20 @@ class WatchRuntime:
     def belt_running(self) -> bool:
         return self._belt is not None and self._belt.running
 
-    def start_belt(
-        self,
-        name_prefix: str = DEFAULT_NAME_PREFIX,
-        address: str = "",
-    ) -> str:
+    def start_belt(self, config: HrBeltConfig | None = None) -> str:
         """啟動 BLE 心跳帶背景連線；成功回傳空字串，失敗回傳錯誤訊息。"""
         if self.belt_running:
             return ""
         if self._belt is not None:
             self._belt.stop()
-        self._belt = HrBeltBleClient(self.hub, name_prefix=name_prefix, address=address)
+        cfg = config if config is not None else HrBeltConfig()
+        self._belt = HrBeltBleClient(
+            self.hub,
+            name_prefix=cfg.name_prefix,
+            address=cfg.address,
+            scan_timeout=cfg.scan_timeout_sec,
+            reconnect_delay=cfg.reconnect_delay_sec,
+        )
         err = self._belt.start()
         if err:
             logger.error("心跳帶 BLE 啟動失敗：%s", err)

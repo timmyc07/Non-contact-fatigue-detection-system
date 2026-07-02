@@ -48,6 +48,7 @@ from gui.watch_runtime import WatchRuntime
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.rppg_calibration_dialog import RppgCalibrationDialog
 from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
+from rppg.hr_belt_ble import hr_is_stale, load_hr_belt_config
 from rppg.rppg_worker import RppgWorker
 from rppg.calibration import (
     CalibrationVersionStore,
@@ -1240,6 +1241,7 @@ class MainWindow(QMainWindow):
             "belt_contact_ok": bool(
                 belt_st.sensor_contact_detected or not belt_st.sensor_contact_supported
             ) if belt_st else False,
+            "belt_stale": bool(hr_is_stale(belt_st)) if belt_st else False,
             "fusion_state_zh": str(getattr(z, "level", "") or ""),
             "fusion_confidence": float(getattr(z, "score", 0.0) or 0.0),
             "head_pitch": float(getattr(f, "head_pitch", 0.0) or 0.0),
@@ -2029,13 +2031,19 @@ class MainWindow(QMainWindow):
                 self._append_log("■ 手錶 HTTP 停止（切換為心跳帶 BLE）")
             if not self._watch_runtime.belt_running:
                 self._watch_runtime.hub.clear()
-                err = self._watch_runtime.start_belt()
+                belt_cfg = load_hr_belt_config()
+                err = self._watch_runtime.start_belt(belt_cfg)
                 if err:
                     self._append_log(f"⚠ 心跳帶 BLE 啟動失敗：{err}")
                     self._lbl_watch_http.setText("心跳帶：啟動失敗")
                     self._belt_ui_timer.stop()
                     return
-                self._append_log("▶ 心跳帶 BLE 啟動（掃描標準 Heart Rate Service 裝置）")
+                target = (
+                    f"位址 {belt_cfg.address}" if belt_cfg.address
+                    else f"名稱前綴「{belt_cfg.name_prefix}」" if belt_cfg.name_prefix
+                    else "任何 Heart Rate Service 裝置"
+                )
+                self._append_log(f"▶ 心跳帶 BLE 啟動（掃描 {target}）")
             self._belt_ui_timer.start()
             self._update_belt_status_label()
             return
@@ -2073,7 +2081,11 @@ class MainWindow(QMainWindow):
         if st.state == "connected":
             name = st.device_name or st.device_address or "未知裝置"
             parts = [f"心跳帶：{name}"]
-            parts.append(f"{st.bpm} BPM" if st.bpm > 0 else "等待心率…")
+            if hr_is_stale(st):
+                age = time.time() - (st.last_sample_at or 0.0)
+                parts.append(f"⚠ {age:.0f} 秒無心率資料")
+            else:
+                parts.append(f"{st.bpm} BPM" if st.bpm > 0 else "等待心率…")
             if st.rr_count > 0:
                 parts.append(f"RR×{st.rr_count}")
             if st.battery_level is not None:

@@ -182,8 +182,31 @@ rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等
 - 協定：Heart Rate Service `0x180D`，訂閱 Heart Rate Measurement `0x2A37` notification 解析 BPM 與 RR-Interval（1/1024 秒解析度），並 best-effort 讀取電量 `0x2A19` 與配戴位置 `0x2A38`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`（RHYTHM+2.0 / R+2.0 2248）。
 - 裝置挑選：優先連線名稱以 `R+` 開頭的裝置，否則挑選廣播 Heart Rate Service 且訊號最強者；斷線會自動重新掃描連線。
 - HRV：心跳帶回報實測 RR-Interval 時直接以 RR 計算 HRV（精度優於手錶模式以 BPM 反推）；無 RR 時退回 BPM 反推，行為與手錶模式一致。
-- 可視化：GUI 狀態列顯示連線狀態／BPM／RR 數／電量／接觸狀態；Web dashboard「生理壓力指標」卡片顯示生理來源與心跳帶狀態、電量。
+- 可視化：GUI 狀態列顯示連線狀態／BPM／RR 數／電量／接觸狀態；Web dashboard「生理壓力指標」卡片顯示生理來源與心跳帶狀態、電量。連線中若超過 5 秒沒有有效心率，GUI 與 dashboard 會顯示「無心率資料」警告（裝置可能未正確配戴）。
 - 使用流程：開啟心跳帶並穿戴 → 模式選「心跳帶模式」→ 按「開始」。狀態列顯示「掃描中… → 已連線」後即開始融合。
+
+裝置設定（選配）：建立 `config/hr_belt.json`（機器特定、不納入版控）可指定目標裝置與掃描參數，GUI 每次啟動心跳帶時重新讀取：
+
+```json
+{
+  "name_prefix": "R+",
+  "address": "C1:3B:74:B8:F7:40",
+  "scan_timeout_sec": 6,
+  "reconnect_delay_sec": 3
+}
+```
+
+`address` 指定 BLE 位址時直接精確比對（跳過名稱比對，適合現場有多條心跳帶時鎖定特定裝置）；欄位皆可省略，省略時用預設值。
+
+免 GUI 連線診斷（驗證硬體與 BLE 環境，與 GUI 共用同一連線元件）：
+
+```powershell
+.venv\Scripts\python -m scripts.hr_belt_monitor                     # 預設掃描 R+ 前綴
+.venv\Scripts\python -m scripts.hr_belt_monitor --address C1:3B:74:B8:F7:40 --duration 60
+.venv\Scripts\python -m scripts.hr_belt_monitor --use-config        # 沿用 config/hr_belt.json
+```
+
+即時列印每筆 BPM／RR-Interval、狀態轉換（掃描中→已連線→重連中）、電量與接觸不良警告；未收到任何心率 notification 時以非零 exit code 結束。
 
 On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
 ```bash

@@ -92,6 +92,7 @@ docs/images/
 # Secrets / local config
 .env
 config/mediapipe_calibration.json
+config/hr_belt.json
 
 # Keep specific docs if explicitly desired (example whitelist already in file)
 # !docs/rppg_technical_report.md
