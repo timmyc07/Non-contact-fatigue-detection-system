@@ -826,6 +826,7 @@ class GazeTrackingModule:
         self._prev_gaze_t: Optional[float] = None
         self._fixation_start: Optional[float] = None
         self._gaze_fixed_start: Optional[float] = None
+        self._gaze_track_start: Optional[float] = None
         # outputs
         self.gaze_x              = 0.0
         self.gaze_y              = 0.0
@@ -893,14 +894,19 @@ class GazeTrackingModule:
         self._prev_gaze   = (gx, gy)
         self._prev_gaze_t = t_now
 
-        # Saccade frequency (per minute, 60-s window)
+        # Saccade frequency (saccades per minute over the observed window,
+        # capped at saccade_window_sec). Normalise by how long we have been
+        # observing, not by the oldest in-window saccade: the latter made a
+        # single recent saccade divide by ~0 and report tens of thousands/min,
+        # which polluted records and masked the low-saccade fatigue signal.
+        if self._gaze_track_start is None:
+            self._gaze_track_start = t_now
         s_cutoff = t_now - p.saccade_window_sec
         while self._saccade_times and self._saccade_times[0] < s_cutoff:
             self._saccade_times.popleft()
-        elapsed_sac = min(t_now - (self._saccade_times[0]
-                                   if self._saccade_times else t_now) + 1e-3,
+        elapsed_sac = min(max(t_now - self._gaze_track_start, 1.0),
                           p.saccade_window_sec)
-        self.saccade_freq_pm = len(self._saccade_times) / (elapsed_sac / 60.0 + 1e-9)
+        self.saccade_freq_pm = len(self._saccade_times) / (elapsed_sac / 60.0)
 
         # ── V2: Fixation duration ─────────────────────────────────────────────
         if not self.is_saccade:

@@ -8,6 +8,11 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
+# Watch HR payloads are tiny JSON objects; cap the request body so an oversized
+# or malformed Content-Length cannot make rfile.read() exhaust memory. The /hr
+# receiver is unauthenticated, so this bound applies regardless of trust level.
+_MAX_HR_BODY_BYTES = 64 * 1024
+
 
 class WatchSample:
     __slots__ = (
@@ -143,8 +148,17 @@ def _make_handler(hub: WatchHrHub, on_received: Any | None = None, on_request: A
                 self.send_error(404)
                 self._emit_request(404)
                 return
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                self.send_error(400)
+                self._emit_request(400)
+                return
+            if length > _MAX_HR_BODY_BYTES:
+                self.send_error(413)
+                self._emit_request(413)
+                return
+            body = self.rfile.read(max(0, length))
             try:
                 data = json.loads(body.decode("utf-8"))
                 sample = parse_watch_hr_payload(data)

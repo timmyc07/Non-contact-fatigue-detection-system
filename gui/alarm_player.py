@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -125,13 +126,21 @@ class QtAlarmPlaybackBackend(QObject):
             try:
                 import winsound
 
-                winsound.Beep(
-                    _BUILTIN_BEEP_FREQ.get(scenario, 800),
-                    _BUILTIN_BEEP_MS,
-                )
+                freq = _BUILTIN_BEEP_FREQ.get(scenario, 800)
+
+                # winsound.Beep is synchronous (blocks _BUILTIN_BEEP_MS). This runs
+                # on the GUI thread via the metrics signal, so play off-thread to
+                # avoid freezing the UI during the beep.
+                def _beep() -> None:
+                    try:
+                        winsound.Beep(freq, _BUILTIN_BEEP_MS)
+                    except Exception as exc:
+                        logger.debug("winsound.Beep failed: %s", exc)
+
+                threading.Thread(target=_beep, daemon=True).start()
                 return
             except Exception as exc:
-                logger.debug("winsound.Beep failed: %s", exc)
+                logger.debug("winsound.Beep dispatch failed: %s", exc)
         from PySide6.QtWidgets import QApplication
 
         app = QApplication.instance()

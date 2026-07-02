@@ -252,9 +252,12 @@ class CameraStreamWorker(QObject):
             _tick_fps()
             _emit_frame(frame)
             # Feed any attached BGR consumers (rPPG / fatigue workers) non-blocking.
+            # Snapshot the set first: the GUI thread may attach/detach queues while
+            # this loop iterates, which would otherwise raise
+            # "set changed size during iteration" and kill run() before cap.release().
             if self._bgr_queues:
                 payload = (time.perf_counter(), frame.copy())
-                for q in self._bgr_queues:
+                for q in tuple(self._bgr_queues):
                     put_latest(q, payload)
 
         try:

@@ -19,6 +19,7 @@ Enable/disable each sub-pipeline at construction time:
 
 from __future__ import annotations
 
+import logging
 import queue
 import time
 from typing import Optional, Callable
@@ -35,6 +36,8 @@ from mediapipe.tasks.python import vision as _mp_vision
 _HAS_MP = True
 _HAS_SCIPY = True
 _ANNOTATED_PREVIEW_MAX_FPS = 30.0
+
+log = logging.getLogger(__name__)
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from .frame_queue import get_latest
@@ -193,121 +196,125 @@ class CombinedWorker(QObject):
                 except queue.Empty:
                     continue
 
-                if t_origin is None:
-                    t_origin = ts
-
-                ts_ms      = max(ts_ms_prev + 1, int((ts - t_origin) * 1000))
-                ts_ms_prev = ts_ms
-
-                rgb    = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                mp_img = mp.Image(
-                    image_format=mp.ImageFormat.SRGB,
-                    data=np.ascontiguousarray(rgb),
-                )
-
                 try:
-                    result = landmarker.detect_for_video(mp_img, ts_ms)
-                except Exception:
-                    continue
+                    if t_origin is None:
+                        t_origin = ts
 
-                blendshapes = result.face_blendshapes[0] if result.face_blendshapes else None
+                    ts_ms      = max(ts_ms_prev + 1, int((ts - t_origin) * 1000))
+                    ts_ms_prev = ts_ms
 
-                has_face = bool(result.face_landmarks)
-                if has_face != last_face:
-                    self.face_detected.emit(has_face)
-                    last_face = has_face
+                    rgb    = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    mp_img = mp.Image(
+                        image_format=mp.ImageFormat.SRGB,
+                        data=np.ascontiguousarray(rgb),
+                    )
 
-                annotated = bgr.copy()
-
-                r_metrics: Optional[RppgMetrics]    = None
-                f_metrics: Optional[FatigueMetrics] = None
-
-                if watch_mode and self._watch_rppg_loader is not None:
                     try:
-                        r_metrics = self._watch_rppg_loader()
+                        result = landmarker.detect_for_video(mp_img, ts_ms)
                     except Exception:
-                        r_metrics = RppgMetrics(face_detected=False, physio_source="watch")
-                    self.rppg_metrics_ready.emit(r_metrics)
+                        continue
 
-                if has_face:
-                    lm       = result.face_landmarks[0]
-                    h_px, w_px = bgr.shape[:2]
-                    transform_matrix = (
-                        result.facial_transformation_matrixes[0]
-                        if result.facial_transformation_matrixes else None
-                    )
+                    blendshapes = result.face_blendshapes[0] if result.face_blendshapes else None
 
-                    # ── Step 1: Fatigue annotations (drawn first, underneath rPPG ROI)
-                    if fatigue_engine is not None:
-                        f_metrics = fatigue_engine.step(lm, w_px, h_px, ts, blendshapes=blendshapes)
-                        f_metrics.face_detected = True
-                        annotated = draw_fatigue_annotations(annotated, lm, f_metrics)
-                        self.fatigue_metrics_ready.emit(f_metrics)
+                    has_face = bool(result.face_landmarks)
+                    if has_face != last_face:
+                        self.face_detected.emit(has_face)
+                        last_face = has_face
 
-                    # ── Step 2: rPPG ROI extraction + engine (draws on top)
-                    if rppg_engine is not None:
-                        assert roi_tracker is not None
-                        sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
-                            bgr, lm, transform_matrix, roi_tracker, self._tuning
-                        )
-                        draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
-                        if sample is not None:
-                            rppg_engine.push(ts, sample[0], sample[1], sample[2])
-                        r_metrics = rppg_engine.compute(
-                            ts,
-                            bgr,
-                            lm,
-                            transform_matrix=transform_matrix,
-                            roi_valid_count=roi_valid_count,
-                            roi_weights=roi_weights,
-                            roi_tracker=roi_tracker,
-                            tuning=self._tuning,
-                        )
-                        r_metrics.roi_valid_count = roi_valid_count
-                        r_metrics.face_detected = True
-                        if self._live_feed_writer is not None:
-                            self._live_feed_writer(r_metrics)
-                        if self._calibration_loader is not None:
-                            try:
-                                version = self._calibration_loader()
-                                if version is not None:
-                                    r_metrics = apply_calibration_to_metrics(r_metrics, version)
-                            except Exception:
-                                pass
+                    annotated = bgr.copy()
+
+                    r_metrics: Optional[RppgMetrics]    = None
+                    f_metrics: Optional[FatigueMetrics] = None
+
+                    if watch_mode and self._watch_rppg_loader is not None:
+                        try:
+                            r_metrics = self._watch_rppg_loader()
+                        except Exception:
+                            r_metrics = RppgMetrics(face_detected=False, physio_source="watch")
                         self.rppg_metrics_ready.emit(r_metrics)
 
-                    # ── Composite status line ─────────────────────────────────
-                    self._emit_status(f_metrics, r_metrics)
-                else:
-                    # No face — reset both engines
-                    if fatigue_engine is not None:
-                        f_metrics = fatigue_engine.on_no_face()
-                        self.fatigue_metrics_ready.emit(f_metrics)
-                    if rppg_engine is not None:
-                        rppg_engine.reset()
-                        if roi_tracker is not None:
-                            roi_tracker.reset()
-                        r_metrics = RppgMetrics(face_detected=False)
-                        if self._live_feed_writer is not None:
-                            self._live_feed_writer(r_metrics)
-                        self.rppg_metrics_ready.emit(r_metrics)
-                    self.status_changed.emit("未偵測到臉部…")
+                    if has_face:
+                        lm       = result.face_landmarks[0]
+                        h_px, w_px = bgr.shape[:2]
+                        transform_matrix = (
+                            result.facial_transformation_matrixes[0]
+                            if result.facial_transformation_matrixes else None
+                        )
 
-                # ── Fused fatigue score (every frame) ────────────────────────
-                fused = self._fuser.update(rppg=r_metrics, fatigue=f_metrics)
-                self.fused_score_ready.emit(fused)
+                        # ── Step 1: Fatigue annotations (drawn first, underneath rPPG ROI)
+                        if fatigue_engine is not None:
+                            f_metrics = fatigue_engine.step(lm, w_px, h_px, ts, blendshapes=blendshapes)
+                            f_metrics.face_detected = True
+                            annotated = draw_fatigue_annotations(annotated, lm, f_metrics)
+                            self.fatigue_metrics_ready.emit(f_metrics)
 
-                if ts - last_preview_emit >= preview_emit_interval:
-                    last_preview_emit = ts
-                    rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                    rgb_ann = np.ascontiguousarray(rgb_ann)
-                    fh, fw  = rgb_ann.shape[:2]
-                    qimg    = QImage(
-                        rgb_ann.data, fw, fh,
-                        rgb_ann.strides[0],
-                        QImage.Format.Format_RGB888,
-                    )
-                    self.frame_annotated.emit(qimg.copy())
+                        # ── Step 2: rPPG ROI extraction + engine (draws on top)
+                        if rppg_engine is not None:
+                            assert roi_tracker is not None
+                            sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
+                                bgr, lm, transform_matrix, roi_tracker, self._tuning
+                            )
+                            draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
+                            if sample is not None:
+                                rppg_engine.push(ts, sample[0], sample[1], sample[2])
+                            r_metrics = rppg_engine.compute(
+                                ts,
+                                bgr,
+                                lm,
+                                transform_matrix=transform_matrix,
+                                roi_valid_count=roi_valid_count,
+                                roi_weights=roi_weights,
+                                roi_tracker=roi_tracker,
+                                tuning=self._tuning,
+                            )
+                            r_metrics.roi_valid_count = roi_valid_count
+                            r_metrics.face_detected = True
+                            if self._live_feed_writer is not None:
+                                self._live_feed_writer(r_metrics)
+                            if self._calibration_loader is not None:
+                                try:
+                                    version = self._calibration_loader()
+                                    if version is not None:
+                                        r_metrics = apply_calibration_to_metrics(r_metrics, version)
+                                except Exception:
+                                    pass
+                            self.rppg_metrics_ready.emit(r_metrics)
+
+                        # ── Composite status line ─────────────────────────────────
+                        self._emit_status(f_metrics, r_metrics)
+                    else:
+                        # No face — reset both engines
+                        if fatigue_engine is not None:
+                            f_metrics = fatigue_engine.on_no_face()
+                            self.fatigue_metrics_ready.emit(f_metrics)
+                        if rppg_engine is not None:
+                            rppg_engine.reset()
+                            if roi_tracker is not None:
+                                roi_tracker.reset()
+                            r_metrics = RppgMetrics(face_detected=False)
+                            if self._live_feed_writer is not None:
+                                self._live_feed_writer(r_metrics)
+                            self.rppg_metrics_ready.emit(r_metrics)
+                        self.status_changed.emit("未偵測到臉部…")
+
+                    # ── Fused fatigue score (every frame) ────────────────────────
+                    fused = self._fuser.update(rppg=r_metrics, fatigue=f_metrics)
+                    self.fused_score_ready.emit(fused)
+
+                    if ts - last_preview_emit >= preview_emit_interval:
+                        last_preview_emit = ts
+                        rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                        rgb_ann = np.ascontiguousarray(rgb_ann)
+                        fh, fw  = rgb_ann.shape[:2]
+                        qimg    = QImage(
+                            rgb_ann.data, fw, fh,
+                            rgb_ann.strides[0],
+                            QImage.Format.Format_RGB888,
+                        )
+                        self.frame_annotated.emit(qimg.copy())
+                except Exception:
+                    log.exception("每幀處理發生未預期例外，略過此幀")
+                    continue
 
         self.finished.emit()
 

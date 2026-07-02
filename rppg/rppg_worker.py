@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import queue
 import time
 import urllib.request
@@ -42,6 +43,8 @@ from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rpp
 _HAS_MP = True
 _HAS_SCIPY = True
 _ANNOTATED_PREVIEW_MAX_FPS = 30.0
+
+log = logging.getLogger(__name__)
 
 # ── ROI landmark indices (MediaPipe 478-point face mesh) ────────────────────
 FOREHEAD_ROI_IDX  = [107, 66, 69, 109, 10, 338, 299, 296, 336, 9]
@@ -539,8 +542,11 @@ def roi_mean_bgr(
     indices: list[int],
     blur_ksize: int = 5,
     transform_matrix: Any | None = None,
+    tuning: MediaPipeTuning | None = None,
 ) -> Optional[tuple[float, float, float]]:
-    pts = roi_points(frame_bgr, lm, indices, "", transform_matrix=transform_matrix)
+    # Pass tuning through: roi_points() otherwise falls back to
+    # load_mediapipe_tuning(), which re-reads the JSON from disk on every call.
+    pts = roi_points(frame_bgr, lm, indices, "", transform_matrix=transform_matrix, tuning=tuning)
     return roi_mean_from_points(frame_bgr, pts, blur_ksize)
 
 
@@ -1005,7 +1011,7 @@ class RppgEngine:
         self._prev_face_center = face_center
         self._prev_face_center_t = t_now
 
-        br = roi_mean_bgr(frame_bgr, lm, FOREHEAD_ROI_IDX, transform_matrix=transform_matrix)
+        br = roi_mean_bgr(frame_bgr, lm, FOREHEAD_ROI_IDX, transform_matrix=transform_matrix, tuning=tuning)
         brightness = float(br[1]) if br else -1.0
 
         if n < int(fs * 4):
@@ -1306,90 +1312,94 @@ class RppgWorker(QObject):
                 except queue.Empty:
                     continue
 
-                if t_origin is None:
-                    t_origin = ts
-
-                # Monotonically increasing ms timestamp required by MediaPipe VIDEO mode
-                ts_ms = max(ts_ms_prev + 1, int((ts - t_origin) * 1000))
-                ts_ms_prev = ts_ms
-
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                mp_img = mp.Image(
-                    image_format=mp.ImageFormat.SRGB,
-                    data=np.ascontiguousarray(rgb),
-                )
-
                 try:
-                    result = landmarker.detect_for_video(mp_img, ts_ms)
-                except Exception:
-                    continue
+                    if t_origin is None:
+                        t_origin = ts
 
-                has_face = bool(result.face_landmarks)
-                if has_face != last_face:
-                    self.face_detected.emit(has_face)
-                    last_face = has_face
+                    # Monotonically increasing ms timestamp required by MediaPipe VIDEO mode
+                    ts_ms = max(ts_ms_prev + 1, int((ts - t_origin) * 1000))
+                    ts_ms_prev = ts_ms
 
-                annotated = bgr.copy()
-                metrics: RppgMetrics
-
-                if has_face:
-                    lm = result.face_landmarks[0]
-                    transform_matrix = (
-                        result.facial_transformation_matrixes[0]
-                        if result.facial_transformation_matrixes else None
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    mp_img = mp.Image(
+                        image_format=mp.ImageFormat.SRGB,
+                        data=np.ascontiguousarray(rgb),
                     )
-                    roll_deg, yaw_deg, pitch_deg, _scale = _pose_from_matrix(
-                        transform_matrix, lm, bgr.shape[1], bgr.shape[0]
-                    )
-                    sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
-                        bgr, lm, transform_matrix, roi_tracker, self._tuning
-                    )
-                    draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
-                    if sample is not None:
-                        engine.push(ts, sample[0], sample[1], sample[2])
 
-                    metrics = engine.compute(
-                        ts,
-                        bgr,
-                        lm,
-                        transform_matrix=transform_matrix,
-                        roi_valid_count=roi_valid_count,
-                        roi_weights=roi_weights,
-                        roi_tracker=roi_tracker,
-                        tuning=self._tuning,
-                    )
-                    metrics.roi_valid_count = roi_valid_count
-                    metrics.face_detected = True
+                    try:
+                        result = landmarker.detect_for_video(mp_img, ts_ms)
+                    except Exception:
+                        continue
 
-                    # Emit status
-                    if metrics.warmup_progress < 1.0:
-                        pct = int(metrics.warmup_progress * 100)
-                        self.status_changed.emit(f"暖機中… {pct}%")
+                    has_face = bool(result.face_landmarks)
+                    if has_face != last_face:
+                        self.face_detected.emit(has_face)
+                        last_face = has_face
+
+                    annotated = bgr.copy()
+                    metrics: RppgMetrics
+
+                    if has_face:
+                        lm = result.face_landmarks[0]
+                        transform_matrix = (
+                            result.facial_transformation_matrixes[0]
+                            if result.facial_transformation_matrixes else None
+                        )
+                        roll_deg, yaw_deg, pitch_deg, _scale = _pose_from_matrix(
+                            transform_matrix, lm, bgr.shape[1], bgr.shape[0]
+                        )
+                        sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
+                            bgr, lm, transform_matrix, roi_tracker, self._tuning
+                        )
+                        draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
+                        if sample is not None:
+                            engine.push(ts, sample[0], sample[1], sample[2])
+
+                        metrics = engine.compute(
+                            ts,
+                            bgr,
+                            lm,
+                            transform_matrix=transform_matrix,
+                            roi_valid_count=roi_valid_count,
+                            roi_weights=roi_weights,
+                            roi_tracker=roi_tracker,
+                            tuning=self._tuning,
+                        )
+                        metrics.roi_valid_count = roi_valid_count
+                        metrics.face_detected = True
+
+                        # Emit status
+                        if metrics.warmup_progress < 1.0:
+                            pct = int(metrics.warmup_progress * 100)
+                            self.status_changed.emit(f"暖機中… {pct}%")
+                        else:
+                            conf_zh = {"LOW": "低", "MEDIUM": "中", "HIGH": "高"}.get(
+                                metrics.hrv_confidence, metrics.hrv_confidence
+                            )
+                            self.status_changed.emit(
+                                f"❤  {metrics.bpm:.0f} BPM  │  HRV 信心：{conf_zh}"
+                            )
                     else:
-                        conf_zh = {"LOW": "低", "MEDIUM": "中", "HIGH": "高"}.get(
-                            metrics.hrv_confidence, metrics.hrv_confidence
-                        )
-                        self.status_changed.emit(
-                            f"❤  {metrics.bpm:.0f} BPM  │  HRV 信心：{conf_zh}"
-                        )
-                else:
-                    engine.reset()
-                    roi_tracker.reset()
-                    metrics = RppgMetrics(face_detected=False)
-                    self.status_changed.emit("未偵測到臉部…")
+                        engine.reset()
+                        roi_tracker.reset()
+                        metrics = RppgMetrics(face_detected=False)
+                        self.status_changed.emit("未偵測到臉部…")
 
-                self.metrics_ready.emit(metrics)
+                    self.metrics_ready.emit(metrics)
 
-                if ts - last_preview_emit >= preview_emit_interval:
-                    last_preview_emit = ts
-                    rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                    rgb_ann = np.ascontiguousarray(rgb_ann)
-                    fh, fw = rgb_ann.shape[:2]
-                    qimg = QImage(
-                        rgb_ann.data, fw, fh,
-                        rgb_ann.strides[0],
-                        QImage.Format.Format_RGB888,
-                    )
-                    self.frame_annotated.emit(qimg.copy())
+                    if ts - last_preview_emit >= preview_emit_interval:
+                        last_preview_emit = ts
+                        rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                        rgb_ann = np.ascontiguousarray(rgb_ann)
+                        fh, fw = rgb_ann.shape[:2]
+                        qimg = QImage(
+                            rgb_ann.data, fw, fh,
+                            rgb_ann.strides[0],
+                            QImage.Format.Format_RGB888,
+                        )
+                        self.frame_annotated.emit(qimg.copy())
+                except Exception:
+                    log.exception("每幀處理發生未預期例外，略過此幀")
+                    continue
 
         self.finished.emit()

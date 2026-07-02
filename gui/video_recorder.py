@@ -142,7 +142,9 @@ class VideoRecorderWorker(QObject):
                 )
                 arr = arr.reshape((height, img.bytesPerLine() // 3, 3))
                 frame = arr[:, :width, :]
-                frame = frame[:, :, ::-1]
+                # RGB→BGR via reversed view is non-contiguous; some cv2 builds
+                # require C-contiguous input for VideoWriter.write().
+                frame = np.ascontiguousarray(frame[:, :, ::-1])
 
             if not isinstance(frame, np.ndarray):
                 self.failed.emit("影像格式不支援，無法建立影片檔。")
