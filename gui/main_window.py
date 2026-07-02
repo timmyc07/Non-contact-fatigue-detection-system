@@ -50,10 +50,12 @@ from gui.rppg_calibration_dialog import RppgCalibrationDialog
 from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
 from rppg.hr_belt_ble import hr_is_stale, load_hr_belt_config
 from rppg.rppg_worker import RppgWorker
+from rppg.adaptive_calibration import CONF_LOW, OnlineBpmCalibrator
 from rppg.calibration import (
     CalibrationVersionStore,
     apply_calibration_to_metrics,
     effective_bpm,
+    metrics_to_feed_dict,
     write_live_feed,
 )
 from gui.video_recorder import VideoRecorderWorker
@@ -291,9 +293,15 @@ class MainWindow(QMainWindow):
         self._rppg_calibration_store = CalibrationVersionStore()
         self._calibration_dialog: RppgCalibrationDialog | None = None
         self._watch_runtime = WatchRuntime(port=8080)
+        # 心跳帶真值校準（背景）：心跳帶 HR 當參考，線上微調 rPPG BPM offset，
+        # 不進疲勞融合分數（見 _ensure_belt_calibration / OnlineBpmCalibrator）。
+        self._belt_calibrator: OnlineBpmCalibrator | None = None
+        # 記錄最後餵給校正器的 rPPG metrics 物件，避免 rPPG 凍結時把同一筆
+        # 樣本每秒重複計入而扭曲殘差（每次 rPPG 更新都是新物件，凍結則同物件）。
+        self._last_calib_fed_metrics: object | None = None
         self._belt_ui_timer = QTimer(self)
         self._belt_ui_timer.setInterval(1000)
-        self._belt_ui_timer.timeout.connect(self._update_belt_status_label)
+        self._belt_ui_timer.timeout.connect(self._tick_belt_calibration)
 
         self._build_menu()
         self._build_central()
@@ -503,10 +511,19 @@ class MainWindow(QMainWindow):
         self._chk_behavior = QCheckBox("行為警覺（頭部／哈欠／注視）")
         self._chk_behavior.setChecked(True)
         self._chk_stress = QCheckBox("壓力／HRV（心率估測）")
+        self._chk_belt_calib = QCheckBox("心跳帶真值校準（背景）")
+        self._chk_belt_calib.setToolTip(
+            "以 BLE 心跳帶（Scosche Rhythm+ 2.0 等標準 Heart Rate Service 裝置）的實測心率為"
+            "「真值參考」，在背景持續比對 rPPG 偵測到的心率，並以低增益慢速微調 rPPG 的 BPM"
+            "校正量，讓 rPPG 逐漸趨近真值。\n"
+            "心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞判斷。"
+            "需搭配「壓力／HRV」啟用 rPPG（非手錶模式）才會開始比對。"
+        )
         self._chk_lock = QCheckBox("Overlay 鎖定（穿透點擊）")
         self._chk_lock.setChecked(True)
         row_b.addWidget(self._chk_behavior)
         row_b.addWidget(self._chk_stress)
+        row_b.addWidget(self._chk_belt_calib)
         row_b.addWidget(self._chk_lock)
         row_b.addStretch(1)
         ctl.addLayout(row_b)
@@ -516,14 +533,10 @@ class MainWindow(QMainWindow):
         self._cmb_fatigue_mode = QComboBox()
         self._cmb_fatigue_mode.addItem("rPPG 模式（85% 行為 + 15% rPPG）", "rppg")
         self._cmb_fatigue_mode.addItem("手錶模式（70% 行為 + 30% 穿戴）", "watch")
-        self._cmb_fatigue_mode.addItem("心跳帶模式（70% 行為 + 30% 心跳帶 BLE）", "belt")
         self._cmb_fatigue_mode.setToolTip(
             "手錶模式會關閉 rPPG，改由手錶 HR／HRV／IMU 佔 30% 融合權重；"
             "HRV 由 PC 依手錶 BPM 時間序列估算（約需 8 筆以上樣本）。"
-            "請確認手錶 App 已指向本機 IP 且埠 8080 未被佔用。\n"
-            "心跳帶模式改用 BLE 直連標準 Heart Rate Service 心跳帶（如 R+2.0），"
-            "訂閱 2A37 notification 取得 BPM 與 RR-Interval，HRV 以實測 RR 計算，"
-            "融合權重與手錶模式相同。"
+            "請確認手錶 App 已指向本機 IP 且埠 8080 未被佔用。"
         )
         self._lbl_watch_http = QLabel("手錶 HTTP：停止")
         self._lbl_watch_http.setObjectName("hintLabel")
@@ -576,6 +589,7 @@ class MainWindow(QMainWindow):
         )
         # rPPG stress/HRV toggle — functional
         self._chk_stress.toggled.connect(self._on_stress_toggled)
+        self._chk_belt_calib.toggled.connect(self._on_belt_calib_toggled)
         self._cmb_fatigue_mode.currentIndexChanged.connect(self._on_fatigue_mode_changed)
 
         body_layout.addWidget(gb_ctl)
@@ -923,6 +937,7 @@ class MainWindow(QMainWindow):
                 (self._chk_lock, toggles.get("lock")),
                 (self._chk_behavior, toggles.get("behavior")),
                 (self._chk_stress, toggles.get("stress")),
+                (self._chk_belt_calib, toggles.get("belt_calib")),
                 (self._chk_auto_record, toggles.get("auto_record")),
             )
             for chk, val in checkboxes:
@@ -977,6 +992,7 @@ class MainWindow(QMainWindow):
                 "lock": self._chk_lock.isChecked(),
                 "behavior": self._chk_behavior.isChecked(),
                 "stress": self._chk_stress.isChecked(),
+                "belt_calib": self._chk_belt_calib.isChecked(),
                 "auto_record": self._chk_auto_record.isChecked(),
                 "fatigue_mode": self._fatigue_mode(),
             },
@@ -1165,7 +1181,15 @@ class MainWindow(QMainWindow):
         warmup_progress = float(getattr(r, "warmup_progress", 0.0) or 0.0) if r else 0.0
         perclos_pct = float(getattr(f, "perclos", 0.0) or 0.0) * 100.0 if f else 0.0
         from_watch = bool(getattr(r, "physio_source", "rppg") == "watch") if r else False
-        belt_st = self._watch_runtime.belt_status() if self._is_belt_source() else None
+        belt_st = self._watch_runtime.belt_status() if self._watch_runtime.belt_running else None
+        # 校準資訊僅在心跳帶已連線時視為 active（與 GUI 狀態列一致，避免掃描中
+        # 就顯示「校正 +0.0｜0 配對」）。
+        belt_connected = belt_st is not None and belt_st.state == "connected"
+        calib = (
+            self._belt_calibrator.state()
+            if self._belt_calibrator is not None and belt_connected
+            else None
+        )
 
         return {
             "timestamp": time.time(),
@@ -1242,6 +1266,14 @@ class MainWindow(QMainWindow):
                 belt_st.sensor_contact_detected or not belt_st.sensor_contact_supported
             ) if belt_st else False,
             "belt_stale": bool(hr_is_stale(belt_st)) if belt_st else False,
+            "calib_active": calib is not None,
+            "calib_offset_bpm": float(calib.offset_bpm) if calib else 0.0,
+            "calib_raw_residual_bpm": float(calib.raw_residual_bpm) if calib else 0.0,
+            "calib_residual_bpm": float(calib.corrected_residual_bpm) if calib else 0.0,
+            "calib_pairs_used": int(calib.pairs_used) if calib else 0,
+            "calib_confidence": str(calib.confidence) if calib else "",
+            "calib_converged": bool(calib.converged) if calib else False,
+            "calib_diverged": bool(calib.diverged) if calib else False,
             "fusion_state_zh": str(getattr(z, "level", "") or ""),
             "fusion_confidence": float(getattr(z, "score", 0.0) or 0.0),
             "head_pitch": float(getattr(f, "head_pitch", 0.0) or 0.0),
@@ -1999,11 +2031,8 @@ class MainWindow(QMainWindow):
         return str(data) if data else "rppg"
 
     def _is_watch_mode(self) -> bool:
-        """watch 家族模式（手錶 HTTP 或心跳帶 BLE）皆走 watch pillar 融合。"""
-        return self._fatigue_mode() in ("watch", "belt")
-
-    def _is_belt_source(self) -> bool:
-        return self._fatigue_mode() == "belt"
+        """手錶模式：關閉 rPPG，改由手錶 HTTP HR 走 watch pillar 融合。"""
+        return self._fatigue_mode() == "watch"
 
     def _apply_fatigue_mode_ui(self) -> None:
         watch = self._is_watch_mode()
@@ -2012,49 +2041,28 @@ class MainWindow(QMainWindow):
             self._chk_stress.blockSignals(True)
             self._chk_stress.setChecked(False)
             self._chk_stress.blockSignals(False)
+        # 心跳帶校準需要 rPPG，手錶模式下停用該勾選框（僅視覺提示，不改狀態值）。
+        self._chk_belt_calib.setEnabled(not watch)
 
     def _on_fatigue_mode_changed(self, _index: int = 0) -> None:
         watch = self._is_watch_mode()
         self._apply_fatigue_mode_ui()
-        labels = {"rppg": "rPPG 模式", "watch": "手錶模式", "belt": "心跳帶模式"}
+        labels = {"rppg": "rPPG 模式", "watch": "手錶模式"}
         self._append_log(f"[UI] 疲勞融合 → {labels.get(self._fatigue_mode(), 'rPPG 模式')}")
         if self._pipeline_running:
             self._ensure_watch_source(watch)
             self._restart_analysis_workers()
 
     def _ensure_watch_source(self, enabled: bool) -> None:
-        """依目前模式啟停 watch pillar 的資料來源（HTTP 手錶或 BLE 心跳帶）。"""
-        if enabled and self._is_belt_source():
-            if self._watch_runtime.running:
-                self._watch_runtime.stop()
-                self._watch_runtime.hub.clear()
-                self._append_log("■ 手錶 HTTP 停止（切換為心跳帶 BLE）")
-            if not self._watch_runtime.belt_running:
-                self._watch_runtime.hub.clear()
-                belt_cfg = load_hr_belt_config()
-                err = self._watch_runtime.start_belt(belt_cfg)
-                if err:
-                    self._append_log(f"⚠ 心跳帶 BLE 啟動失敗：{err}")
-                    self._lbl_watch_http.setText("心跳帶：啟動失敗")
-                    self._belt_ui_timer.stop()
-                    return
-                target = (
-                    f"位址 {belt_cfg.address}" if belt_cfg.address
-                    else f"名稱前綴「{belt_cfg.name_prefix}」" if belt_cfg.name_prefix
-                    else "任何 Heart Rate Service 裝置"
-                )
-                self._append_log(f"▶ 心跳帶 BLE 啟動（掃描 {target}）")
-            self._belt_ui_timer.start()
-            self._update_belt_status_label()
-            return
+        """啟停 watch pillar 的 HTTP 手錶來源（心跳帶校準走獨立背景路徑）。"""
         if enabled:
-            if self._watch_runtime.belt_running:
-                self._belt_ui_timer.stop()
-                self._watch_runtime.stop_belt()
-                self._append_log("■ 心跳帶 BLE 停止（切換為手錶 HTTP）")
+            # 進入手錶模式前，務必先停掉背景心跳帶校準：兩者共用同一個
+            # WatchHrHub，若心跳帶 client 還在推樣本，會在 hub.clear() 後、
+            # HTTP 啟動的空窗把心跳帶樣本混進手錶融合柱（污染疲勞分數）。
+            if self._belt_calibrator is not None:
+                self._stop_belt_calibration()
             if not self._watch_runtime.running:
-                # 無條件清空：避免先前來源（心跳帶）殘留樣本與 HTTP 樣本
-                # 在 90 秒 HRV 視窗內混算。
+                # 清空 hub 避免心跳帶校準殘留樣本與 HTTP 樣本在 HRV 視窗內混算。
                 self._watch_runtime.hub.clear()
                 err = self._watch_runtime.start()
                 if err:
@@ -2064,45 +2072,171 @@ class MainWindow(QMainWindow):
                 self._append_log(f"▶ 手錶 HTTP 監聽 :{self._watch_runtime.port}")
             self._lbl_watch_http.setText(f"手錶 HTTP：:{self._watch_runtime.port} 運行中")
             return
-        self._belt_ui_timer.stop()
-        if self._watch_runtime.belt_running:
-            self._watch_runtime.stop_belt()
-            self._append_log("■ 心跳帶 BLE 停止")
         if self._watch_runtime.running:
             self._watch_runtime.stop()
-        self._lbl_watch_http.setText("手錶／心跳帶：停止")
+        if self._belt_calibrator is None:
+            self._lbl_watch_http.setText("手錶／心跳帶：停止")
+
+    # ── 心跳帶真值校準（背景參考，不進疲勞分數）─────────────────────────────
+
+    def _rppg_active(self) -> bool:
+        """rPPG 是否正在產生 BPM（心跳帶校準的比對前提）。"""
+        want_rppg, _ = self._analysis_needed()
+        return want_rppg
+
+    def _on_belt_calib_toggled(self, checked: bool) -> None:
+        self._append_log(f"[UI] 心跳帶真值校準 → {'開啟' if checked else '關閉'}")
+        if checked and self._pipeline_running and not self._rppg_active():
+            self._append_log(
+                "⚠ 心跳帶校準需要 rPPG：請勾選「壓力／HRV」且非手錶模式，rPPG 啟用後才會開始比對。"
+            )
+        self._ensure_belt_calibration()
+
+    def _ensure_belt_calibration(self) -> None:
+        """依勾選狀態與 rPPG 是否運行，啟停背景心跳帶校準。"""
+        want = (
+            self._pipeline_running
+            and self._chk_belt_calib.isChecked()
+            and self._rppg_active()
+        )
+        if want and self._belt_calibrator is None:
+            self._start_belt_calibration()
+        elif not want and self._belt_calibrator is not None:
+            self._stop_belt_calibration()
+
+    def _start_belt_calibration(self) -> None:
+        belt_cfg = load_hr_belt_config()
+        if not self._watch_runtime.belt_running:
+            self._watch_runtime.hub.clear()
+            err = self._watch_runtime.start_belt(belt_cfg)
+            if err:
+                self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
+                self._lbl_watch_http.setText("心跳帶校準：啟動失敗")
+                self._chk_belt_calib.blockSignals(True)
+                self._chk_belt_calib.setChecked(False)
+                self._chk_belt_calib.blockSignals(False)
+                return
+            target = (
+                f"位址 {belt_cfg.address}" if belt_cfg.address
+                else f"名稱前綴「{belt_cfg.name_prefix}」" if belt_cfg.name_prefix
+                else "任何 Heart Rate Service 裝置"
+            )
+            self._append_log(f"▶ 心跳帶 BLE 啟動（掃描 {target}）")
+        # 以目前 active 校準版本的 offset 為起點，跨 session 持續改善。
+        # 本階段只做 offset-only 自適應（scale 固定 1.0，與既有手動校準流程一致）；
+        # 若日後支援 scale 校準，此 seed 邏輯需一併重新設計。
+        try:
+            base = self._rppg_calibration_store.get_active_version()
+            seed = float(base.params.bpm_offset) if base.model == "bias" else 0.0
+        except Exception:
+            seed = 0.0
+        self._last_calib_fed_metrics = None
+        self._belt_calibrator = OnlineBpmCalibrator(initial_offset=seed)
+        self._belt_ui_timer.start()
+        self._append_log(f"▶ 心跳帶真值校準啟動（背景參考，起始 offset {seed:+.1f} BPM）")
+        self._update_belt_status_label()
+
+    def _stop_belt_calibration(self) -> None:
+        self._belt_ui_timer.stop()
+        self._persist_belt_calibration()
+        self._belt_calibrator = None
+        if self._watch_runtime.belt_running:
+            self._watch_runtime.stop_belt()
+        self._append_log("■ 心跳帶真值校準停止。")
+        if not self._watch_runtime.running:
+            self._lbl_watch_http.setText("手錶／心跳帶：停止")
+
+    def _persist_belt_calibration(self) -> None:
+        """把本次收斂的 offset 存成新的自適應校準版本（信心足夠時）。"""
+        cal = self._belt_calibrator
+        if cal is None:
+            return
+        st = cal.state()
+        if st.confidence == CONF_LOW or st.accepted_observations < 12:
+            self._append_log("○ 心跳帶校準樣本不足或信心低，未存成校準版本。")
+            return
+        try:
+            version = self._rppg_calibration_store.save_new_version(
+                name=f"自適應校準 {time.strftime('%m-%d %H:%M')}",
+                offset_bpm=float(st.offset_bpm),
+                note=(
+                    f"心跳帶真值線上自適應；剩餘殘差 {st.corrected_residual_bpm:+.1f} BPM，"
+                    f"信心 {st.confidence}，配對 {st.pairs_used}"
+                ),
+                session={
+                    "source": "hr_belt_adaptive",
+                    "pairs_used": int(st.pairs_used),
+                    "accepted_observations": int(st.accepted_observations),
+                },
+                metrics={
+                    "offset_bpm": float(st.offset_bpm),
+                    "raw_residual_bpm": float(st.raw_residual_bpm),
+                    "corrected_residual_bpm": float(st.corrected_residual_bpm),
+                    "confidence": st.confidence,
+                },
+            )
+            self._append_log(
+                f"✓ 已存自適應校準版本 {version.id}（offset {st.offset_bpm:+.1f} BPM，已設為使用中）"
+            )
+        except Exception as exc:
+            self._append_log(f"⚠ 儲存自適應校準版本失敗：{exc}")
+
+    def _tick_belt_calibration(self) -> None:
+        """QTimer 每秒：餵一筆配對觀測給校正器並更新狀態列。"""
+        cal = self._belt_calibrator
+        st = self._watch_runtime.belt_status()
+        if cal is not None and st is not None and st.state == "connected" and st.bpm > 0:
+            r = self._latest_rppg_metrics
+            # 只在 rPPG 產出「新」樣本時餵入：物件相同代表 rPPG 這秒沒更新
+            # （凍結或無臉），重複計入會人為放大該筆在殘差中的權重。
+            if r is not None and r is not self._last_calib_fed_metrics:
+                contact_ok = st.sensor_contact_detected or not st.sensor_contact_supported
+                fresh = not hr_is_stale(st)
+                cal.observe(time.time(), float(st.bpm), contact_ok, fresh, metrics_to_feed_dict(r))
+                self._last_calib_fed_metrics = r
+        self._update_belt_status_label()
 
     def _update_belt_status_label(self) -> None:
-        """輪詢心跳帶連線狀態並更新狀態列（QTimer 每秒觸發）。"""
+        """輪詢心跳帶連線與校準狀態並更新狀態列（QTimer 每秒觸發）。"""
         st = self._watch_runtime.belt_status()
+        cal = self._belt_calibrator
         if st is None:
-            self._lbl_watch_http.setText("心跳帶：停止")
+            self._lbl_watch_http.setText("心跳帶校準：停止")
             return
-        if st.state == "connected":
-            name = st.device_name or st.device_address or "未知裝置"
-            parts = [f"心跳帶：{name}"]
-            if hr_is_stale(st):
-                age = time.time() - (st.last_sample_at or 0.0)
-                parts.append(f"⚠ {age:.0f} 秒無心率資料")
+        if st.state != "connected":
+            state_text = {
+                "idle": "待命",
+                "scanning": "掃描中…",
+                "connecting": f"連線中…（{st.device_name or st.device_address}）",
+                "reconnecting": "斷線，重新連線中…",
+                "error": f"錯誤：{st.last_error}" if st.last_error else "錯誤",
+                "stopped": "停止",
+            }.get(st.state, st.state)
+            self._lbl_watch_http.setText(f"心跳帶校準：{state_text}")
+            return
+        name = st.device_name or st.device_address or "未知裝置"
+        parts = [f"心跳帶 {name}"]
+        if hr_is_stale(st):
+            age = time.time() - (st.last_sample_at or 0.0)
+            parts.append(f"⚠ {age:.0f} 秒無心率")
+        else:
+            parts.append(f"{st.bpm} BPM" if st.bpm > 0 else "等待心率…")
+        if st.rr_count > 0:
+            parts.append(f"RR×{st.rr_count}")
+        if st.battery_level is not None:
+            parts.append(f"電量 {st.battery_level}%")
+        if st.sensor_contact_supported and not st.sensor_contact_detected:
+            parts.append("⚠ 接觸不良")
+        if cal is not None:
+            cs = cal.state()
+            parts.append(f"校正 {cs.offset_bpm:+.1f} BPM")
+            if cs.diverged:
+                parts.append("⚠ rPPG 偏差大，校正中")
+            elif cs.converged:
+                parts.append(f"已收斂（信心 {cs.confidence}）")
             else:
-                parts.append(f"{st.bpm} BPM" if st.bpm > 0 else "等待心率…")
-            if st.rr_count > 0:
-                parts.append(f"RR×{st.rr_count}")
-            if st.battery_level is not None:
-                parts.append(f"電量 {st.battery_level}%")
-            if st.sensor_contact_supported and not st.sensor_contact_detected:
-                parts.append("⚠ 接觸不良")
-            self._lbl_watch_http.setText("｜".join(parts))
-            return
-        state_text = {
-            "idle": "待命",
-            "scanning": "掃描中…",
-            "connecting": f"連線中…（{st.device_name or st.device_address}）",
-            "reconnecting": "斷線，重新連線中…",
-            "error": f"錯誤：{st.last_error}" if st.last_error else "錯誤",
-            "stopped": "停止",
-        }.get(st.state, st.state)
-        self._lbl_watch_http.setText(f"心跳帶：{state_text}")
+                parts.append(f"收斂中 {cs.pairs_used} 配對")
+        self._lbl_watch_http.setText("｜".join(parts))
 
     def _analysis_needed(self) -> tuple[bool, bool]:
         """Return (want_rppg, want_fatigue) from checkbox state."""
@@ -2148,6 +2282,7 @@ class MainWindow(QMainWindow):
             self._start_fatigue_worker()
         else:
             self._update_frame_routing()   # restore raw camera feed
+        self._ensure_belt_calibration()   # rPPG 是否運行改變時，同步啟停背景校準
         self._emit_web_metrics(force=True)
 
     # ── Combined worker ───────────────────────────────────────────────────────
@@ -2201,8 +2336,7 @@ class MainWindow(QMainWindow):
         self._preview_overlay.show_fatigue_panel(True)
         self._preview_overlay.show_fused_panel(True)
         if watch_mode:
-            source_label = "心跳帶 BLE" if self._is_belt_source() else "手錶"
-            self._append_log(f"▶ 合併引擎啟動（行為警覺 + {source_label}穿戴柱，單 MediaPipe 實例）")
+            self._append_log("▶ 合併引擎啟動（行為警覺 + 手錶穿戴柱，單 MediaPipe 實例）")
         else:
             self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
@@ -2291,6 +2425,11 @@ class MainWindow(QMainWindow):
         self._restart_analysis_workers()
 
     def _load_rppg_calibration_version(self):
+        # 背景心跳帶校準運行時，回傳即時微調的 offset 版本，讓 rPPG worker
+        # 每幀自動套用最新校正（比對用的是 rPPG 原始 BPM，不會自我回饋）。
+        cal = self._belt_calibrator
+        if cal is not None:
+            return cal.live_version()
         self._rppg_calibration_store.reload()
         return self._rppg_calibration_store.get_active_version()
 
@@ -2456,6 +2595,8 @@ class MainWindow(QMainWindow):
 
     def _on_camera_failed(self, msg: str) -> None:
         self._append_log(f"✗ 相機錯誤：{msg}")
+        if self._belt_calibrator is not None:
+            self._stop_belt_calibration()
         self._stop_analysis_workers()
         self._set_record_source(None)
         self._set_frame_source(None)
@@ -2516,6 +2657,7 @@ class MainWindow(QMainWindow):
             elif want_fatigue:
                 self._ensure_watch_source(False)
                 self._start_fatigue_worker()
+            self._ensure_belt_calibration()   # rPPG 運行時視勾選啟動背景校準
             self._sync_overlay_visibility()
             if self._chk_auto_record.isChecked() and not self._recording:
                 self._toggle_recording()
@@ -2530,6 +2672,8 @@ class MainWindow(QMainWindow):
             self._lbl_pipeline.setText("管線：停止")
             self._lbl_fps.setText("FPS：—")
             self._lbl_codec.setText("編碼：—")
+            if self._belt_calibrator is not None:
+                self._stop_belt_calibration()   # 停止前先存本次 session 校準版本
             self._stop_camera_worker()
             self._ensure_watch_source(False)
             self._sync_overlay_visibility()
@@ -2775,6 +2919,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._unregister_global_hotkeys()
+        if self._belt_calibrator is not None:
+            self._stop_belt_calibration()   # 存本次 session 校準版本
         self._belt_ui_timer.stop()
         self._watch_runtime.stop_belt()
         self._watch_runtime.stop()

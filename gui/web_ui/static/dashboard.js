@@ -222,10 +222,9 @@ function updateMetricsDisplay(m) {
         if (m.stress_enabled) { ss.textContent = m.stress_has_face ? '運行中' : '等待臉部'; ss.style.color = m.stress_has_face ? '#22c55e' : '#f59e0b'; }
         else { ss.textContent = '未啟用'; ss.style.color = '#94a3b8'; }
     }
-    // 生理來源（rPPG / 手錶 / 心跳帶）與心跳帶狀態可視化
-    const physioSourceLabel = m.fatigue_mode === 'belt' ? '心跳帶 BLE'
-        : (m.fatigue_mode === 'watch' ? '手錶' : 'rPPG');
-    const srcColor = m.fatigue_mode === 'belt' ? '#ef4444' : (m.fatigue_mode === 'watch' ? '#3b82f6' : '#22c55e');
+    // 生理來源（rPPG / 手錶）與心跳帶校準狀態可視化
+    const physioSourceLabel = m.fatigue_mode === 'watch' ? '手錶' : 'rPPG';
+    const srcColor = m.fatigue_mode === 'watch' ? '#3b82f6' : '#22c55e';
     ['physio-source-compact', 'physio-source-value'].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.textContent = physioSourceLabel; el.style.color = srcColor; }
@@ -248,6 +247,20 @@ function updateMetricsDisplay(m) {
             beltEl.style.color = m.belt_state === 'connected' ? (beltOk ? '#22c55e' : '#f59e0b')
                 : (m.belt_state === 'error' ? '#ef4444' : '#f59e0b');
         } else { beltEl.textContent = '--'; beltEl.style.color = '#94a3b8'; }
+    }
+    // rPPG 真值校準（心跳帶為參考，只調 rPPG、不進疲勞分數）
+    const calibEl = document.getElementById('belt-calib-value');
+    if (calibEl) {
+        if (m.calib_active) {
+            const off = (m.calib_offset_bpm >= 0 ? '+' : '') + Number(m.calib_offset_bpm).toFixed(1);
+            let text = `校正 ${off} BPM`;
+            let color = '#22c55e';
+            if (m.calib_diverged) { text += '｜rPPG 偏差大，校正中'; color = '#f59e0b'; }
+            else if (m.calib_converged) { text += `｜已收斂（信心 ${m.calib_confidence}）`; }
+            else { text += `｜收斂中（${m.calib_pairs_used} 配對）`; color = '#f59e0b'; }
+            calibEl.textContent = text;
+            calibEl.style.color = color;
+        } else { calibEl.textContent = '--'; calibEl.style.color = '#94a3b8'; }
     }
     ['belt-battery-compact', 'belt-battery-value'].forEach(id => {
         const el = document.getElementById(id);

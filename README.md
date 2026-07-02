@@ -17,13 +17,13 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
 - MediaPipe 姿態補償、ROI 動態權重、遮擋降權與品質診斷
 - Blendshape 個人化 baseline 校準與跨 session 持久化
-- 心跳帶模式：BLE 直連標準 Heart Rate Service 心跳帶（如 RHYTHM+2.0），以實測 RR-Interval 計算 HRV，融合權重同手錶模式（70% 行為 + 30% 穿戴）
+- 心跳帶真值校準（背景）：BLE 直連標準 Heart Rate Service 心跳帶（如 Scosche Rhythm+ 2.0）作為 rPPG 的「真值參考」，線上以低增益自適應微調 rPPG 的 BPM 校正量；心跳帶數值只用於校準與可信度判斷，**不進**疲勞融合分數
 
 ## Requirements
 - Python 3.10+ recommended
 - Windows and Ubuntu Linux supported
 - Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
-- 心跳帶模式需要主機具備 Bluetooth LE 介面（Windows 10 1903+ 使用 WinRT；Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
+- 心跳帶真值校準需要主機具備 Bluetooth LE 介面（Windows 10 1903+ 使用 WinRT；Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
 
 ## Setup
 Windows:
@@ -175,15 +175,18 @@ rPPG BPM 輸出以第一版較準的流程為基準：有效皮膚 ROI 直接等
 
 調整 tuning 會影響新錄製資料與舊錄製資料的可比性；需要比較精準度或穩定度時，請使用同一段錄影回放 sweep。
 
-## 心跳帶模式（BLE Heart Rate Belt）
+## 心跳帶真值校準（BLE Heart Rate Belt）
 
-疲勞融合模式下拉選單提供「心跳帶模式（70% 行為 + 30% 心跳帶 BLE）」：關閉 rPPG，改由 BLE 心跳帶提供 HR/HRV 生理柱，行為疲勞仍由 MediaPipe 分析。與手錶模式差異在於資料來源：手錶走 `POST /hr` HTTP（:8080），心跳帶由本機直接以 BLE 訂閱標準 Heart Rate Service。
+系統以 rPPG + MediaPipe 臉部特徵為疲勞判斷主體。心跳帶（Scosche Rhythm+ 2.0 等標準 Heart Rate Service 裝置）**不是**疲勞融合的獨立權重，而是 rPPG 的「真值參考」：勾選控制列的「心跳帶真值校準（背景）」後，系統在背景連線心跳帶、持續比對它的實測心率與 rPPG 偵測到的心率，並以低增益自適應（線上 EMA）慢速微調 rPPG 的 BPM 校正量，讓 rPPG 逐漸趨近真值。**心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞分數。**
 
-- 協定：Heart Rate Service `0x180D`，訂閱 Heart Rate Measurement `0x2A37` notification 解析 BPM 與 RR-Interval（1/1024 秒解析度），並 best-effort 讀取電量 `0x2A19` 與配戴位置 `0x2A38`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`（RHYTHM+2.0 / R+2.0 2248）。
+- 前提：需同時啟用 rPPG（勾選「壓力／HRV」且非手錶模式）才會開始比對；心跳帶校準與手錶模式互斥（手錶模式停用此勾選框）。
+- 協定：Heart Rate Service `0x180D`，訂閱 Heart Rate Measurement `0x2A37` notification 解析 BPM 與 RR-Interval（1/1024 秒解析度），並 best-effort 讀取電量 `0x2A19` 與配戴位置 `0x2A38`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`（Scosche Rhythm+ 2.0 / R+2.0 2248）。
 - 裝置挑選：優先連線名稱以 `R+` 開頭的裝置，否則挑選廣播 Heart Rate Service 且訊號最強者；斷線會自動重新掃描連線。
-- HRV：心跳帶回報實測 RR-Interval 時直接以 RR 計算 HRV（精度優於手錶模式以 BPM 反推）；無 RR 時退回 BPM 反推，行為與手錶模式一致。實測 RHYTHM+2.0（R+2.0 2248）notification 僅帶 BPM 不含 RR-Interval（`flags=0x06`，約 2 Hz），因此該裝置的 HRV 走 BPM 反推路徑。
-- 可視化：GUI 狀態列顯示連線狀態／BPM／RR 數／電量／接觸狀態；Web dashboard「生理壓力指標」卡片顯示生理來源與心跳帶狀態、電量。連線中若超過 5 秒沒有有效心率，GUI 與 dashboard 會顯示「無心率資料」警告（裝置可能未正確配戴）。
-- 使用流程：開啟心跳帶並穿戴 → 模式選「心跳帶模式」→ 按「開始」。狀態列顯示「掃描中… → 已連線」後即開始融合。
+- 校正演算法（`rppg/adaptive_calibration.py` `OnlineBpmCalibrator`，純運算）：以心跳帶 BPM 與 rPPG **原始** BPM 的中位殘差為目標，低增益 EMA 慢速調整 offset（沿用既有 `rppg/calibration.py` bias 模型 `scale*bpm+offset`，本階段只動 offset）。品質門檻（rPPG SQI／quality／warmup／ROI，心跳帶接觸與新鮮度）不過關的樣本不納入；offset 有絕對值上限防呆。比對用原始 BPM，不會自我回饋。
+- 跨 session 累積：啟動時以目前使用中的校準版本 offset 為起點；停止（取消勾選／管線停止／關閉）時，若信心足夠會存成新的「自適應校準」版本並自動設為使用中，下次沿用持續改善。
+- HRV：Scosche Rhythm+ 2.0 需以三連按進入 HRV 模式後，`2A37` 才會帶實測 RR-Interval（實測 `flags=0x16`）；一般心率模式僅帶 BPM（`flags=0x06`）。校準本身只用 BPM，不受 HRV 模式影響。
+- 可視化：GUI 狀態列顯示連線狀態／BPM／RR 數／電量／接觸狀態，以及即時校正量與收斂／分歧狀態；Web dashboard「生理壓力指標」卡片新增「rPPG 真值校準」欄位。連線中若超過 5 秒沒有有效心率，GUI 與 dashboard 會顯示「無心率資料」警告（裝置可能未正確配戴）。
+- 使用流程：戴上心跳帶 → 勾選「壓力／HRV」啟用 rPPG（rPPG 模式）→ 勾選「心跳帶真值校準（背景）」→ 按「開始」。狀態列顯示「掃描中… → 已連線 → 收斂中 → 已收斂」。
 
 裝置設定（選配）：建立 `config/hr_belt.json`（機器特定、不納入版控）可指定目標裝置與掃描參數，GUI 每次啟動心跳帶時重新讀取：
 
