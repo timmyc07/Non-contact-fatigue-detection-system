@@ -198,6 +198,31 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
     return found
 
 
+def _apply_msmf_io_timeouts(cap: Optional[Any]) -> None:
+    """Windows MSMF 專用：嘗試設定開啟／讀取逾時，緩解驅動異常時 ``cap.read()``
+    無逾時地無限阻塞（P1-6 cap.read() hang 緩解）。
+
+    ``CAP_PROP_OPEN_TIMEOUT_MSEC`` / ``CAP_PROP_READ_TIMEOUT_MSEC`` 為新版 OpenCV
+    才有的屬性，用 ``hasattr``/``try`` 包住以相容舊版 OpenCV（屬性不存在時
+    ``getattr`` 回傳 ``None``，直接跳過）。DSHOW 與 V4L2 後端沒有對應屬性可設，
+    為已知限制，不在此函式處理。
+    """
+    if cap is None:
+        return
+    open_timeout_prop = getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)
+    if open_timeout_prop is not None:
+        try:
+            cap.set(open_timeout_prop, 10000)
+        except Exception:
+            pass
+    read_timeout_prop = getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+    if read_timeout_prop is not None:
+        try:
+            cap.set(read_timeout_prop, 5000)
+        except Exception:
+            pass
+
+
 def open_camera_capture(index: int, backend: str = "auto"):
     """Open the first working VideoCapture for ``index``.
 
@@ -231,16 +256,21 @@ def open_camera_capture(index: int, backend: str = "auto"):
     if b == "msmf":
         msmf = getattr(cv2, "CAP_MSMF", None)
         if msmf is not None:
-            return _try(int(msmf))
+            cap = _try(int(msmf))
+            _apply_msmf_io_timeouts(cap)
+            return cap
         return None
 
     if b == "dshow":
+        # DSHOW 無 CAP_PROP_OPEN_TIMEOUT_MSEC / CAP_PROP_READ_TIMEOUT_MSEC 可設，
+        # 為已知限制（driver hang 時 cap.read() 仍可能無逾時地阻塞）。
         dshow = getattr(cv2, "CAP_DSHOW", None)
         if dshow is not None:
             return _try(int(dshow))
         return None
 
     if b == "v4l2":
+        # V4L2 同樣無對應 timeout 屬性可設，為已知限制。
         v4l2 = getattr(cv2, "CAP_V4L2", None)
         if v4l2 is not None:
             return _try(int(v4l2))
@@ -258,13 +288,18 @@ def open_camera_capture(index: int, backend: str = "auto"):
                 continue
             cap = _try(int(api_val))
             if cap is not None:
+                if attr == "CAP_MSMF":
+                    _apply_msmf_io_timeouts(cap)
                 return cap
         return None
 
     # "auto": platform-preferred order
+    msmf_api = getattr(cv2, "CAP_MSMF", None)
     for api in _build_api_preferences(None):
         cap = _try(api)
         if cap is not None:
+            if msmf_api is not None and api == int(msmf_api):
+                _apply_msmf_io_timeouts(cap)
             return cap
     return None
 

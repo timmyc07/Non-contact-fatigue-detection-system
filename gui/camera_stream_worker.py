@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import time
 from collections import deque
@@ -15,11 +16,15 @@ import cv2
 
 from gui.frame_queue import put_latest
 
+logger = logging.getLogger(__name__)
+
 # How long to wait for the first frame before declaring failure (seconds).
 _FIRST_FRAME_TIMEOUT = 10.0
 _READ_FAILURE_TIMEOUT = 5.0
 _DARK_FRAME_WARN_SECONDS = 3.0
 _PREVIEW_MAX_FPS = 30.0
+# 主擷取迴圈中連續例外次數上限：超過即跳出迴圈，避免無限錯誤刷屏並讓相機資源可被釋放。
+_MAX_CONSECUTIVE_LOOP_ERRORS = 30
 
 # Sliding-window FPS: keeps timestamps of last N frames.
 # fps = (N-1) / (newest_ts - oldest_ts)
@@ -133,135 +138,150 @@ class CameraStreamWorker(QObject):
             self.finished.emit()
             return
 
-        # ── Apply resolution / FPS ────────────────────────────────────────
-        # MSMF 明確指定時避免解析度/FPS set 觸發管線重建；仍嘗試壓低 buffer。
-        configure_camera_capture(
-            cap,
-            width=self._width,
-            height=self._height,
-            target_fps=self._target_fps,
-            prefer_mjpg=True,
-            apply_format=self._backend != "msmf",
-        )
+        # ── 以下所有路徑（含例外）都必須釋放相機並送出 finished ──────────────
+        # 早退路徑（如等不到首幀）不再各自呼叫 cap.release()/finished.emit()，
+        # 一律交由 finally 統一處理，避免重構後遺漏或重複釋放。
+        try:
+            # ── Apply resolution / FPS ────────────────────────────────────
+            # MSMF 明確指定時避免解析度/FPS set 觸發管線重建；仍嘗試壓低 buffer。
+            configure_camera_capture(
+                cap,
+                width=self._width,
+                height=self._height,
+                target_fps=self._target_fps,
+                prefer_mjpg=True,
+                apply_format=self._backend != "msmf",
+            )
 
-        # Read what the backend negotiated and emit immediately.
-        pre_codec, pre_w, pre_h, pre_fps = self._read_cap_info(cap)
-        self.camera_info.emit(pre_codec, pre_w, pre_h, float(pre_fps))
-        if pre_fps > 0:
-            self.fps_ready.emit(float(pre_fps))
+            # Read what the backend negotiated and emit immediately.
+            pre_codec, pre_w, pre_h, pre_fps = self._read_cap_info(cap)
+            self.camera_info.emit(pre_codec, pre_w, pre_h, float(pre_fps))
+            if pre_fps > 0:
+                self.fps_ready.emit(float(pre_fps))
 
-        # ── Wait for first real frame ─────────────────────────────────────
-        deadline = time.perf_counter() + _FIRST_FRAME_TIMEOUT
-        first_frame: np.ndarray | None = None
-        while not self._stop and time.perf_counter() < deadline:
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                if self._horizontal_flip:
-                    frame = cv2.flip(frame, 1)
-                first_frame = frame
-                break
-            time.sleep(0.005)
+            # ── Wait for first real frame ─────────────────────────────────
+            deadline = time.perf_counter() + _FIRST_FRAME_TIMEOUT
+            first_frame: np.ndarray | None = None
+            while not self._stop and time.perf_counter() < deadline:
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    if self._horizontal_flip:
+                        frame = cv2.flip(frame, 1)
+                    first_frame = frame
+                    break
+                time.sleep(0.005)
 
-        if first_frame is None:
+            if first_frame is None:
+                self.failed.emit(
+                    f"相機 {self._camera_index} 在 {_FIRST_FRAME_TIMEOUT:.0f} 秒內未送出影像。\n"
+                    "請確認相機未被其他程式佔用，Linux 可執行 scripts/diagnose_camera.py 檢查權限與 V4L2。"
+                )
+                return
+
+            # Re-read after first frame — MSMF sometimes finalises FOURCC only then.
+            post_codec, post_w, post_h, post_fps = self._read_cap_info(cap)
+            if (post_codec, post_w, post_h) != (pre_codec, pre_w, pre_h):
+                self.camera_info.emit(post_codec, post_w, post_h, float(post_fps))
+            capture_context = self._format_capture_context(post_codec, post_w, post_h, float(post_fps))
+
+            if self._is_diagnostic_black_frame(first_frame):
+                mean, near_black_ratio = self._frame_stats(first_frame)
+                self.diagnostic_ready.emit(
+                    f"[相機診斷] 首幀接近全黑（平均亮度 {mean:.1f}，黑像素 {near_black_ratio:.1%}）。"
+                    f"{capture_context}；若 FPS 仍正常，優先檢查鏡頭蓋、隱私快門、虛擬相機來源或光線。"
+                )
+
+            # ── Main capture loop ─────────────────────────────────────────
+            ts_window: deque[float] = deque(maxlen=_FPS_WINDOW_FRAMES)
+            last_preview_emit = 0.0
+            preview_emit_interval = 1.0 / _PREVIEW_MAX_FPS
+
+            def _emit_frame(f: np.ndarray) -> None:
+                nonlocal last_preview_emit
+                now = time.perf_counter()
+                if now - last_preview_emit < preview_emit_interval:
+                    return
+                last_preview_emit = now
+                rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+                rgb = np.ascontiguousarray(rgb)
+                fh, fw = rgb.shape[:2]
+                qimg = QImage(rgb.data, fw, fh, rgb.strides[0], QImage.Format.Format_RGB888)
+                self.frame_ready.emit(qimg.copy())
+
+            def _tick_fps() -> None:
+                now = time.perf_counter()
+                ts_window.append(now)
+                if len(ts_window) >= 2:
+                    span = ts_window[-1] - ts_window[0]
+                    if span > 0.0:
+                        self.fps_ready.emit((len(ts_window) - 1) / span)
+
+            _emit_frame(first_frame)
+            _tick_fps()
+            last_good_read = time.perf_counter()
+            dark_started_at = last_good_read if self._is_diagnostic_black_frame(first_frame) else None
+            dark_warning_sent = dark_started_at is not None
+            consecutive_errors = 0
+
+            while not self._stop:
+                try:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        if time.perf_counter() - last_good_read >= _READ_FAILURE_TIMEOUT:
+                            self.failed.emit(
+                                f"{capture_context} 已連續 {_READ_FAILURE_TIMEOUT:.0f} 秒讀取失敗。\n"
+                                "請確認相機未被其他程式佔用，USB/驅動是否穩定。"
+                            )
+                            break
+                        time.sleep(0.001)
+                        continue
+                    if self._horizontal_flip:
+                        frame = cv2.flip(frame, 1)
+                    last_good_read = time.perf_counter()
+                    if self._is_diagnostic_black_frame(frame):
+                        if dark_started_at is None:
+                            dark_started_at = last_good_read
+                        elif (
+                            not dark_warning_sent
+                            and last_good_read - dark_started_at >= _DARK_FRAME_WARN_SECONDS
+                        ):
+                            mean, near_black_ratio = self._frame_stats(frame)
+                            self.diagnostic_ready.emit(
+                                f"[相機診斷] 連續 {_DARK_FRAME_WARN_SECONDS:.0f} 秒接近全黑"
+                                f"（平均亮度 {mean:.1f}，黑像素 {near_black_ratio:.1%}）。"
+                                "程式仍有收到影像，較可能是鏡頭遮擋、光線不足或虛擬相機無來源。"
+                            )
+                            dark_warning_sent = True
+                    else:
+                        dark_started_at = None
+                        dark_warning_sent = False
+                    _tick_fps()
+                    _emit_frame(frame)
+                    # Feed any attached BGR consumers (rPPG / fatigue workers) non-blocking.
+                    # Snapshot the set first: the GUI thread may attach/detach queues while
+                    # this loop iterates, which would otherwise raise
+                    # "set changed size during iteration" and kill run() before cap.release().
+                    if self._bgr_queues:
+                        payload = (time.perf_counter(), frame.copy())
+                        for q in tuple(self._bgr_queues):
+                            put_latest(q, payload)
+                    consecutive_errors = 0
+                except Exception:
+                    consecutive_errors += 1
+                    logger.exception(
+                        "相機主擷取迴圈第 %d 次連續例外（相機索引 %s），略過本幀",
+                        consecutive_errors,
+                        self._camera_index,
+                    )
+                    if consecutive_errors >= _MAX_CONSECUTIVE_LOOP_ERRORS:
+                        self.failed.emit(
+                            f"{capture_context} 連續 {_MAX_CONSECUTIVE_LOOP_ERRORS} 次擷取例外，已停止相機執行緒。"
+                        )
+                        break
+                    continue
+        finally:
             try:
                 cap.release()
             except Exception:
                 pass
-            self.failed.emit(
-                f"相機 {self._camera_index} 在 {_FIRST_FRAME_TIMEOUT:.0f} 秒內未送出影像。\n"
-                "請確認相機未被其他程式佔用，Linux 可執行 scripts/diagnose_camera.py 檢查權限與 V4L2。"
-            )
             self.finished.emit()
-            return
-
-        # Re-read after first frame — MSMF sometimes finalises FOURCC only then.
-        post_codec, post_w, post_h, post_fps = self._read_cap_info(cap)
-        if (post_codec, post_w, post_h) != (pre_codec, pre_w, pre_h):
-            self.camera_info.emit(post_codec, post_w, post_h, float(post_fps))
-        capture_context = self._format_capture_context(post_codec, post_w, post_h, float(post_fps))
-
-        if self._is_diagnostic_black_frame(first_frame):
-            mean, near_black_ratio = self._frame_stats(first_frame)
-            self.diagnostic_ready.emit(
-                f"[相機診斷] 首幀接近全黑（平均亮度 {mean:.1f}，黑像素 {near_black_ratio:.1%}）。"
-                f"{capture_context}；若 FPS 仍正常，優先檢查鏡頭蓋、隱私快門、虛擬相機來源或光線。"
-            )
-
-        # ── Main capture loop ─────────────────────────────────────────────
-        ts_window: deque[float] = deque(maxlen=_FPS_WINDOW_FRAMES)
-        last_preview_emit = 0.0
-        preview_emit_interval = 1.0 / _PREVIEW_MAX_FPS
-
-        def _emit_frame(f: np.ndarray) -> None:
-            nonlocal last_preview_emit
-            now = time.perf_counter()
-            if now - last_preview_emit < preview_emit_interval:
-                return
-            last_preview_emit = now
-            rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-            rgb = np.ascontiguousarray(rgb)
-            fh, fw = rgb.shape[:2]
-            qimg = QImage(rgb.data, fw, fh, rgb.strides[0], QImage.Format.Format_RGB888)
-            self.frame_ready.emit(qimg.copy())
-
-        def _tick_fps() -> None:
-            now = time.perf_counter()
-            ts_window.append(now)
-            if len(ts_window) >= 2:
-                span = ts_window[-1] - ts_window[0]
-                if span > 0.0:
-                    self.fps_ready.emit((len(ts_window) - 1) / span)
-
-        _emit_frame(first_frame)
-        _tick_fps()
-        last_good_read = time.perf_counter()
-        dark_started_at = last_good_read if self._is_diagnostic_black_frame(first_frame) else None
-        dark_warning_sent = dark_started_at is not None
-
-        while not self._stop:
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                if time.perf_counter() - last_good_read >= _READ_FAILURE_TIMEOUT:
-                    self.failed.emit(
-                        f"{capture_context} 已連續 {_READ_FAILURE_TIMEOUT:.0f} 秒讀取失敗。\n"
-                        "請確認相機未被其他程式佔用，USB/驅動是否穩定。"
-                    )
-                    break
-                time.sleep(0.001)
-                continue
-            if self._horizontal_flip:
-                frame = cv2.flip(frame, 1)
-            last_good_read = time.perf_counter()
-            if self._is_diagnostic_black_frame(frame):
-                if dark_started_at is None:
-                    dark_started_at = last_good_read
-                elif (
-                    not dark_warning_sent
-                    and last_good_read - dark_started_at >= _DARK_FRAME_WARN_SECONDS
-                ):
-                    mean, near_black_ratio = self._frame_stats(frame)
-                    self.diagnostic_ready.emit(
-                        f"[相機診斷] 連續 {_DARK_FRAME_WARN_SECONDS:.0f} 秒接近全黑"
-                        f"（平均亮度 {mean:.1f}，黑像素 {near_black_ratio:.1%}）。"
-                        "程式仍有收到影像，較可能是鏡頭遮擋、光線不足或虛擬相機無來源。"
-                    )
-                    dark_warning_sent = True
-            else:
-                dark_started_at = None
-                dark_warning_sent = False
-            _tick_fps()
-            _emit_frame(frame)
-            # Feed any attached BGR consumers (rPPG / fatigue workers) non-blocking.
-            # Snapshot the set first: the GUI thread may attach/detach queues while
-            # this loop iterates, which would otherwise raise
-            # "set changed size during iteration" and kill run() before cap.release().
-            if self._bgr_queues:
-                payload = (time.perf_counter(), frame.copy())
-                for q in tuple(self._bgr_queues):
-                    put_latest(q, payload)
-
-        try:
-            cap.release()
-        except Exception:
-            pass
-        self.finished.emit()
