@@ -461,7 +461,7 @@ def run_replay_video(
                 else:
                     roi_tracker.reset()
                     rppg_engine.reset()
-                    f_metrics = fatigue_engine.on_no_face()
+                    f_metrics = fatigue_engine.on_no_face(timestamp)
                     r_metrics = None
                     fused = fuser.update(rppg=None, fatigue=f_metrics)
                     summary.no_face_frames += 1

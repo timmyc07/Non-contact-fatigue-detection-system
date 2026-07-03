@@ -23,6 +23,11 @@ from gui.alarm_config import (
 logger = logging.getLogger(__name__)
 
 _BUILTIN_BEEP_MS = 280
+# 危險群組共用觸發計時：群組內狀態互切（如 DROWSY↔CRITICAL 抖動、單幀 MICROSLEEP）
+# 不重置 status_since，否則邊界抖動會永遠湊不滿 trigger_delay_sec（2026-07-03 審核 P0-2/P1-3）
+_DANGER_STATUSES: frozenset[str] = frozenset({"DROWSY", "CRITICAL", "MICROSLEEP"})
+# 微睡為最高優先情境，觸發延遲上限收緊，避免被 2 秒通用延遲吃掉
+_MICROSLEEP_MAX_DELAY_SEC = 0.5
 _BUILTIN_BEEP_FREQ: dict[str, int] = {
     "low_vigilance": 620,
     "drowsy": 780,
@@ -62,9 +67,16 @@ def decide_alarm_trigger(
 
     status_changed = status != state.last_status
     if status_changed:
+        prev_status = state.last_status
         state.last_status = status
-        state.status_since = now if status in STATUS_TO_SCENARIO else None
-        state.played_for_entry = False
+        within_danger = (
+            prev_status in _DANGER_STATUSES
+            and status in _DANGER_STATUSES
+            and state.status_since is not None
+        )
+        if not within_danger:
+            state.status_since = now if status in STATUS_TO_SCENARIO else None
+            state.played_for_entry = False
 
     scenario = STATUS_TO_SCENARIO.get(status)
     if scenario is None:
@@ -78,7 +90,10 @@ def decide_alarm_trigger(
 
     if state.status_since is None:
         return None
-    if (now - state.status_since) < config.trigger_delay_sec:
+    delay_required = config.trigger_delay_sec
+    if scenario == "microsleep":
+        delay_required = min(delay_required, _MICROSLEEP_MAX_DELAY_SEC)
+    if (now - state.status_since) < delay_required:
         return None
 
     current_priority = SCENARIO_PRIORITY[scenario]

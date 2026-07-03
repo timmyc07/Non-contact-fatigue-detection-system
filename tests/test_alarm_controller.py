@@ -109,6 +109,47 @@ def test_critical_repeats_when_enabled() -> None:
     ) == "critical"
 
 
+def test_danger_group_flip_keeps_trigger_timer() -> None:
+    # DROWSY↔CRITICAL 邊界抖動不得重置觸發計時（2026-07-03 審核 P1-3）
+    cfg = _cfg(enabled=True, trigger_delay_sec=2.0)
+    state = AlarmTriggerState(last_status="DROWSY", status_since=100.0)
+    # 100.0 進入 DROWSY，101.0 抖動成 CRITICAL：計時應沿用 100.0 起算
+    assert decide_alarm_trigger(
+        config=cfg, state=state, status="CRITICAL", calibrated=True, now=101.0,
+    ) is None
+    assert state.status_since == 100.0
+    assert decide_alarm_trigger(
+        config=cfg, state=state, status="CRITICAL", calibrated=True, now=102.5,
+    ) == "critical"
+
+
+def test_microsleep_triggers_fast() -> None:
+    # 微睡為最高優先，觸發延遲上限 0.5 秒，不受通用 2 秒延遲拖累（2026-07-03 審核 P0-2）
+    cfg = _cfg(enabled=True, trigger_delay_sec=2.0)
+    state = AlarmTriggerState(last_status="OK", status_since=None)
+    assert decide_alarm_trigger(
+        config=cfg, state=state, status="MICROSLEEP", calibrated=True, now=100.0,
+    ) is None
+    assert decide_alarm_trigger(
+        config=cfg, state=state, status="MICROSLEEP", calibrated=True, now=100.6,
+    ) == "microsleep"
+
+
+def test_microsleep_blip_during_critical_escalates() -> None:
+    # 單幀 MICROSLEEP 出現在 CRITICAL 中：沿用危險群組計時＋升級優先，立即觸發微睡警報
+    cfg = _cfg(enabled=True, trigger_delay_sec=2.0, repeat_interval_sec=60.0)
+    state = AlarmTriggerState(
+        last_status="CRITICAL",
+        status_since=100.0,
+        played_for_entry=True,
+        last_played_scenario="critical",
+        last_play_monotonic={"critical": 102.0},
+    )
+    assert decide_alarm_trigger(
+        config=cfg, state=state, status="MICROSLEEP", calibrated=True, now=103.0,
+    ) == "microsleep"
+
+
 def test_alarm_config_roundtrip() -> None:
     cfg = AlarmConfig.defaults()
     cfg.enabled = True

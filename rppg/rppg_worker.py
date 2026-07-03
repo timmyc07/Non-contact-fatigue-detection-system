@@ -856,11 +856,13 @@ class RppgEngine:
     _BPM_EMA_ALPHA = 0.18
     _BPM_MIN_PLAUSIBLE = 42.0
     _BPM_MAX_PLAUSIBLE = 210.0
-    _BPM_JUMP_CONFIRM_DELTA = 25.0
-    _BPM_JUMP_CONFIRM_SEC = 2.0
-    _BPM_JUMP_CONFIRM_COUNT = 4
-    _BPM_JUMP_CLUSTER_DELTA = 8.0
     _BPM_COMPUTE_INTERVAL_SEC = 5.0
+    _BPM_JUMP_CONFIRM_DELTA = 25.0
+    # 確認窗必須涵蓋 COUNT 個以頻譜重算節奏產生的樣本，否則 pending 佇列每輪被
+    # prune 到只剩 1 筆、跳變確認永不成立（2026-07-03 審核 P1-1：舊值 2.0s < 5.0s 為死碼）
+    _BPM_JUMP_CONFIRM_COUNT = 3
+    _BPM_JUMP_CONFIRM_SEC = (_BPM_JUMP_CONFIRM_COUNT + 0.2) * _BPM_COMPUTE_INTERVAL_SEC
+    _BPM_JUMP_CLUSTER_DELTA = 8.0
 
     def __init__(
         self,

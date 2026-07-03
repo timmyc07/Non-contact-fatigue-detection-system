@@ -470,7 +470,7 @@ class FatigueWorker(QObject):
                             f"眨眼 {metrics.blink_count}"
                         )
                 else:
-                    metrics = engine.on_no_face()
+                    metrics = engine.on_no_face(ts)
                     self.status_changed.emit("未偵測到臉部…")
 
                 self.metrics_ready.emit(metrics)

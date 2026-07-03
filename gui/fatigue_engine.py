@@ -18,6 +18,7 @@ V2 vs V1 changes:
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -229,7 +230,11 @@ class FatigueParams:
     thresh_ratio: float      = 0.75
     base_th_default: float   = 0.18
     calib_ear_min: float     = 0.15
+    # 校準中位數低於此值視為「開機時已閉眼/瞇眼」，退回預設門檻（2026-07-03 審核 P2-2）
+    calib_ear_sane_min: float = 0.20
     closed_open_hyst: float  = 1.06
+    # 無臉寬限期：短暫掉幀只凍結不清校準，超過才重置（2026-07-03 審核 P0-1）
+    no_face_reset_sec: float = 1.0
 
     # Blink timing
     blink_min_sec: float     = 0.08
@@ -246,6 +251,8 @@ class FatigueParams:
 
     # PERCLOS
     perclos_window_sec: float  = 60.0
+    # 分母下限（秒）：可量測時間不足時抑制開機假尖峰（2026-07-03 審核 P2-3/M2）
+    perclos_denom_floor_sec: float = 5.0
     low_vigilance_perclos_th: float = 0.10
     tired_perclos_th:   float  = 0.25
     long_closed_sec:    float  = 1.5
@@ -260,6 +267,12 @@ class FatigueParams:
     head_pitch_down_th:       float = -15.0
     head_microsleep_sec:      float = 1.5
     dz_ref_ema_alpha:         float = 0.005
+    # pitch offset 中位數超過此值視為「開機姿態異常（如頭已垂到胸前）」，不採用。
+    # 界限對齊原始 clamp 範圍 ±20°：常見的相機俯仰角（10~15°）屬正常，必須吸收進 offset，
+    # 否則會整片觸發 ±10° 低頭 gate 關閉 EAR 路徑（2026-07-03 審核 P2-2 + golden 實測校正）
+    pitch_offset_sane_deg:    float = 20.0
+    # solvePnP 超過此秒數未成功視為姿態過期，暫停微睡判定（2026-07-03 審核 B2）
+    pose_stale_max_sec:       float = 0.75
 
     # Yawn (V2: late-stage only, low weight)
     mar_yawn_th:       float  = 0.60
@@ -268,6 +281,8 @@ class FatigueParams:
     mouth_open_noise_th: float = 0.30
 
     # Gaze (V2: stability + saccade + fixation)
+    # 掃視觀測窗暖機：未滿此秒數前 saccade_freq_pm 不可信，不得餵入低掃視評分（2026-07-03 審核 P2-1）
+    gaze_warmup_sec:      float  = 5.0
     gaze_window_sec:      float  = 3.0
     gaze_fixed_std_th:    float  = 0.015
     gaze_fixed_alert_sec: float  = 5.0
@@ -355,6 +370,7 @@ class FatigueMetrics:
     is_saccade:           bool  = False
     fixation_duration:    float = 0.0
     saccade_freq_pm:      float = 0.0   # saccades per minute (60-s window)
+    saccade_window_ready: bool  = False  # 掃視觀測窗已暖機，saccade_freq_pm 可信
 
     # Head pose (V2: Pitch-focused)
     head_pitch:       float = 0.0
@@ -422,6 +438,9 @@ class EyeCognitiveModule:
         self._fat_enter_t: Optional[float] = None
         self._closed_intervals: deque = deque()
         self._closed_start: Optional[float] = None
+        # PERCLOS 可量測時間區間（calibrated 且 fatigue_ok 的時段），做分母用
+        self._eligible_intervals: deque = deque()
+        self._eligible_start: Optional[float] = None
         self._closed_quality    = 1.0
         self.last_perclos       = 0.0
 
@@ -492,7 +511,18 @@ class EyeCognitiveModule:
         )
         if self._closed_start is not None:
             closed += (t_now - max(self._closed_start, cutoff)) * self._closed_quality
-        elapsed = max(1.0, min(t_now - calib_start - self.p.calib_sec, w))
+        # 分母改用「可量測時間」（fatigue_ok 的時段），不再用牆鐘 elapsed：
+        # 低品質/被 gate 期間閉眼不進分子，其時間也不得進分母，否則 PERCLOS 系統性低估
+        # （2026-07-03 審核 P2-3）
+        while self._eligible_intervals and self._eligible_intervals[0][1] <= cutoff:
+            self._eligible_intervals.popleft()
+        eligible = sum(
+            min(b, t_now) - max(a, cutoff)
+            for a, b in self._eligible_intervals
+        )
+        if self._eligible_start is not None:
+            eligible += t_now - max(self._eligible_start, cutoff)
+        elapsed = max(self.p.perclos_denom_floor_sec, min(eligible, w))
         return _clamp(closed / elapsed, 0.0, 1.0)
 
     def _z_from_baseline(self, key: str, value: float) -> float:
@@ -609,12 +639,24 @@ class EyeCognitiveModule:
                 self._calib_ears.append(ear_s)
             if calib_elapsed >= p.calib_sec:
                 if len(self._calib_ears) >= p.min_calib_samples:
-                    self.base_ear_th = float(np.median(self._calib_ears)) * p.thresh_ratio
+                    calib_median = float(np.median(self._calib_ears))
+                    if calib_median >= p.calib_ear_sane_min:
+                        self.base_ear_th = calib_median * p.thresh_ratio
+                    else:
+                        # 基準需反映清醒：中位數過低代表開機時已閉眼/瞇眼，
+                        # 照收會把門檻校到疲勞態導致漏偵測（2026-07-03 審核 P2-2）
+                        self.base_ear_th = p.base_th_default
+                        log.warning(
+                            "EAR 校準中位數 %.3f 低於清醒合理下限 %.3f，改用預設門檻 %.3f",
+                            calib_median, p.calib_ear_sane_min, p.base_th_default,
+                        )
                 else:
                     self.base_ear_th = p.base_th_default
                 self.calibrated = True
                 self._closed_intervals.clear()
                 self._closed_start = None
+                self._eligible_intervals.clear()
+                self._eligible_start = None
                 self.last_perclos  = 0.0
                 if not self._calib_logged:
                     log.info(
@@ -688,6 +730,8 @@ class EyeCognitiveModule:
         long_closed = False
         fat_dur = 0.0
         if self.calibrated and fatigue_ok:
+            if self._eligible_start is None:
+                self._eligible_start = t_now
             if not self._fatigue_closed:
                 if ear_s < close_fat:
                     self._fatigue_closed = True
@@ -704,6 +748,9 @@ class EyeCognitiveModule:
                     long_closed = True
             self.last_perclos = self._perclos(t_now)
         else:
+            if self._eligible_start is not None:
+                self._eligible_intervals.append((self._eligible_start, t_now))
+                self._eligible_start = None
             self._close_interval(t_now)
             self._fatigue_closed = False
             self._fat_enter_t    = None
@@ -836,8 +883,9 @@ class GazeTrackingModule:
         self.is_saccade          = False
         self.fixation_duration   = 0.0
         self.saccade_freq_pm     = 0.0
+        self.saccade_window_ready = False
 
-    def step(self, lm: Any, t_now: float, has_iris: bool) -> None:
+    def step(self, lm: Any, t_now: float, has_iris: bool, eyes_closed: bool = False) -> None:
         p = self.p
         if not has_iris:
             self._prev_gaze   = None
@@ -845,6 +893,13 @@ class GazeTrackingModule:
             self._fixation_start = None
             self._gaze_fixed_start = None
             self.gaze_mental_fatigue = False
+            return
+        if eyes_closed:
+            # 眨眼/閉眼期間眼高塌陷、iris 位置無效：凍結凝視狀態（保留空洞凝視累計），
+            # 且不讓 _prev_gaze 橫跨閉眼段產生假掃視（2026-07-03 審核 G-M3）
+            self._prev_gaze   = None
+            self._prev_gaze_t = None
+            self.is_saccade   = False
             return
 
         # ── Gaze position ────────────────────────────────────────────────────
@@ -907,6 +962,8 @@ class GazeTrackingModule:
         elapsed_sac = min(max(t_now - self._gaze_track_start, 1.0),
                           p.saccade_window_sec)
         self.saccade_freq_pm = len(self._saccade_times) / (elapsed_sac / 60.0)
+        # 觀測窗未暖機前 saccade_freq_pm≈0 是「沒資料」不是「低掃視」（2026-07-03 審核 P2-1）
+        self.saccade_window_ready = (t_now - self._gaze_track_start) >= p.gaze_warmup_sec
 
         # ── V2: Fixation duration ─────────────────────────────────────────────
         if not self.is_saccade:
@@ -949,6 +1006,7 @@ class HeadMouthModule:
         self._pitch_calib: list[float] = []
         self._pitch_offset              = 0.0
         self._pitch_calibrated          = False
+        self._last_pose_ok_t: Optional[float] = None
         self._pitch_up_start: Optional[float] = None
         self._pitch_down_start: Optional[float] = None
         self._microsleep_fired          = False
@@ -981,11 +1039,21 @@ class HeadMouthModule:
             pose = solve_head_pose(lm, w, h)
             if pose is not None:
                 self.head_pitch, self.head_yaw, self.head_roll = pose
+                self._last_pose_ok_t = t_now
                 if not self._pitch_calibrated:
                     self._pitch_calib.append(self.head_pitch)
                     if len(self._pitch_calib) >= 60:
                         offset = float(np.median(self._pitch_calib))
-                        self._pitch_offset      = _clamp(offset, -20.0, 20.0)
+                        if abs(offset) <= p.pitch_offset_sane_deg:
+                            self._pitch_offset = offset
+                        else:
+                            # 基準需反映清醒中性姿態：偏移過大代表開機時已低頭/抬頭，
+                            # 照收會讓真實點頭永不觸發微睡（2026-07-03 審核 P2-2）
+                            self._pitch_offset = 0.0
+                            log.warning(
+                                "pitch 校準中位數 %.1f° 超出合理範圍 ±%.0f°，不採用 offset",
+                                offset, p.pitch_offset_sane_deg,
+                            )
                         self._pitch_calibrated  = True
 
         pitch_rel = self.head_pitch - self._pitch_offset
@@ -1003,15 +1071,30 @@ class HeadMouthModule:
 
         # Microsleep: Pitch nod (strictly below threshold)
         microsleep_alert = False
-        if pitch_rel < p.head_pitch_down_th:
+        pose_fresh = (
+            self._last_pose_ok_t is not None
+            and (t_now - self._last_pose_ok_t) <= p.pose_stale_max_sec
+        )
+        if not self._pitch_calibrated:
+            # pitch 未校準（offset 未定）時不做微睡判定，避免開機誤觸發（2026-07-03 審核 B2）
+            self._pitch_down_start = None
+            self._microsleep_fired = False
+        elif not pose_fresh:
+            # 姿態過期（solvePnP 連續失敗 > pose_stale_max_sec）：凍結計時、不觸發也不清空。
+            # 點頭常伴隨運動模糊導致 solvePnP 短暫失敗，清空會漏掉真實微睡；
+            # 姿態恢復且頭仍低垂時計時自原起點續算（三重審查軸B F3 權衡）
+            pass
+        elif pitch_rel < p.head_pitch_down_th:
             if self._pitch_down_start is None:
                 self._pitch_down_start = t_now
                 self._microsleep_fired = False
-            elif (not self._microsleep_fired
-                  and (t_now - self._pitch_down_start) >= p.head_microsleep_sec):
-                microsleep_alert       = True
-                self.microsleep_count += 1
-                self._microsleep_fired = True
+            elif (t_now - self._pitch_down_start) >= p.head_microsleep_sec:
+                if not self._microsleep_fired:
+                    self.microsleep_count += 1
+                    self._microsleep_fired = True
+                # latch 持續維持至頭抬起：MICROSLEEP 必須是持續狀態，
+                # 單幀狀態會讓需要持續時間的警報永不觸發（2026-07-03 審核 P0-2）
+                microsleep_alert = True
         else:
             self._pitch_down_start = None
             self._microsleep_fired = False
@@ -1085,6 +1168,8 @@ class FatigueEngine:
         self.gaze   = GazeTrackingModule(self.p)
         self.head   = HeadMouthModule(self.p)
         self._frame = 0
+        self._no_face_since: Optional[float] = None
+        self._no_face_reset_done = False
         self._load_persisted_calibration()
 
     def reset(self) -> None:
@@ -1092,6 +1177,8 @@ class FatigueEngine:
         self.gaze.reset()
         self.head.reset(full=True)
         self._frame = 0
+        self._no_face_since = None
+        self._no_face_reset_done = False
         self._load_persisted_calibration()
 
     def _load_persisted_calibration(self) -> None:
@@ -1122,13 +1209,29 @@ class FatigueEngine:
                 {"baseline": self.head._mouth_blend_baseline},
             )
 
-    def on_no_face(self) -> FatigueMetrics:
-        self.eye.reset(full=False)
-        self.gaze.reset()
-        self.head._pitch_down_start = None
-        self.head._yawn_open_start  = None
-        self.head.mouth_open_ratio   = 0.0
-        return FatigueMetrics(face_detected=False, status="NO_FACE")
+    def on_no_face(self, t_now: Optional[float] = None) -> FatigueMetrics:
+        # 寬限期：MediaPipe 單幀掉臉（低頭/遮擋/運動模糊）不得立刻清空校準，
+        # 否則每次掉幀都重跑 5 秒校準、期間偵測與警報全黑（2026-07-03 審核 P0-1）。
+        # t_now 應與 step() 使用同一時間基準（worker 的 perf_counter 或 replay 的影格時間）。
+        now = time.monotonic() if t_now is None else t_now
+        if self._no_face_since is None:
+            self._no_face_since = now
+            self._no_face_reset_done = False
+        if (
+            not self._no_face_reset_done
+            and (now - self._no_face_since) >= self.p.no_face_reset_sec
+        ):
+            self.eye.reset(full=False)
+            self.gaze.reset()
+            self.head._pitch_down_start = None
+            self.head._yawn_open_start  = None
+            self.head.mouth_open_ratio   = 0.0
+            self._no_face_reset_done = True
+        return FatigueMetrics(
+            face_detected=False,
+            status="NO_FACE",
+            calibrated=self.eye.calibrated,
+        )
 
     def step(
         self,
@@ -1141,6 +1244,7 @@ class FatigueEngine:
         p  = self.p
         fc = self._frame
         self._frame += 1
+        self._no_face_since = None  # 臉部回來即結束無臉寬限計時
 
         # ── Frame-interleaving flags ────────────────────────────────────────
         run_pose = (fc % p.pose_stride == 0)
@@ -1208,9 +1312,21 @@ class FatigueEngine:
             and self.eye.nose_speed <= p.nose_speed_limit_fatigue
         )
 
-        # ── Pitch-up gate (suppress blink/fatigue if strongly looking up) ───
+        # ── Pitch gate (suppress blink/fatigue when looking strongly up/down) ─
         pitch_rel = self.head.head_pitch - self.head._pitch_offset
         if pitch_rel > p.pitch_eye_gate_deg:
+            blink_ok   = False
+            fatigue_ok = False
+        elif (
+            self.head._pitch_calibrated
+            and self.head._last_pose_ok_t is not None
+            and (t_now - self.head._last_pose_ok_t) <= p.pose_stale_max_sec
+            and pitch_rel < -p.pitch_eye_gate_deg
+        ):
+            # 低頭同樣使上瞼下垂、EAR/squint 失真；點頭型微睡由 pitch 路徑負責偵測，
+            # EAR 路徑在此區間停用（分母用可量測時間，不會因此壓低 PERCLOS）。
+            # 需 pose 新鮮：過期的下垂姿態不得同時封鎖 EAR 與微睡兩條路徑形成盲區
+            # （2026-07-03 審核 G-M1/G-M2＋三重審查軸A M1）
             blink_ok   = False
             fatigue_ok = False
 
@@ -1228,7 +1344,8 @@ class FatigueEngine:
         )
 
         has_iris = self.eye.has_iris
-        self.gaze.step(lm, t_now, has_iris)
+        eyes_closed = bool(self.eye._blink_closed or self.eye._fatigue_closed)
+        self.gaze.step(lm, t_now, has_iris, eyes_closed=eyes_closed)
 
         microsleep_alert, yawn_detected = self.head.step(
             lm,
@@ -1333,6 +1450,7 @@ class FatigueEngine:
             is_saccade            = self.gaze.is_saccade,
             fixation_duration     = self.gaze.fixation_duration,
             saccade_freq_pm       = self.gaze.saccade_freq_pm,
+            saccade_window_ready  = self.gaze.saccade_window_ready,
             # Head
             head_pitch      = self.head.head_pitch,
             head_yaw        = self.head.head_yaw,

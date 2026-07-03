@@ -24,6 +24,21 @@
 | **P2（PLAUSIBLE，未驗證）** | 3 | 需進一步實驗確認 |
 | Minor | ~18 | 各軸報告內列明 |
 
+## 修復狀態（2026-07-03 同日完成，含臉部特徵模組深度審查）
+
+使用者指示全面修復，並對「MediaPipe 臉部行為特徵捕捉模組」加做兩軸深度審查（幾何正確性＋時序邏輯，皆 opus）。結果：
+
+- **深度審查追加裁決**：P2-1/P2-2/P2-3 全數 CONFIRMED（升 major）；新增 major：B2（微睡在 pitch 校準前可觸發＋過期姿態無年齡上限）、G-M1（低頭時 EAR 無 gate→誤報 DROWSY）、G-M2（低頭誤觸 squint）、G-M3（眨眼污染掃視偵測→漏報空洞凝視）。landmark 索引全數驗證無鏡像錯誤（僅命名與 MediaPipe 官方相反，屬命名污染）；MAR 的 86/316 標 SUSPECT 未改。
+- **已修復**（三重審查三軸皆判可合入；golden：04/0、04/5 零漂移，04/10 漂移逐欄歸因後重建 baseline）：
+  P0-1（無臉寬限期 1.0s，三呼叫點傳同源 t_now）、P0-2（微睡 latch 持續＋警報危險群組共用計時＋微睡 0.5s 快速觸發）、
+  P1-1（BPM 確認窗改 3 樣本×重算節奏推導，舊死碼移除）、P1-2（雙 pillar 失效顯示「無資料」灰）、P1-3（等級降級遲滯 0.03＋警報計時群組）、
+  P1-4 部分（LAN shared-token 認證＋Socket.IO 拒連；**TLS 未實作**，以 GUI/README 警告揭露）、P1-6（相機 try/finally＋MSMF timeout 盡力設定）、P1-7（README dev 依賴）、
+  P2-1（掃視暖機旗標）、P2-2（EAR 校準 sane-min 0.20＋pitch offset sanity ±20——初版 ±12 被 golden 抓到誤傷正常相機傾角後校正）、P2-3（PERCLOS 分母改可量測時間＋floor 5s）、
+  B2（pitch 校準前禁微睡＋姿態過期凍結計時不清空）、G-M1/G-M2（±10° 對稱 pitch gate，需 pose 新鮮）、G-M3（眨眼幀凍結凝視）。
+  新增測試：test_fatigue_engine_behavior.py（10）、test_fatigue_scorer.py（6）、alarm（+3）、rppg（+3）、web token（+11）。
+- **數值行為影響聲明**（golden 04/10 預期漂移）：max_perclos 0.106→0.034（開機假尖峰消除＋可量測時間分母）、avg_perclos −0.011、LOW_VIGILANCE −3 幀（凝視暖機＋眨眼排除假掃視）；Alert/Low-Vigilant 片零漂移。微睡 latch 使 fatigue_level 在整段低頭期間 +0.30（原單幀）——04 子集無微睡事件故 golden 未覆蓋，由單元測試鎖定。
+- **未修（殘留）**：TLS/安全標頭（僅警告揭露）、cap.read() 驅動 hang 的根治（僅 MSMF timeout 緩解）、時序 minors（EMA 對 FPS 相依、blink_rate 正規化、scorer 趨勢牆鐘、眨眼門檻 raw/smooth 混用、掃視 FPS 相依）、幾何 minors（命名鏡像、head pose 註解/焦距粗估、MAR 86/316、虹膜混軸、眉距品質 gate）、−10°~−15° 低頭死帶（設計取捨，EAR 與微睡皆不覆蓋該區間）、overlay/dashboard 掃視上色未同步暖機門檻、web minors（CDN SRI、fb_logout CSRF）。
+
 ---
 
 ## P0：漏報路徑（建議優先修復）

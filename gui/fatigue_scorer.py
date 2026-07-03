@@ -102,6 +102,11 @@ class FuserConfig:
     # ── Trend window (seconds) ────────────────────────────────────────────────
     trend_window_sec: float = 30.0
 
+    # ── Level hysteresis ─────────────────────────────────────────────────────
+    # 降級需跌破門檻再多此幅度才生效（升級即時，不延遲惡化警示），
+    # 防止分數在門檻附近抖動造成等級來回切換（2026-07-03 審核 P1-3）
+    level_hysteresis: float = 0.03
+
     @classmethod
     def for_rppg(cls) -> "FuserConfig":
         return cls()
@@ -178,6 +183,23 @@ class FatigueFuser:
     def __init__(self, config: Optional[FuserConfig] = None) -> None:
         self.cfg = config or FuserConfig()
         self._history: deque[tuple[float, float]] = deque()  # (t, score)
+        self._last_level_idx: Optional[int] = None  # 等級遲滯狀態
+
+    def _level_with_hysteresis(self, s: float) -> tuple[str, str, tuple]:
+        """等級查表加降級遲滯：升級即時，降級需跌破上一級門檻減 level_hysteresis。"""
+        idx = len(_LEVELS) - 1
+        for i, (threshold, _zh, _en, _col) in enumerate(_LEVELS):
+            if s < threshold:
+                idx = i
+                break
+        last = self._last_level_idx
+        if last is not None and idx < last:
+            hold_bound = _LEVELS[last - 1][0] - self.cfg.level_hysteresis
+            if s >= hold_bound:
+                idx = last
+        self._last_level_idx = idx
+        _threshold, zh, en, col = _LEVELS[idx]
+        return zh, en, col
 
     # ── rPPG pillar ───────────────────────────────────────────────────────────
 
@@ -250,7 +272,13 @@ class FatigueFuser:
 
         # Gaze (fixation + low saccade)
         fix_s = _clamp(f.fixation_duration / (cfg.gaze_fix_full_sec + 1e-6))
-        if f.saccade_freq_pm < cfg.gaze_saccade_low_pm and f.face_detected:
+        # 掃視窗未暖機時 saccade_freq_pm≈0 是「沒資料」不是「低掃視」，
+        # 開機/掉臉後數秒內不得假性拉滿凝視分數（2026-07-03 審核 P2-1）
+        if (
+            f.saccade_freq_pm < cfg.gaze_saccade_low_pm
+            and f.face_detected
+            and getattr(f, "saccade_window_ready", False)
+        ):
             low_sac_s = _clamp(
                 1.0 - f.saccade_freq_pm / (cfg.gaze_saccade_low_pm + 1e-6)
             )
@@ -338,7 +366,9 @@ class FatigueFuser:
             score = 0.0
 
         # ── Trend (30-s sliding delta) ────────────────────────────────────────
-        self._history.append((t_now, score))
+        # 無資料期間不寫入 history，避免恢復時 trend 相對 0 產生假性上升
+        if rppg_avail or beh_avail:
+            self._history.append((t_now, score))
         cutoff = t_now - cfg.trend_window_sec
         while self._history and self._history[0][0] < cutoff:
             self._history.popleft()
@@ -355,7 +385,12 @@ class FatigueFuser:
         else:
             trend_sym = "→"
 
-        zh, en, col = _score_to_level(score)
+        if rppg_avail or beh_avail:
+            zh, en, col = self._level_with_hysteresis(score)
+        else:
+            # 兩 pillar 皆失效＝無資料，不得顯示「清醒」綠燈（2026-07-03 審核 P1-2）
+            zh, en, col = "無資料", "NoData", (128, 128, 128)
+            self._last_level_idx = None
 
         return FusedFatigueScore(
             score=score, level=zh, level_en=en, color_bgr=col,

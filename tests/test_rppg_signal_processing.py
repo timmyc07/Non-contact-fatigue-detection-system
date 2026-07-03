@@ -105,18 +105,41 @@ def test_bpm_stabilizer_smooths_large_transient_jump() -> None:
 
 
 def test_bpm_stabilizer_confirms_sustained_large_jump() -> None:
+    # 樣本節奏必須用真實的頻譜重算間隔（_BPM_COMPUTE_INTERVAL_SEC=5.0s）：
+    # 2026-07-03 審核 P1-1 發現舊確認窗 2.0s 在此節奏下永不成立，
+    # 舊測試以 0.4s 密集節奏餵樣本掩蓋了死碼。
     engine = RppgEngine(target_fps=30.0)
-    engine._stabilize_bpm(1.0, 80.0)
+    interval = RppgEngine._BPM_COMPUTE_INTERVAL_SEC
+    engine._stabilize_bpm(0.0, 80.0)
 
-    assert engine._stabilize_bpm(1.2, 50.0) == 80.0
-    assert engine._stabilize_bpm(1.6, 51.0) == 80.0
-    assert engine._stabilize_bpm(2.0, 49.0) == 80.0
-    confirmed = engine._stabilize_bpm(2.4, 50.0)
+    assert engine._stabilize_bpm(1 * interval, 50.0) == 80.0
+    assert engine._stabilize_bpm(2 * interval, 51.0) == 80.0
+    confirmed = engine._stabilize_bpm(3 * interval, 49.0)
 
     assert confirmed < 80.0
     assert confirmed > 70.0
     assert engine._last_bpm_guarded is True
     assert engine._last_bpm_guard_reason == "confirmed_jump_smoothed"
+
+
+def test_bpm_stabilizer_confirm_window_covers_compute_interval() -> None:
+    # 結構性保證：確認窗至少涵蓋 COUNT 個以重算節奏產生的樣本，否則確認機制退化為死碼
+    assert (
+        RppgEngine._BPM_JUMP_CONFIRM_SEC
+        > RppgEngine._BPM_JUMP_CONFIRM_COUNT * RppgEngine._BPM_COMPUTE_INTERVAL_SEC
+    )
+
+
+def test_bpm_stabilizer_harmonic_flipflop_stays_guarded() -> None:
+    # 諧波翻轉（raw 在 60/120 之間跳）不得被當成持續跳變接受：cluster 檢查應反覆清空 pending
+    engine = RppgEngine(target_fps=30.0)
+    interval = RppgEngine._BPM_COMPUTE_INTERVAL_SEC
+    engine._stabilize_bpm(0.0, 60.0)
+
+    for i, raw in enumerate([120.0, 60.0, 118.0, 61.0, 121.0, 59.0], start=1):
+        out = engine._stabilize_bpm(i * interval, raw)
+        assert abs(out - 60.0) < 4.0, f"第 {i} 筆不應離開 60 附近: {out}"
+        assert engine._last_bpm_guard_reason != "confirmed_jump_smoothed"
 
 
 def test_bpm_stabilizer_ignores_implausible_bpm() -> None:

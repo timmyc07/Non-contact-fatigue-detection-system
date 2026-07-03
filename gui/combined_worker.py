@@ -267,7 +267,7 @@ class CombinedWorker(QObject):
                     else:
                         # No face — reset both engines
                         if fatigue_engine is not None:
-                            f_metrics = fatigue_engine.on_no_face()
+                            f_metrics = fatigue_engine.on_no_face(ts)
                             self.fatigue_metrics_ready.emit(f_metrics)
                         if rppg_engine is not None:
                             rppg_engine.reset()
