@@ -34,6 +34,9 @@ SCHEMA_VERSION = 1
 #   PERCLOS：清醒者 PERCLOS 中位數趨近 0，p90 約 0.01；margin 讓門檻落在現行預設附近。
 PERCLOS_LOW_MARGIN = 0.01      # low_th ≈ awake_p90 + 此值（典型 → ~0.02，對齊預設）
 PERCLOS_TIRED_MARGIN = 0.04    # tired_th ≈ awake_p90 + 此值（典型 → ~0.05，對齊預設）
+#   fatigue_scorer 的 PERCLOS→behavior 分數映射（mild 以下 0 分、high 以上滿分）。
+PERCLOS_SCORE_MILD_MARGIN = 0.005  # score mild_th ≈ awake_p90 + 此值（典型 → ~0.015）
+PERCLOS_SCORE_HIGH_MARGIN = 0.06   # score high_th ≈ awake_p90 + 此值（典型 → ~0.07）
 GAZE_STD_FACTOR = 1.5          # gaze 固定門檻 ≈ 清醒 gaze 位置 std × 此值（典型 → ~0.015）
 SACCADE_LOW_FACTOR = 0.6       # 低掃視門檻 ≈ 清醒掃視頻率 × 此值（典型 → ~1.0/min）
 #   防呆：個人化門檻夾在 [fallback × LO, fallback × HI]，避免異常基線把系統拉歪。
@@ -134,6 +137,20 @@ class PersonalProfile:
         if not (self.valid and self.perclos_awake_p90 is not None):
             return fallback
         personalized = self.perclos_awake_p90 + PERCLOS_TIRED_MARGIN
+        return _clamp(personalized, fallback * CLAMP_LO_FACTOR, fallback * CLAMP_HI_FACTOR)
+
+    def perclos_score_mild_th(self, fallback: float) -> float:
+        # fatigue_scorer：PERCLOS 低於此值 → behavior 分數 0（P1 消費）
+        if not (self.valid and self.perclos_awake_p90 is not None):
+            return fallback
+        personalized = self.perclos_awake_p90 + PERCLOS_SCORE_MILD_MARGIN
+        return _clamp(personalized, fallback * CLAMP_LO_FACTOR, fallback * CLAMP_HI_FACTOR)
+
+    def perclos_score_high_th(self, fallback: float) -> float:
+        # fatigue_scorer：PERCLOS 高於此值 → behavior 分數飽和為 1（P1 消費）
+        if not (self.valid and self.perclos_awake_p90 is not None):
+            return fallback
+        personalized = self.perclos_awake_p90 + PERCLOS_SCORE_HIGH_MARGIN
         return _clamp(personalized, fallback * CLAMP_LO_FACTOR, fallback * CLAMP_HI_FACTOR)
 
     # ── Gaze 門檻（P2 消費）───────────────────────────────────────────────

@@ -36,6 +36,30 @@ def test_perclos_weight_dominates_behavior() -> None:
     assert abs(weights - 1.0) < 1e-9   # 行為子權重仍總和為 1
 
 
+def test_perclos_sentinel_eff_matches_cfg_defaults() -> None:
+    # P1 向後相容：哨兵 -1（預設）必須與明確帶 cfg 預設門檻算出相同分數（bit-identical）。
+    sentinel = FatigueMetrics(face_detected=True, calibrated=True, perclos=0.03)
+    explicit = FatigueMetrics(
+        face_detected=True, calibrated=True, perclos=0.03,
+        perclos_mild_th_eff=0.015, perclos_high_th_eff=0.07,
+    )
+    s_sent = FatigueFuser().update(None, sentinel).behavior_sub
+    s_expl = FatigueFuser().update(None, explicit).behavior_sub
+    assert s_sent == s_expl
+
+
+def test_perclos_personalized_thresholds_shift_score() -> None:
+    # P1：清醒時 PERCLOS 本就偏高的駕駛員，個人化門檻拉高 → 同一 PERCLOS 得較低分（更寬容）。
+    base = FatigueMetrics(face_detected=True, calibrated=True, perclos=0.03)
+    personalized = FatigueMetrics(
+        face_detected=True, calibrated=True, perclos=0.03,
+        perclos_mild_th_eff=0.03, perclos_high_th_eff=0.12,
+    )
+    s_base = FatigueFuser().update(None, base).behavior_sub
+    s_pers = FatigueFuser().update(None, personalized).behavior_sub
+    assert s_pers < s_base
+
+
 def test_fuser_no_data_reports_nodata_not_alert() -> None:
     # 兩 pillar 皆失效時不得顯示「清醒」綠燈
     fuser = FatigueFuser()

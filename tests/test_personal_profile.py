@@ -27,6 +27,8 @@ _TH_METHODS = [
     ("perclos_low_th", 0.02),
     ("perclos_tired_th", 0.05),
     ("perclos_composite_full", 0.05),
+    ("perclos_score_mild_th", 0.015),
+    ("perclos_score_high_th", 0.07),
     ("gaze_fixed_std_th", 0.015),
     ("saccade_low_pm", 1.0),
 ]
@@ -77,6 +79,17 @@ def test_droopy_baseline_raises_perclos_threshold() -> None:
     low = p.perclos_low_th(0.02)
     assert low > 0.02
     assert low <= 0.02 * 3.0 + 1e-9
+
+
+def test_perclos_score_map_methods_reproduce_defaults_and_clamp() -> None:
+    # 典型清醒者 → scorer PERCLOS 映射門檻還原到現行預設（0.015 / 0.07）。
+    p = PersonalProfile(valid=True, perclos_awake_p90=0.01)
+    assert abs(p.perclos_score_mild_th(0.015) - 0.015) < 1e-9
+    assert abs(p.perclos_score_high_th(0.07) - 0.07) < 1e-9
+    # 異常基線夾在 fallback×3。
+    ext = PersonalProfile(valid=True, perclos_awake_p90=0.9)
+    assert ext.perclos_score_mild_th(0.015) == 0.015 * 3.0
+    assert ext.perclos_score_high_th(0.07) == 0.07 * 3.0
 
 
 def test_extreme_baseline_is_clamped() -> None:

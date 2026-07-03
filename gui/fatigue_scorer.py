@@ -38,6 +38,11 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, x))
 
 
+# PERCLOS→behavior 分數映射門檻的權威預設（單一來源；engine 個人化時以此為 clamp 錨點）。
+PERCLOS_MILD_TH_DEFAULT = 0.015  # below = 0 score
+PERCLOS_HIGH_TH_DEFAULT = 0.07   # above = 1.0 score
+
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -84,8 +89,8 @@ class FuserConfig:
 
     # PERCLOS tiers — 對齊系統實際 operating range（UTA-RLDD：清醒~0.006、嗜睡~0.031、
     # 峰值~0.067）。舊值 0.10/0.25 遠高於系統實際產生的 PERCLOS，使唯一有效訊號恆輸出 0。
-    perclos_mild_th:  float = 0.015  # below = 0 score
-    perclos_high_th:  float = 0.07   # above = 1.0 score
+    perclos_mild_th:  float = PERCLOS_MILD_TH_DEFAULT  # below = 0 score
+    perclos_high_th:  float = PERCLOS_HIGH_TH_DEFAULT  # above = 1.0 score
 
     # Squint duration that maps to score 1.0
     squint_full_sec:  float = 30.0
@@ -255,13 +260,16 @@ class FatigueFuser:
         """Returns (pillar_score, perclos_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s)."""
         cfg = self.cfg
 
-        # PERCLOS
-        if f.perclos <= cfg.perclos_mild_th:
+        # PERCLOS：個人化門檻優先（engine 於 live+profile 時填入哨兵欄位），
+        # 哨兵 < 0 表未設定 → 退回 cfg 常數（replay/golden 恆走此路徑 → 逐位元不變）。
+        mild_th = f.perclos_mild_th_eff if f.perclos_mild_th_eff >= 0.0 else cfg.perclos_mild_th
+        high_th = f.perclos_high_th_eff if f.perclos_high_th_eff >= 0.0 else cfg.perclos_high_th
+        if f.perclos <= mild_th:
             perc_s = 0.0
         else:
             perc_s = _clamp(
-                (f.perclos - cfg.perclos_mild_th)
-                / (cfg.perclos_high_th - cfg.perclos_mild_th + 1e-6)
+                (f.perclos - mild_th)
+                / (high_th - mild_th + 1e-6)
             )
 
         # Squinting

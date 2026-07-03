@@ -27,6 +27,8 @@ import numpy as np
 import cv2 as _cv2
 
 from .mediapipe_tuning import CalibrationStore, MediaPipeTuning, load_mediapipe_tuning
+from .personal_profile import PersonalProfile
+from .fatigue_scorer import PERCLOS_HIGH_TH_DEFAULT, PERCLOS_MILD_TH_DEFAULT
 
 _CV2_OK = True
 log = logging.getLogger(__name__)
@@ -337,6 +339,10 @@ class FatigueMetrics:
     ear_smooth:      float = 0.0
     blink_count:     int   = 0
     perclos:         float = 0.0
+    # 個人化 PERCLOS→分數映射門檻（fatigue_scorer 消費）。哨兵 -1 = 未設定 → scorer 用 cfg 常數。
+    # 只有 live 且載入個人 profile 時 engine 才覆寫；replay/golden 恆為 -1 → 逐位元不變。
+    perclos_mild_th_eff: float = -1.0
+    perclos_high_th_eff: float = -1.0
     blink_rate_pm:   float = 0.0        # blinks per minute (60-s sliding window)
     blink_duration_sec: float = 0.0
     blink_duration_mean_sec: float = 0.0
@@ -1157,7 +1163,11 @@ class FatigueEngine:
     Pass raw MediaPipe FaceLandmarker landmarks (list of 478 NormalizedLandmarks).
     """
 
-    def __init__(self, params: Optional[FatigueParams] = None) -> None:
+    def __init__(self, params: Optional[FatigueParams] = None,
+                 personal_profile: Optional[PersonalProfile] = None) -> None:
+        # personal_profile：個人清醒基線；None（含所有 replay/golden 路徑）時，
+        # 所有門檻退回 FatigueParams 寫死常數，輸出與現況逐位元一致。
+        self._profile: Optional[PersonalProfile] = personal_profile
         self._tuning: MediaPipeTuning = load_mediapipe_tuning()
         self._calibration_store = CalibrationStore()
         self.p      = params or FatigueParams(
@@ -1185,6 +1195,10 @@ class FatigueEngine:
         self._no_face_since = None
         self._no_face_reset_done = False
         self._load_persisted_calibration()
+
+    def set_personal_profile(self, profile: Optional[PersonalProfile]) -> None:
+        """session 中熱換個人清醒基線（P5：手動「記錄清醒基線」完成後即時生效）。"""
+        self._profile = profile
 
     def _load_persisted_calibration(self) -> None:
         eye_cal = self._calibration_store.get_section("fatigue_eye_blendshape")
@@ -1366,13 +1380,30 @@ class FatigueEngine:
             self._save_persisted_calibration()
 
         # ── Status & composite fatigue level ─────────────────────────────────
+        # PERCLOS 門檻：有個人清醒基線則相對化，否則退回寫死常數（prof=None → 逐位元不變）。
+        prof = self._profile
+        perclos_low_th = (prof.perclos_low_th(p.low_vigilance_perclos_th)
+                          if prof is not None else p.low_vigilance_perclos_th)
+        perclos_tired_th = (prof.perclos_tired_th(p.tired_perclos_th)
+                            if prof is not None else p.tired_perclos_th)
+        perclos_full = (prof.perclos_composite_full(p.perclos_composite_full)
+                        if prof is not None else p.perclos_composite_full)
+        # scorer PERCLOS→分數映射的個人化門檻：只有 valid profile 才覆寫，否則寫哨兵 -1
+        # 讓 scorer 退回自身 cfg（即使 FuserConfig 被覆寫也維持 bit-identical）。
+        if prof is not None and prof.valid and prof.perclos_awake_p90 is not None:
+            perclos_mild_eff = prof.perclos_score_mild_th(PERCLOS_MILD_TH_DEFAULT)
+            perclos_high_eff = prof.perclos_score_high_th(PERCLOS_HIGH_TH_DEFAULT)
+        else:
+            perclos_mild_eff = -1.0
+            perclos_high_eff = -1.0
+
         # V2 early-warning: cognitive / micro-expression driven
         early_warning = (
             self.eye.is_squinting
             or self.eye.is_frowning
             or self.gaze.gaze_mental_fatigue
             or (self.gaze.fixation_duration > 15.0)
-            or self.eye.last_perclos >= p.low_vigilance_perclos_th
+            or self.eye.last_perclos >= perclos_low_th
             or self.eye.blink_temporal_score >= 0.45
             or self.eye.blend_eye_squint > p.blend_squint_gate
             or self.eye.blend_brow_down > p.blend_brow_gate
@@ -1386,7 +1417,7 @@ class FatigueEngine:
         if self.eye.calibrated:
             if early_warning:
                 status = "LOW_VIGILANCE"
-            if self.eye.last_perclos >= p.tired_perclos_th:
+            if self.eye.last_perclos >= perclos_tired_th:
                 status = "DROWSY"
             if self.eye.long_closed:
                 status = "CRITICAL"
@@ -1401,7 +1432,7 @@ class FatigueEngine:
         # 權重依 UTA-RLDD 各通道分辨力重配（2026-07-03 準確度校準）：PERCLOS 為主，
         # 微睡（此資料上為反訊號）大幅降權；PERCLOS 以獨立的 composite 飽和點正規化到 0-1，
         # 讓實際 operating range（~0.05）就能貢獻滿分而非被舊尺度壓成 0。
-        perclos_norm = _clamp(self.eye.last_perclos / (p.perclos_composite_full + 1e-6), 0.0, 1.0)
+        perclos_norm = _clamp(self.eye.last_perclos / (perclos_full + 1e-6), 0.0, 1.0)
         fatigue_level = _clamp(
             perclos_norm * 0.55
             + (1.0 if microsleep_alert else 0.0) * 0.12
@@ -1427,6 +1458,8 @@ class FatigueEngine:
             ear_smooth      = self.eye.ear_smooth,
             blink_count     = self.eye.blink_count,
             perclos         = self.eye.last_perclos,
+            perclos_mild_th_eff = perclos_mild_eff,
+            perclos_high_th_eff = perclos_high_eff,
             blink_rate_pm   = self.eye.blink_rate_pm,
             blink_duration_sec = self.eye.blink_duration_sec,
             blink_duration_mean_sec = self.eye.blink_duration_mean_sec,
