@@ -179,6 +179,45 @@ def test_blink_does_not_register_fake_saccade() -> None:
 
 # ── P2-1：掃視觀測窗暖機 ─────────────────────────────────────────────────────
 
+def _gaze_landmarks(iris_dx: float) -> list[SimpleNamespace]:
+    """眼角固定（眼寬 0.2）、虹膜相對眼心偏移 iris_dx 的假臉；用來製造可控 gaze 位置。"""
+    import gui.fatigue_engine as fe
+    pts = [SimpleNamespace(x=0.5, y=0.5) for _ in range(478)]
+    pts[fe.LEFT_EYE_INNER] = SimpleNamespace(x=0.60, y=0.50)
+    pts[fe.LEFT_EYE_OUTER] = SimpleNamespace(x=0.40, y=0.50)
+    pts[fe.LEFT_EYE_TOP]   = SimpleNamespace(x=0.50, y=0.45)
+    pts[fe.LEFT_EYE_BOT]   = SimpleNamespace(x=0.50, y=0.55)
+    pts[fe.RIGHT_EYE_INNER] = SimpleNamespace(x=0.60, y=0.50)
+    pts[fe.RIGHT_EYE_OUTER] = SimpleNamespace(x=0.40, y=0.50)
+    pts[fe.RIGHT_EYE_TOP]   = SimpleNamespace(x=0.50, y=0.45)
+    pts[fe.RIGHT_EYE_BOT]   = SimpleNamespace(x=0.50, y=0.55)
+    pts[fe.LEFT_IRIS_CTR]  = SimpleNamespace(x=0.50 + iris_dx, y=0.50)
+    pts[fe.RIGHT_IRIS_CTR] = SimpleNamespace(x=0.50 + iris_dx, y=0.50)
+    return pts
+
+
+def _stability_after_jitter(eff_std_th) -> float:
+    from gui.fatigue_engine import FatigueParams, GazeTrackingModule
+    gaze = GazeTrackingModule(FatigueParams())
+    gaze._eff_gaze_fixed_std_th = eff_std_th
+    # 12 幀、虹膜 x 在 ±0.01 抖動 → 產生非零 gaze std
+    for i in range(12):
+        dx = 0.01 if i % 2 else -0.01
+        gaze.step(_gaze_landmarks(dx), i * 0.1, has_iris=True)
+    return gaze.gaze_stability_index
+
+
+def test_gaze_effective_threshold_takes_effect() -> None:
+    # P2：同一抖動輸入，個人化較大的 gaze_fixed_std_th 應給較高的穩定度指數；
+    # eff=None 必須與明確帶 p 常數（0.015）逐位元一致（bit-identical）。
+    s_default = _stability_after_jitter(None)
+    s_constant = _stability_after_jitter(0.015)
+    s_loose = _stability_after_jitter(0.045)
+    assert s_default == s_constant           # None 退回 p 常數
+    assert s_loose > s_default               # 較大門檻 → 較高穩定度
+    assert 0.0 <= s_default <= 1.0
+
+
 def test_saccade_window_ready_requires_warmup() -> None:
     p = FatigueParams()
     gaze = GazeTrackingModule(p)

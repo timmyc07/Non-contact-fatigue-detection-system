@@ -895,9 +895,17 @@ class GazeTrackingModule:
         self.fixation_duration   = 0.0
         self.saccade_freq_pm     = 0.0
         self.saccade_window_ready = False
+        # 個人化 effective 門檻（由 FatigueEngine 每幀依 profile 設定）；
+        # None → 退回 self.p 常數 / 原字面量，確保直接呼叫 step 的路徑逐位元不變。
+        self._eff_gaze_fixed_std_th: Optional[float] = None
+        self._eff_saccade_low_pm: Optional[float] = None
 
     def step(self, lm: Any, t_now: float, has_iris: bool, eyes_closed: bool = False) -> None:
         p = self.p
+        gaze_fixed_std_th = (self._eff_gaze_fixed_std_th
+                             if self._eff_gaze_fixed_std_th is not None else p.gaze_fixed_std_th)
+        saccade_low_pm = (self._eff_saccade_low_pm
+                          if self._eff_saccade_low_pm is not None else 1.0)
         if not has_iris:
             self._prev_gaze   = None
             self._prev_gaze_t = None
@@ -941,9 +949,9 @@ class GazeTrackingModule:
             arr = np.array(self._history)
             std = float(np.sqrt(np.var(arr[:, 1]) + np.var(arr[:, 2])))
             self.gaze_stability_index = _clamp(
-                1.0 - std / (p.gaze_fixed_std_th * 4.0), 0.0, 1.0
+                1.0 - std / (gaze_fixed_std_th * 4.0), 0.0, 1.0
             )
-            gaze_is_fixed = std < p.gaze_fixed_std_th
+            gaze_is_fixed = std < gaze_fixed_std_th
         else:
             self.gaze_stability_index = 0.0
 
@@ -987,7 +995,7 @@ class GazeTrackingModule:
 
         # ── Mental fatigue (空洞凝視) ─────────────────────────────────────────
         # Trigger when gaze is fixed AND saccade frequency drops very low
-        low_saccades = self.saccade_freq_pm < 1.0   # less than 1 saccade/min = unusual
+        low_saccades = self.saccade_freq_pm < saccade_low_pm   # 低於清醒基線掃視率 = 空洞凝視傾向
         if gaze_is_fixed or (self.fixation_duration > 10.0 and low_saccades):
             if self._gaze_fixed_start is None:
                 self._gaze_fixed_start = t_now
@@ -1364,6 +1372,12 @@ class FatigueEngine:
 
         has_iris = self.eye.has_iris
         eyes_closed = bool(self.eye._blink_closed or self.eye._fatigue_closed)
+        # gaze 門檻個人化：有 profile 則設 effective 值，否則設 None（gaze.step 退回原常數）。
+        _gprof = self._profile
+        self.gaze._eff_gaze_fixed_std_th = (
+            _gprof.gaze_fixed_std_th(p.gaze_fixed_std_th) if _gprof is not None else None)
+        self.gaze._eff_saccade_low_pm = (
+            _gprof.saccade_low_pm(1.0) if _gprof is not None else None)
         self.gaze.step(lm, t_now, has_iris, eyes_closed=eyes_closed)
 
         microsleep_alert, yawn_detected = self.head.step(
