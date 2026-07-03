@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 無人機駕駛員疲勞狀態監測系統：以一般攝影機做 **非接觸式** 生理與行為監測。結合 MediaPipe 行為疲勞分析與 rPPG（remote photoplethysmography）生理訊號，提供警覺度下降提示。桌面 GUI（PySide6）+ Web dashboard（Flask/Socket.IO）。UTA-RLDD replay 為門檻校正與可重現驗證工具，**不是**要把系統改成汽車駕駛分類器。
 
-`AGENTS.md` 為本專案更完整的工作規則參考；本檔為代理工作的權威規則來源，並補充架構與指令速查。
+本檔為代理工作的權威規則來源。跨專案的工作制度（模型調度、派工模板、判斷 rubric、維護協議）在 `~/.claude/rules/`，由全域 CLAUDE.md 自動載入路由，不在此重複。
 
 ## 回覆與語言規則
 
@@ -14,29 +14,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 程式碼註解、commit message 說明、文件內容以中文為主。
 - 技術術語、套件名稱、API 名稱與程式碼本身可保留英文。
 
-## 最高優先級工作流程
+## 任務分級與工作流程
 
-- 任何變更前，先閱讀相關程式碼、現有文件與部署設定。
-- 任何變更前，先查詢最新官方技術文件，確認方案可行後再實作。
-- 只採用信心值超過 90% 的技術與操作；低於門檻時先標記風險。
-- 任何變更前，先完成三重審查。
-- 任務完成後，必須執行必要驗證（至少 `pytest`，見「常用指令」）。
-- 任務完成後，必須自動 commit 並 push 到 GitHub。
-- 任務完成後，必須同步更新 repo 內文件與 Obsidian 筆記。
-- 若專案需要編譯成 `.exe`，每次完成改動後都必須自動編譯一次。
+依**改動內容**（不是改動行數）分三級。判斷不了就往上取一級。
 
-## 三重審查要求
+| 級別 | 判準（碰到任一即屬此級） | 必做 | 可跳過 |
+|---|---|---|---|
+| **輕量** | 只改文件/註解/README、typo；測試檔內的 typo/註解/訊息文字；scripts 的訊息文字/log/註解（不改變輸出格式與行為） | 改到 `.py` 就跑 `compileall` 該檔；commit+push | 三重審查、完整 pytest、文件同步 |
+| **中量** | 單一子系統的程式碼改動且**不碰數值行為**：GUI 佈線、web dashboard、錄影/DB、新增或實質改寫測試邏輯、scripts 行為調整、平台適配且不影響數值（例：相機後端 fallback 順序） | 對應測試檔 pytest + `compileall`；一輪審查（自查 checklist 或 1 個 code-reviewer agent）；commit+push；改到指令/依賴/平台支援則同步 README | 三重審查 |
+| **重量** | 碰演算法數值路徑（`rppg/`、`gui/fatigue_engine.py`、`gui/fatigue_scorer.py`、校準、濾波、ROI、分數邏輯）；跨多子系統；啟動流程（`main.py` Qt plugin 順序）；資料 schema；依賴升級 | 完整 `pytest -q`；三重審查（見下）；「數值行為影響聲明」（改了什麼、哪些輸出值會變、為什麼可接受）；commit+push；同步 `docs/` 相關報告 | — |
 
-- 審查 1：查詢最新官方或主要技術文件，確認方案與版本相容性。
-- 審查 2：檢查相關程式碼、部署設定與潛在錯誤。
-- 審查 3：檢查是否符合專案慣例、文件體系與維運需求。
-- 若可用 subagent，預設使用 3 個 agent 並行審查。
-- 若因工具或上層規則無法使用 subagent，改以三輪獨立審查流程替代，仍需先完成審查再修改。
+**三重審查**（僅重量級）：3 個並行 subagent 各查一軸——(1) 官方文件/版本相容性、(2) 相關程式碼與部署設定的潛在錯誤、(3) 專案慣例與文件體系。無法用 subagent 時改三輪獨立自查，每輪換一個審查軸、寫下具體發現才算一輪。
 
-## 信心門檻
+**信心門檻**（僅重量級）：沒把握的技術方案先標記風險與替代方案，不直接落地。輕量/中量不需要引用此條。
 
-- 僅套用信心值超過 90% 的技術、修正與部署操作。
-- 若無法達到此門檻，先提出阻塞點與替代方案，不直接落地。
+**Obsidian 同步為選配**：只有使用者在當前 session 明確提供 vault 路徑時才同步，否則只更新 repo 內 `docs/`，不猜路徑、不因此中斷。
 
 ## 常用指令
 
@@ -46,10 +38,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 執行主程式（桌面 GUI）
 python main.py
 
-# 測試（變更 Python 後至少執行）
-.venv\Scripts\python -m pytest -q
+# 測試
+.venv\Scripts\python -m pytest -q                                             # 完整（重量級必跑）
 .venv\Scripts\python -m pytest tests/test_rppg_signal_processing.py -q       # 單一測試檔
-.venv\Scripts\python -m pytest tests/test_rppg_signal_processing.py::test_name # 單一測試
+.venv\Scripts\python -m pytest tests/test_rppg_signal_processing.py::test_name
 
 # 匯入 / 語法 / 依賴健檢
 .venv\Scripts\python -m compileall -q main.py gui rppg tests
@@ -59,7 +51,14 @@ python main.py
 python -m rppg.demo_rppg_live
 ```
 
-Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。相機黑屏診斷：`scripts/diagnose_camera.py`（詳見 README「rPPG BPM 校準」與診斷段落）。
+Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。相機黑屏診斷：`scripts/diagnose_camera.py`。
+
+## 環境已知坑（遇錯先查這裡，再決定要不要重試）
+
+- PowerShell 5.1 **沒有** `&&` / `||`：出現 parser error 不是指令壞掉，改 `A; if ($?) { B }` 或用 Bash tool。
+- PowerShell `Out-File`/`Set-Content` 預設 UTF-16 LE：寫給其他工具讀的檔案必加 `-Encoding utf8`；寫檔優先用 Write/Edit tool。
+- `git push` 可能因 gh credential helper hang 住：解法見 memory `git-push-credential-hang-workaround.md`（GIT_ASKPASS shim + `gh auth token`）。
+- 同一子任務最多重試 2 輪，第 2 輪失敗必須換假設或升級模型，不准第 3 輪原樣重試（詳見 `~/.claude/rules/judgment-rubrics.md`）。
 
 ## 架構總覽
 
@@ -93,7 +92,7 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 - `config/mediapipe_tuning.json`（**納入版控**）— 集中所有可調參數：`face_landmarker`（confidence）、`rppg_roi`（ROI 權重/姿態懲罰/遮擋門檻/EMA 平滑/jitter 門檻）、`quality`（品質分數組合權重）、`blendshape`（baseline 校準）、`active_profile` + `profiles`（`default` / `stable_indoor`（預設）/ `low_light` / `high_motion`）。切換 profile 需重啟 worker，FaceLandmarker options **不做熱更新**。`canonical_roi_warp_enabled` 為實驗開關，預設關閉（正式比較前保持關閉）。
 - `config/mediapipe_calibration.json`、`config/rppg_calibration/` — 個人化/環境 baseline 與 rPPG BPM 校準版本，**不納入版控**（機器/使用者特定）。
 
-修改演算法時的最高原則（見 `AGENTS.md`）：**優先維持 rPPG、疲勞判定、濾波、ROI 與分數邏輯的數值行為**，不做無關重構；任何會影響數值結果的平台適配須先明確說明。
+修改演算法時的最高原則：**優先維持 rPPG、疲勞判定、濾波、ROI 與分數邏輯的數值行為**，不做無關重構；任何會影響數值結果的平台適配須先明確說明（即重量級任務的「數值行為影響聲明」）。
 
 ## UTA-RLDD 離線驗證
 
@@ -117,12 +116,11 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 
 ## 文件
 
-技術報告集中在 `docs/`（多份 `.md` 皆有對應 `.pdf`）。PDF 由 `scripts/build_technical_report_pdfs.py`、`scripts/build_practical_project_report_pdf.py`、`scripts/build_rppg_pdf.py` 產生（需 `reportlab`，見 `requirements-dev.txt`）。變更安裝方式、平台支援、執行命令或必要依賴時，須同步更新 `README.md`。
+技術報告集中在 `docs/`（多份 `.md` 皆有對應 `.pdf`）。PDF 由 `scripts/build_technical_report_pdfs.py`、`scripts/build_practical_project_report_pdf.py`、`scripts/build_rppg_pdf.py` 產生（需 `reportlab`，見 `requirements-dev.txt`）。變更安裝方式、平台支援、執行命令或必要依賴時，須同步更新 `README.md`。編譯 `.exe` 僅在使用者明確要求該次任務產出 exe 時執行。
 
 ## 編碼與設計規範
 
 - 使用 4 個空白縮排，保持既有風格，避免無關重構。
-- **優先維持演算法行為與精準度**，不任意更動 rPPG、疲勞判定、濾波、ROI 與分數邏輯；若平台適配會影響數值結果，必須先明確說明。
 - 新增或調整函式時，若屬關鍵流程或錯誤處理，應使用既有 logger（`logging.getLogger(__name__)`）記錄。
 - 前端介面必須使用 responsive 寫法，不寫死尺寸。
 - 新增檔案時，名稱與責任保持單一明確。
@@ -130,9 +128,8 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 ## Git 規範
 
 - 工作樹可能不是乾淨的，禁止覆蓋或回退非本次任務造成的變更；只修改與當前需求直接相關的檔案。
-- 任務完成後自動執行 `git add`、`git commit`、`git push`。
-- commit 格式遵循 Conventional Commits，例如 `fix(deploy): ...`、`docs(agents): ...`。
-- commit 主旨與說明以中文為主，可保留必要英文技術名詞。
+- 任務完成後自動執行 `git add`（只加本次任務的檔案）、`git commit`、`git push`（各級皆適用）。
+- commit 格式遵循 Conventional Commits，例如 `fix(deploy): ...`、`docs(agents): ...`；主旨與說明以中文為主，可保留必要英文技術名詞。
 
 ## 安全與設定
 
@@ -146,7 +143,3 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 
 - 若使用者有明確新指示，優先以使用者當前指示為準。
 - 若規則因工具、權限或環境限制無法完整執行，需明確回報阻塞點，再採用最接近規則的方案。
-
-## Mindset
-
-- 以企業級工程師標準工作，重視正確性、可維護性、可部署性與可驗證性。
