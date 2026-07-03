@@ -1183,6 +1183,7 @@ def _summary_visual_rows(summaries: list[ReplayVideoSummary]) -> list[dict[str, 
         rows.append(
             {
                 "受試者": summary.subject,
+                "影片": Path(summary.video_path).name or summary.subject,
                 "資料集標籤": summary.label,
                 "警覺類別": summary.label_name,
                 "快速判讀": _quick_reading(summary),
@@ -1256,31 +1257,60 @@ def _label_aggregates(rows: list[dict[str, object]]) -> dict[str, dict[str, floa
     return out
 
 
+def _row_metrics(row: dict[str, object]) -> dict[str, float]:
+    """把單列 summary 轉成與 _label_aggregates 相同 key 的指標字典（供通用模式每支影片分組長條使用）。"""
+    return {
+        "face": _row_float(row, "人臉偵測率"),
+        "perclos": _row_float(row, "平均PERCLOS"),
+        "max_perclos": _row_float(row, "最高PERCLOS"),
+        "p95_fused": _row_float(row, "95分位融合分數"),
+        "low": _row_float(row, "低警覺比例"),
+        "drowsy": _row_float(row, "嗜睡危急比例"),
+        "behavior": _row_float(row, "行為有效率"),
+        "low_quality": _row_float(row, "低品質比例"),
+    }
+
+
 def _render_visual_report(
     rows: list[dict[str, object]],
     *,
     title: str,
     subtitle: str = "由 UTA-RLDD replay summary CSV 產生；用途是判斷目前門檻支持度、誤報/漏報風險與下一步優化方向。",
+    labeled: bool = True,
 ) -> str:
-    aggregates = _label_aggregates(rows)
     total = len(rows)
     done = sum(1 for row in rows if str(row.get("處理狀態", "")) == "done")
     face_avg = _mean_float([_row_float(row, "人臉偵測率") for row in rows])
-    alert_false = _flag_count(rows, "alert_false_alarm_risk")
-    drowsy_miss = _flag_count(rows, "drowsy_miss_risk")
     low_effective = _flag_count(rows, "behavior_effective_frames_low")
     cards = [
         ("影片總數", str(total)),
         ("完成影片", str(done)),
         ("平均人臉偵測率", _fmt_percent(face_avg)),
-        ("Alert 誤報風險", str(alert_false)),
-        ("Drowsy 漏報風險", str(drowsy_miss)),
-        ("有效幀不足", str(low_effective)),
     ]
+    if labeled:
+        # UTA-RLDD preset：誤報/漏報風險是相對 0/5/10 真值的對齊診斷，通用模式無此概念
+        cards.extend(
+            [
+                ("Alert 誤報風險", str(_flag_count(rows, "alert_false_alarm_risk"))),
+                ("Drowsy 漏報風險", str(_flag_count(rows, "drowsy_miss_risk"))),
+            ]
+        )
+    cards.append(("有效幀不足", str(low_effective)))
     card_html = "".join(
         f'<section class="card"><div class="card-label">{_escape(label)}</div><div class="card-value">{_escape(value)}</div></section>'
         for label, value in cards
     )
+
+    # 長條分組：UTA-RLDD preset 按 0/5/10 標籤彙總；通用模式按每支影片列出
+    if labeled:
+        aggregates = _label_aggregates(rows)
+        chart_pairs = [
+            (f"{label} {UTARLDD_LABELS.get(label, '')}", aggregates[label]) for label in ("0", "5", "10")
+        ]
+    else:
+        chart_pairs = [
+            (str(row.get("影片", "") or row.get("受試者", "")), _row_metrics(row)) for row in rows
+        ]
 
     chart_sections = []
     chart_specs = [
@@ -1294,8 +1324,8 @@ def _render_visual_report(
     ]
     for chart_title, key, color, max_value in chart_specs:
         bars = "".join(
-            _bar(f"{label} {UTARLDD_LABELS.get(label, '')}", aggregates[label][key], max_value=max_value, color=color)
-            for label in ("0", "5", "10")
+            _bar(bar_label, metrics[key], max_value=max_value, color=color)
+            for bar_label, metrics in chart_pairs
         )
         chart_sections.append(f'<section class="panel"><h2>{_escape(chart_title)}</h2>{bars}</section>')
 
@@ -1385,7 +1415,7 @@ def write_visual_report_html(
         title = "影片回測可視化報表"
         subtitle = "由影片回測 summary CSV 產生；用途是快速檢視各影片的疲勞跡象與品質指標。"
     path.write_text(
-        _render_visual_report(rows, title=title, subtitle=subtitle),
+        _render_visual_report(rows, title=title, subtitle=subtitle, labeled=labeled),
         encoding="utf-8",
     )
 

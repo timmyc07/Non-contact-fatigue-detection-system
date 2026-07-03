@@ -19,6 +19,7 @@ from gui.video_replay import (
     write_full_summary_csv,
     write_summary_csv,
     write_validation_report_csv,
+    write_visual_report_html,
     write_visual_report_html_from_csv,
 )
 from scripts.utarldd_replay import _split_csv
@@ -617,3 +618,37 @@ def test_run_replay_batch_labeled_false_uses_generic_discovery_and_skips_validat
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["source"] == "generic-video"
     assert manifest["validation_report_csv"] == ""
+
+
+def test_visual_report_generic_mode_has_no_utarldd_wording(tmp_path: Path) -> None:
+    labeled_summaries = [
+        ReplayVideoSummary(subject="01", label="0", label_name="Alert", video_path="/d/01/0.mov",
+                           status="done", frames=100, face_frames=90, face_rate=0.9),
+        ReplayVideoSummary(subject="01", label="10", label_name="Drowsy", video_path="/d/01/10.mov",
+                           status="done", frames=100, face_frames=80, face_rate=0.8),
+    ]
+    generic_summaries = [
+        ReplayVideoSummary(subject="clips", label=UNLABELED_LABEL, label_name=UNLABELED_LABEL_NAME,
+                           video_path="/d/clips/my_drive_home.mp4", status="done",
+                           frames=100, face_frames=90, face_rate=0.9),
+        ReplayVideoSummary(subject="clips", label=UNLABELED_LABEL, label_name=UNLABELED_LABEL_NAME,
+                           video_path="/d/clips/night_run.mp4", status="done",
+                           frames=100, face_frames=70, face_rate=0.7),
+    ]
+    lab_path, gen_path = tmp_path / "lab.html", tmp_path / "gen.html"
+    write_visual_report_html(lab_path, labeled_summaries, labeled=True)
+    write_visual_report_html(gen_path, generic_summaries, labeled=False)
+    lab = lab_path.read_text(encoding="utf-8")
+    gen = gen_path.read_text(encoding="utf-8")
+
+    # labeled=True（UTA-RLDD preset）維持既有樣貌
+    assert "UTA-RLDD" in lab
+    assert "0 Alert" in lab and "10 Drowsy" in lab
+    assert "Alert 誤報風險" in lab and "Drowsy 漏報風險" in lab
+
+    # labeled=False（通用模式）完全中性、按影片名分組
+    assert "UTA-RLDD" not in gen
+    assert "0 Alert" not in gen and "5 Low Vigilant" not in gen and "10 Drowsy" not in gen
+    assert "Alert 誤報風險" not in gen and "Drowsy 漏報風險" not in gen
+    assert "my_drive_home.mp4" in gen and "night_run.mp4" in gen
+    assert "影片回測可視化報表" in gen
