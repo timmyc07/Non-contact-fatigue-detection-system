@@ -117,9 +117,22 @@ canva apps config status --lite
 canva apps doctor --ci
 ```
 
-## UTA-RLDD replay
+## 影片回測（video replay）
 
-本專案可把 UTA-RLDD 影片當作可重現的「離線鏡頭」來批次測試，不會改動即時攝影機 worker。UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：https://sites.google.com/view/utarldd/home。回放模式會使用影片 FPS 產生 deterministic timestamp，疲勞校準起點會對齊第一個有效人臉 frame 的時間，因此前約 5 秒為 `CALIBRATING`，後續才進入 `OK / LOW_VIGILANCE / DROWSY / CRITICAL` 等狀態統計。
+回測模組的本質是「**把任何影片當作可重現的『離線鏡頭』，餵進與即時攝影機相同的疲勞判斷引擎做回放驗證**」的通用工具，不會改動即時攝影機 worker。UTA-RLDD 只是其中一個拿來做門檻校正與可重現驗證的資料集，不是模組的目的。回放模式會使用影片 FPS 產生 deterministic timestamp，疲勞校準起點會對齊第一個有效人臉 frame 的時間，因此前約 5 秒為 `CALIBRATING`，後續才進入 `OK / LOW_VIGILANCE / DROWSY / CRITICAL` 等狀態統計。
+
+### 任意影片回測（無需 UTA-RLDD 結構）
+
+用 `scripts.video_replay` 直接回測「單一影片檔」或「任意影片資料夾」，不需要 UTA-RLDD 的資料夾結構或 `0/5/10` 檔名 label；無法解析成官方 label 的影片會標為 `Unlabeled`。接受 `.mp4/.mov/.avi/.mkv/.m4v/.webm`，預設輸出到 `recordings/replay_runs/<timestamp>/`，因為沒有 label 會略過驗證趨勢報表。若指到的路徑不含影片會直接回報可行動的錯誤，不再靜默產出空報表。
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.video_replay "C:\path\to\clip.mp4" --max-frames 300
+.\.venv\Scripts\python.exe -m scripts.video_replay "C:\path\to\videos_folder" --jobs 4
+```
+
+### UTA-RLDD 資料集情境
+
+UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：https://sites.google.com/view/utarldd/home。這個情境會依 subject/label 資料夾結構解析、額外產出把 `0/5/10` 當序位真值的驗證趨勢報表：
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.utarldd_replay "%USERPROFILE%\Downloads\Fold1_part1" --max-videos 1 --max-frames 300
@@ -290,7 +303,8 @@ fuser /dev/video0
 - `docs/rppg_technical_report.md`: rPPG 技術、演算法、模型與系統運作說明；可用 `scripts/build_rppg_pdf.py` 產生 PDF。
 - `docs/2026-05-21-mediapipe-landmark-expansion-log.md`: 本次新增 MediaPipe 部位與精準度提升的更新紀錄。
 
-- `scripts/utarldd_replay.py`: UTA-RLDD 影片批次回放測試，輸出 SQLite、summary CSV、validation CSV、完整 CSV、HTML 與 manifest。
+- `scripts/video_replay.py`: 通用影片回測 CLI，接受單一影片檔或任意影片資料夾（無需 UTA-RLDD 結構/label），輸出到 `recordings/replay_runs/`。
+- `scripts/utarldd_replay.py`: UTA-RLDD 資料集情境的批次回放測試，額外輸出把 `0/5/10` 當序位真值的 validation CSV。
 - `scripts/utarldd_csv_report.py`: 將 UTA-RLDD summary CSV 轉成單檔 HTML 可視化報表，整理趨勢圖、判斷依據與優化建議。
 - `scripts/utarldd_golden.py`: UTA-RLDD golden-output 回歸基準（create/check），機械偵測演算法改動造成的數值漂移。
 - `scripts/utarldd_accuracy.py`: UTA-RLDD 疲勞判斷準確度量測（各標籤分數分佈、Spearman、Drowsy vs Alert 的 AUC、尺度塌陷診斷），調整判斷邏輯後用來確認準確度不退化。詳見 `docs/2026-07-03-fatigue-accuracy-calibration.md`。

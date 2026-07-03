@@ -94,12 +94,17 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 
 修改演算法時的最高原則：**優先維持 rPPG、疲勞判定、濾波、ROI 與分數邏輯的數值行為**，不做無關重構；任何會影響數值結果的平台適配須先明確說明（即重量級任務的「數值行為影響聲明」）。
 
-## UTA-RLDD 離線驗證
+## 影片回測（含 UTA-RLDD 離線驗證）
 
-`scripts/utarldd_replay.py`（= `python -m scripts.utarldd_replay`）把 UTA-RLDD 影片當「離線鏡頭」批次回放，**不動即時攝影機 worker**。使用影片 FPS 產生 deterministic timestamp，前約 5 秒為 `CALIBRATING`。官方 label：`0=Alert`、`5=Low Vigilant`、`10=Drowsy`。GUI 也有對應「UTA-RLDD 影片測試」區塊（`gui/utarldd_replay.py`）。
+回測模組本質是**通用影片回測**：把任何影片當「離線鏡頭」餵進與即時路徑相同的疲勞引擎，**不動即時攝影機 worker**。核心在 `gui/utarldd_replay.py`（`run_replay_batch(..., labeled=bool)`），使用影片 FPS 產生 deterministic timestamp，前約 5 秒為 `CALIBRATING`。UTA-RLDD 只是其中一個驗證資料集，非模組目的。兩條入口：
+
+- **通用**（單一影片檔或任意資料夾、無需 label）：`scripts/video_replay.py`（= `python -m scripts.video_replay`），`labeled=False`，輸出 `recordings/replay_runs/`，略過驗證報表；接受 `.mp4/.mov/.avi/.mkv/.m4v/.webm`；路徑不含影片會 raise 可行動錯誤（不再靜默產空報表）。
+- **UTA-RLDD 情境**：`scripts/utarldd_replay.py`，`labeled=True`（預設），依 subject/label 資料夾結構解析、官方 label `0=Alert`/`5=Low Vigilant`/`10=Drowsy`、輸出 `recordings/utarldd_runs/` 並產把 `0/5/10` 當序位真值的 validation CSV。GUI 有對應「UTA-RLDD 影片測試」區塊。
+
+修改 replay 路徑時：`labeled=True` 分支須維持既有 UTA-RLDD 行為（輸出路徑、檔名前綴、validation 產生），紅線仍為不改 `rppg/`/`fatigue_engine`/`fatigue_scorer` 數值行為。
 
 ```powershell
-.venv\Scripts\python -m scripts.utarldd_replay "<資料夾>" --max-videos 1 --max-frames 300
+.venv\Scripts\python -m scripts.video_replay "<影片檔或資料夾>" --max-frames 300 --jobs 4
 .venv\Scripts\python -m scripts.utarldd_replay "<資料夾>" --subject 01,02 --label 0,5,10 --jobs 4
 ```
 
