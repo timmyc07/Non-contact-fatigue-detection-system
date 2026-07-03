@@ -28,6 +28,7 @@ config/mediapipe_calibration.json
 config/rppg_calibration/
 config/rppg_live_feed.json
 config/rppg_calibration_feed.enabled
+config/personal_profile/
 docs/
 !docs/
 !docs/rppg_technical_report.md
