@@ -11,7 +11,8 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - Recording to SQLite (.db) and video (.mp4)
 - Web dashboard for live metrics and playback
 - Web dashboard 預設僅本機存取；可在 GUI「設定 → 允許區域網存取 Web 儀表板」開啟後，由同區域網裝置以 `http://<主機IP>:5000` 連線。為降低資安風險，Socket.IO CORS 僅允許本機與 LAN IP 來源（請以主機 IP 連線，勿用主機名稱），且 File Browser（`/api/fb/*`）端點僅接受本機發起的請求。
-- **警告**：LAN 模式會將人臉影像與生理數據以未加密 HTTP 廣播給同網段裝置，請只在受信任網路開啟。
+- LAN 模式啟用 shared-token 認證：伺服器綁定區域網時會自動產生 access token，GUI 顯示的網址會自動附上 `?token=`；同區域網裝置需使用該完整網址（含 token）才能存取首頁與 API，否則回應 401。本機（127.0.0.1）連線不受影響、免 token。
+- **警告**：LAN 模式沒有 TLS，仍會將人臉影像與生理數據以未加密 HTTP 廣播給同網段裝置（僅以 token 防止未授權存取），請只在受信任網路開啟。
 - Web dashboard 會在新連線與重新整理後同步 GUI 最新狀態，live camera preview 目標為 30 FPS；UTA-RLDD 離線 replay 預覽仍約 20 FPS。
 - 疲勞警報器：GUI「設定 → 警報器設定…」可依 `LOW_VIGILANCE` / `DROWSY` / `CRITICAL` / `MICROSLEEP` 指定不同音效（預設路徑 `assets/alerts/*.wav`）
 - rPPG BPM 估測回到第一版基準：有效 ROI 等權平均、Welch peak 直接輸出，並用峰值插值與輕量平滑補足 71/72/73 這類細節。
