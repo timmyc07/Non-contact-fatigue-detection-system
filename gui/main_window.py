@@ -46,7 +46,7 @@ from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
 from gui.belt_runtime import BeltRuntime
 from gui.preview_overlay_window import PreviewOverlayWindow
-from gui.utarldd_replay import UtaRlddBatchResult, UtaRlddReplayWorker, UtaRlddVideoSummary
+from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
 from rppg.hr_belt_ble import hr_is_stale, load_hr_belt_config
 from rppg.rppg_worker import RppgWorker
 from rppg.adaptive_calibration import CONF_LOW, OnlineBpmCalibrator
@@ -278,16 +278,16 @@ class MainWindow(QMainWindow):
         self._web_frame_interval = 1.0 / WEB_PREVIEW_TARGET_FPS
         self._web_last_emit = 0.0
         self._web_last_frame_emit = 0.0
-        self._utarldd_thread: QThread | None = None
-        self._utarldd_worker: UtaRlddReplayWorker | None = None
-        self._utarldd_dataset_dir: Path | None = None
-        self._utarldd_stopping = False
-        self._close_after_utarldd = False
-        self._utarldd_mode_label = "回放中"
-        self._utarldd_total_count = 0
-        self._utarldd_done_count = 0
-        self._utarldd_active_videos: dict[str, UtaRlddVideoSummary] = {}
-        self._utarldd_recent_done: list[str] = []
+        self._replay_thread: QThread | None = None
+        self._replay_worker: VideoReplayWorker | None = None
+        self._replay_dataset_dir: Path | None = None
+        self._replay_stopping = False
+        self._close_after_replay = False
+        self._replay_mode_label = "回放中"
+        self._replay_total_count = 0
+        self._replay_done_count = 0
+        self._replay_active_videos: dict[str, ReplayVideoSummary] = {}
+        self._replay_recent_done: list[str] = []
         self._alarm_config = AlarmConfig.defaults()
         self._rppg_calibration_store = CalibrationVersionStore()
         self._belt_runtime = BeltRuntime()
@@ -580,79 +580,79 @@ class MainWindow(QMainWindow):
 
         body_layout.addWidget(gb_ctl)
 
-        # --- UTA-RLDD replay test ---
-        gb_utarldd = QGroupBox("UTA-RLDD 影片測試")
-        uta_l = QVBoxLayout(gb_utarldd)
+        # --- 影片回測 ---
+        gb_replay = QGroupBox("影片回測")
+        replay_l = QVBoxLayout(gb_replay)
 
-        uta_row_a = QHBoxLayout()
-        self._btn_utarldd_choose = QPushButton("選擇資料夾")
-        self._btn_utarldd_choose.clicked.connect(self._choose_utarldd_dir)
-        self._lbl_utarldd_dir = QLabel("尚未選擇資料夾")
-        self._lbl_utarldd_dir.setObjectName("hintLabel")
-        self._lbl_utarldd_dir.setWordWrap(True)
-        uta_row_a.addWidget(self._btn_utarldd_choose)
-        uta_row_a.addWidget(self._lbl_utarldd_dir, 1)
-        uta_l.addLayout(uta_row_a)
+        replay_row_a = QHBoxLayout()
+        self._btn_replay_choose = QPushButton("選擇資料夾")
+        self._btn_replay_choose.clicked.connect(self._choose_replay_dir)
+        self._lbl_replay_dir = QLabel("尚未選擇資料夾")
+        self._lbl_replay_dir.setObjectName("hintLabel")
+        self._lbl_replay_dir.setWordWrap(True)
+        replay_row_a.addWidget(self._btn_replay_choose)
+        replay_row_a.addWidget(self._lbl_replay_dir, 1)
+        replay_l.addLayout(replay_row_a)
 
-        uta_row_b = QHBoxLayout()
-        self._btn_utarldd_start = QPushButton("開始批次")
-        self._btn_utarldd_start.setObjectName("primaryButton")
-        self._btn_utarldd_start.clicked.connect(self._start_utarldd_replay)
-        self._btn_utarldd_parallel = QPushButton("平行驗證")
-        self._btn_utarldd_parallel.clicked.connect(self._start_utarldd_parallel_replay)
-        self._btn_utarldd_stop = QPushButton("停止")
-        self._btn_utarldd_stop.setObjectName("dangerButton")
-        self._btn_utarldd_stop.setEnabled(False)
-        self._btn_utarldd_stop.clicked.connect(self._stop_utarldd_replay)
-        self._spn_utarldd_jobs = QSpinBox()
-        self._spn_utarldd_jobs.setRange(1, 4)
-        self._spn_utarldd_jobs.setValue(2)
-        self._spn_utarldd_jobs.setPrefix("平行數 ")
-        self._chk_utarldd_annotated = QCheckBox("輸出標註影片")
-        self._lbl_utarldd_current = QLabel("目前影片：--")
-        self._lbl_utarldd_current.setObjectName("hintLabel")
-        uta_row_b.addWidget(self._btn_utarldd_start)
-        uta_row_b.addWidget(self._btn_utarldd_parallel)
-        uta_row_b.addWidget(self._btn_utarldd_stop)
-        uta_row_b.addWidget(self._spn_utarldd_jobs)
-        uta_row_b.addWidget(self._chk_utarldd_annotated)
-        uta_row_b.addWidget(self._lbl_utarldd_current, 1)
-        uta_l.addLayout(uta_row_b)
+        replay_row_b = QHBoxLayout()
+        self._btn_replay_start = QPushButton("開始批次")
+        self._btn_replay_start.setObjectName("primaryButton")
+        self._btn_replay_start.clicked.connect(self._start_replay)
+        self._btn_replay_parallel = QPushButton("平行驗證")
+        self._btn_replay_parallel.clicked.connect(self._start_replay_parallel)
+        self._btn_replay_stop = QPushButton("停止")
+        self._btn_replay_stop.setObjectName("dangerButton")
+        self._btn_replay_stop.setEnabled(False)
+        self._btn_replay_stop.clicked.connect(self._stop_replay)
+        self._spn_replay_jobs = QSpinBox()
+        self._spn_replay_jobs.setRange(1, 4)
+        self._spn_replay_jobs.setValue(2)
+        self._spn_replay_jobs.setPrefix("平行數 ")
+        self._chk_replay_annotated = QCheckBox("輸出標註影片")
+        self._lbl_replay_current = QLabel("目前影片：--")
+        self._lbl_replay_current.setObjectName("hintLabel")
+        replay_row_b.addWidget(self._btn_replay_start)
+        replay_row_b.addWidget(self._btn_replay_parallel)
+        replay_row_b.addWidget(self._btn_replay_stop)
+        replay_row_b.addWidget(self._spn_replay_jobs)
+        replay_row_b.addWidget(self._chk_replay_annotated)
+        replay_row_b.addWidget(self._lbl_replay_current, 1)
+        replay_l.addLayout(replay_row_b)
 
-        uta_row_c = QHBoxLayout()
-        self._bar_utarldd_progress = QProgressBar()
-        self._bar_utarldd_progress.setRange(0, 1)
-        self._bar_utarldd_progress.setValue(0)
-        self._lbl_utarldd_result = QLabel("摘要檔：--")
-        self._lbl_utarldd_result.setObjectName("hintLabel")
-        self._lbl_utarldd_result.setWordWrap(True)
-        uta_row_c.addWidget(self._bar_utarldd_progress, 1)
-        uta_row_c.addWidget(self._lbl_utarldd_result, 2)
-        uta_l.addLayout(uta_row_c)
+        replay_row_c = QHBoxLayout()
+        self._bar_replay_progress = QProgressBar()
+        self._bar_replay_progress.setRange(0, 1)
+        self._bar_replay_progress.setValue(0)
+        self._lbl_replay_result = QLabel("摘要檔：--")
+        self._lbl_replay_result.setObjectName("hintLabel")
+        self._lbl_replay_result.setWordWrap(True)
+        replay_row_c.addWidget(self._bar_replay_progress, 1)
+        replay_row_c.addWidget(self._lbl_replay_result, 2)
+        replay_l.addLayout(replay_row_c)
 
-        self._lbl_utarldd_parallel_status = QLabel("處理清單：--")
-        self._lbl_utarldd_parallel_status.setObjectName("hintLabel")
-        self._lbl_utarldd_parallel_status.setWordWrap(True)
-        uta_l.addWidget(self._lbl_utarldd_parallel_status)
+        self._lbl_replay_parallel_status = QLabel("處理清單：--")
+        self._lbl_replay_parallel_status.setObjectName("hintLabel")
+        self._lbl_replay_parallel_status.setWordWrap(True)
+        replay_l.addWidget(self._lbl_replay_parallel_status)
 
-        self._frame_utarldd_preview = QFrame()
-        self._frame_utarldd_preview.setFixedHeight(360)
-        self._frame_utarldd_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._frame_utarldd_preview.setStyleSheet(
+        self._frame_replay_preview = QFrame()
+        self._frame_replay_preview.setFixedHeight(360)
+        self._frame_replay_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._frame_replay_preview.setStyleSheet(
             "background-color: #101318; border: 1px solid #2a2f38; border-radius: 8px;"
         )
-        uta_preview_layout = QVBoxLayout(self._frame_utarldd_preview)
-        uta_preview_layout.setContentsMargins(0, 0, 0, 0)
-        uta_preview_layout.setSpacing(0)
-        self._lbl_utarldd_preview = QLabel("影片預覽")
-        self._lbl_utarldd_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_utarldd_preview.setScaledContents(False)
-        self._lbl_utarldd_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self._lbl_utarldd_preview.setStyleSheet("background-color: transparent; color: #868e96;")
-        uta_preview_layout.addWidget(self._lbl_utarldd_preview, 1)
-        uta_l.addWidget(self._frame_utarldd_preview)
+        replay_preview_layout = QVBoxLayout(self._frame_replay_preview)
+        replay_preview_layout.setContentsMargins(0, 0, 0, 0)
+        replay_preview_layout.setSpacing(0)
+        self._lbl_replay_preview = QLabel("影片預覽")
+        self._lbl_replay_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_replay_preview.setScaledContents(False)
+        self._lbl_replay_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self._lbl_replay_preview.setStyleSheet("background-color: transparent; color: #868e96;")
+        replay_preview_layout.addWidget(self._lbl_replay_preview, 1)
+        replay_l.addWidget(self._frame_replay_preview)
 
-        body_layout.addWidget(gb_utarldd)
+        body_layout.addWidget(gb_replay)
 
         # --- Status strip ---
         stat = QFrame()
@@ -1535,188 +1535,188 @@ class MainWindow(QMainWindow):
         self._log.append(msg)
         self.statusBar().showMessage(msg, 4000)
 
-    def _choose_utarldd_dir(self) -> None:
+    def _choose_replay_dir(self) -> None:
         start_dir = Path.home()
         candidate = Path.home() / "Downloads" / "Fold1_part1"
-        if self._utarldd_dataset_dir is not None:
-            start_dir = self._utarldd_dataset_dir
+        if self._replay_dataset_dir is not None:
+            start_dir = self._replay_dataset_dir
         elif candidate.exists():
             start_dir = candidate
 
-        selected = QFileDialog.getExistingDirectory(self, "選擇 UTA-RLDD 資料夾", str(start_dir))
+        selected = QFileDialog.getExistingDirectory(self, "選擇影片回測資料夾", str(start_dir))
         if not selected:
             return
-        self._utarldd_dataset_dir = Path(selected)
-        self._lbl_utarldd_dir.setText(str(self._utarldd_dataset_dir))
-        self._append_log(f"[UTA-RLDD] 已選擇資料夾：{self._utarldd_dataset_dir}")
+        self._replay_dataset_dir = Path(selected)
+        self._lbl_replay_dir.setText(str(self._replay_dataset_dir))
+        self._append_log(f"[影片回測] 已選擇資料夾：{self._replay_dataset_dir}")
 
-    def _start_utarldd_replay(self) -> None:
-        self._start_utarldd_run(jobs=1, preview_enabled=True, mode_label="回放中")
+    def _start_replay(self) -> None:
+        self._start_replay_run(jobs=1, preview_enabled=True, mode_label="回放中")
 
-    def _start_utarldd_parallel_replay(self) -> None:
-        jobs = max(1, int(self._spn_utarldd_jobs.value()))
+    def _start_replay_parallel(self) -> None:
+        jobs = max(1, int(self._spn_replay_jobs.value()))
         if jobs > 4:
             jobs = 4
-            self._spn_utarldd_jobs.setValue(jobs)
-            self._append_log("[UTA-RLDD] 平行數已自動降為 4，避免 Windows 多進程與 MediaPipe/影片編碼器資源壓力過高")
-        if self._chk_utarldd_annotated.isChecked():
-            self._chk_utarldd_annotated.setChecked(False)
-            self._append_log("[UTA-RLDD] 平行驗證已自動關閉輸出標註影片；需要標註畫面請用「開始批次」單工模式")
+            self._spn_replay_jobs.setValue(jobs)
+            self._append_log("[影片回測] 平行數已自動降為 4，避免 Windows 多進程與 MediaPipe/影片編碼器資源壓力過高")
+        if self._chk_replay_annotated.isChecked():
+            self._chk_replay_annotated.setChecked(False)
+            self._append_log("[影片回測] 平行驗證已自動關閉輸出標註影片；需要標註畫面請用「開始批次」單工模式")
             QMessageBox.information(
                 self,
-                "UTA-RLDD 平行驗證",
+                "影片回測平行驗證",
                 "平行驗證會同時啟動多個 MediaPipe/影片解碼流程。為避免子行程崩潰，已自動關閉「輸出標註影片」。\n\n"
                 "需要標註影片時，請改用「開始批次」單工模式。正式大量驗證建議平行數 2-4。",
             )
-        self._start_utarldd_run(jobs=jobs, preview_enabled=False, mode_label=f"平行驗證中 x{jobs}")
+        self._start_replay_run(jobs=jobs, preview_enabled=False, mode_label=f"平行驗證中 x{jobs}")
 
-    def _start_utarldd_run(self, *, jobs: int, preview_enabled: bool, mode_label: str) -> None:
-        if self._utarldd_thread is not None:
+    def _start_replay_run(self, *, jobs: int, preview_enabled: bool, mode_label: str) -> None:
+        if self._replay_thread is not None:
             return
         if self._pipeline_running or self._recording:
-            QMessageBox.information(self, "UTA-RLDD 影片測試", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。")
+            QMessageBox.information(self, "影片回測", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。")
             return
-        if self._utarldd_dataset_dir is None:
-            self._choose_utarldd_dir()
-            if self._utarldd_dataset_dir is None:
+        if self._replay_dataset_dir is None:
+            self._choose_replay_dir()
+            if self._replay_dataset_dir is None:
                 return
-        if not self._utarldd_dataset_dir.exists():
-            QMessageBox.warning(self, "UTA-RLDD 影片測試", f"找不到資料夾：\n{self._utarldd_dataset_dir}")
+        if not self._replay_dataset_dir.exists():
+            QMessageBox.warning(self, "影片回測", f"找不到資料夾：\n{self._replay_dataset_dir}")
             return
 
         thread = QThread(self)
-        worker = UtaRlddReplayWorker(
-            self._utarldd_dataset_dir,
-            write_annotated_video=self._chk_utarldd_annotated.isChecked(),
+        worker = VideoReplayWorker(
+            self._replay_dataset_dir,
+            write_annotated_video=self._chk_replay_annotated.isChecked(),
             jobs=jobs,
             preview_enabled=preview_enabled,
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.progress.connect(self._on_utarldd_progress)
+        worker.progress.connect(self._on_replay_progress)
         if preview_enabled:
-            worker.preview_frame.connect(self._on_utarldd_preview_frame)
-        worker.finished_ok.connect(self._on_utarldd_finished_ok)
-        worker.failed.connect(self._on_utarldd_failed)
+            worker.preview_frame.connect(self._on_replay_preview_frame)
+        worker.finished_ok.connect(self._on_replay_finished_ok)
+        worker.failed.connect(self._on_replay_failed)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_utarldd_thread_finished)
+        thread.finished.connect(self._on_replay_thread_finished)
 
-        self._utarldd_thread = thread
-        self._utarldd_worker = worker
-        self._utarldd_stopping = False
-        self._utarldd_mode_label = mode_label
-        self._utarldd_total_count = 0
-        self._utarldd_done_count = 0
-        self._utarldd_active_videos.clear()
-        self._utarldd_recent_done.clear()
-        self._set_utarldd_controls_running(True)
-        self._bar_utarldd_progress.setRange(0, 0)
-        self._lbl_utarldd_current.setText("目前影片：準備中")
-        self._lbl_utarldd_result.setText("摘要檔：--")
+        self._replay_thread = thread
+        self._replay_worker = worker
+        self._replay_stopping = False
+        self._replay_mode_label = mode_label
+        self._replay_total_count = 0
+        self._replay_done_count = 0
+        self._replay_active_videos.clear()
+        self._replay_recent_done.clear()
+        self._set_replay_controls_running(True)
+        self._bar_replay_progress.setRange(0, 0)
+        self._lbl_replay_current.setText("目前影片：準備中")
+        self._lbl_replay_result.setText("摘要檔：--")
         if preview_enabled:
-            self._lbl_utarldd_parallel_status.setText("處理清單：等待第一支影片")
+            self._lbl_replay_parallel_status.setText("處理清單：等待第一支影片")
         else:
-            self._lbl_utarldd_parallel_status.setText("處理清單：平行驗證等待工作派發")
-        self._lbl_utarldd_preview.clear()
+            self._lbl_replay_parallel_status.setText("處理清單：平行驗證等待工作派發")
+        self._lbl_replay_preview.clear()
         if preview_enabled:
-            self._lbl_utarldd_preview.setText("影片預覽載入中")
+            self._lbl_replay_preview.setText("影片預覽載入中")
         else:
-            self._lbl_utarldd_preview.setText("平行驗證中：預覽停用，以提升批次速度")
-        self._lbl_pipeline.setText(f"管線：UTA-RLDD {mode_label}")
+            self._lbl_replay_preview.setText("平行驗證中：預覽停用，以提升批次速度")
+        self._lbl_pipeline.setText(f"管線：影片回測 {mode_label}")
         self._lbl_camera.setText("影片：準備中")
         self._lbl_face.setText("臉部：統計中")
         self._lbl_fps.setText("FPS：—")
         self._lbl_codec.setText("解析度：—")
         self._append_log(
-            f"[UTA-RLDD] 開始{mode_label}：{self._utarldd_dataset_dir} "
+            f"[影片回測] 開始{mode_label}：{self._replay_dataset_dir} "
             f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
         )
         thread.start()
 
-    def _stop_utarldd_replay(self) -> None:
-        if self._utarldd_worker is None:
+    def _stop_replay(self) -> None:
+        if self._replay_worker is None:
             return
-        self._utarldd_stopping = True
-        self._utarldd_worker.request_stop()
-        self._btn_utarldd_stop.setEnabled(False)
-        self._btn_utarldd_stop.setText("停止中")
-        self._lbl_utarldd_current.setText("目前影片：正在停止，請稍候")
-        self._lbl_utarldd_parallel_status.setText("處理清單：正在停止，已派發的影片會安全收尾")
-        self._lbl_pipeline.setText("管線：UTA-RLDD 停止中")
-        self._append_log("[UTA-RLDD] 已送出停止請求，等待目前 frame 安全收尾")
+        self._replay_stopping = True
+        self._replay_worker.request_stop()
+        self._btn_replay_stop.setEnabled(False)
+        self._btn_replay_stop.setText("停止中")
+        self._lbl_replay_current.setText("目前影片：正在停止，請稍候")
+        self._lbl_replay_parallel_status.setText("處理清單：正在停止，已派發的影片會安全收尾")
+        self._lbl_pipeline.setText("管線：影片回測 停止中")
+        self._append_log("[影片回測] 已送出停止請求，等待目前 frame 安全收尾")
 
-    def _set_utarldd_controls_running(self, running: bool) -> None:
-        self._btn_utarldd_choose.setEnabled(not running)
-        self._btn_utarldd_start.setEnabled(not running)
-        self._btn_utarldd_parallel.setEnabled(not running)
-        self._btn_utarldd_stop.setEnabled(running)
-        self._btn_utarldd_stop.setText("停止")
-        self._spn_utarldd_jobs.setEnabled(not running)
-        self._chk_utarldd_annotated.setEnabled(not running)
+    def _set_replay_controls_running(self, running: bool) -> None:
+        self._btn_replay_choose.setEnabled(not running)
+        self._btn_replay_start.setEnabled(not running)
+        self._btn_replay_parallel.setEnabled(not running)
+        self._btn_replay_stop.setEnabled(running)
+        self._btn_replay_stop.setText("停止")
+        self._spn_replay_jobs.setEnabled(not running)
+        self._chk_replay_annotated.setEnabled(not running)
 
-    def _on_utarldd_progress(
+    def _on_replay_progress(
         self,
         event: str,
         current: int,
         total: int,
-        summary: UtaRlddVideoSummary | None,
+        summary: ReplayVideoSummary | None,
     ) -> None:
-        self._utarldd_total_count = max(self._utarldd_total_count, total)
+        self._replay_total_count = max(self._replay_total_count, total)
         if event == "video_start":
-            self._bar_utarldd_progress.setRange(0, max(total, 1))
-            self._bar_utarldd_progress.setValue(self._utarldd_done_count)
+            self._bar_replay_progress.setRange(0, max(total, 1))
+            self._bar_replay_progress.setValue(self._replay_done_count)
             if summary is not None:
-                key = self._utarldd_video_key(summary)
-                self._utarldd_active_videos[key] = summary
-                self._lbl_utarldd_current.setText(
-                    f"目前影片：派發 {current}/{total}，正在跑 {len(self._utarldd_active_videos)} 支"
+                key = self._replay_video_key(summary)
+                self._replay_active_videos[key] = summary
+                self._lbl_replay_current.setText(
+                    f"目前影片：派發 {current}/{total}，正在跑 {len(self._replay_active_videos)} 支"
                 )
-                self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
+                self._update_replay_status_strip(summary, prefix=f"影片回測 {self._replay_mode_label}")
             else:
-                self._lbl_utarldd_current.setText(f"目前影片：{current}/{total}")
-            self._refresh_utarldd_parallel_status()
+                self._lbl_replay_current.setText(f"目前影片：{current}/{total}")
+            self._refresh_replay_parallel_status()
         elif event == "video_done":
-            self._bar_utarldd_progress.setRange(0, max(total, 1))
-            self._utarldd_done_count = max(self._utarldd_done_count, current)
-            self._bar_utarldd_progress.setValue(self._utarldd_done_count)
+            self._bar_replay_progress.setRange(0, max(total, 1))
+            self._replay_done_count = max(self._replay_done_count, current)
+            self._bar_replay_progress.setValue(self._replay_done_count)
             if summary is not None:
-                key = self._utarldd_video_key(summary)
-                self._utarldd_active_videos.pop(key, None)
-                self._utarldd_recent_done.insert(0, self._format_utarldd_video_label(summary, include_status=True))
-                self._utarldd_recent_done = self._utarldd_recent_done[:3]
+                key = self._replay_video_key(summary)
+                self._replay_active_videos.pop(key, None)
+                self._replay_recent_done.insert(0, self._format_replay_video_label(summary, include_status=True))
+                self._replay_recent_done = self._replay_recent_done[:3]
                 failed_text = "，此支失敗" if summary.status == "failed" else ""
-                self._lbl_utarldd_current.setText(
-                    f"目前影片：已完成 {self._utarldd_done_count}/{max(total, 1)}{failed_text}"
+                self._lbl_replay_current.setText(
+                    f"目前影片：已完成 {self._replay_done_count}/{max(total, 1)}{failed_text}"
                 )
-                self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
+                self._update_replay_status_strip(summary, prefix=f"影片回測 {self._replay_mode_label}")
                 self._append_log(
-                    "[UTA-RLDD] 完成 "
+                    "[影片回測] 完成 "
                     f"subject {summary.subject} label {summary.label} "
                     f"frames={summary.frames} face_rate={summary.face_rate:.2%} status={summary.status}"
                 )
-            self._refresh_utarldd_parallel_status()
+            self._refresh_replay_parallel_status()
         elif event == "frame" and summary is not None:
-            key = self._utarldd_video_key(summary)
-            self._utarldd_active_videos[key] = summary
+            key = self._replay_video_key(summary)
+            self._replay_active_videos[key] = summary
             if total > 0:
-                self._lbl_utarldd_current.setText(
+                self._lbl_replay_current.setText(
                     f"目前影片：subject {summary.subject} / label {summary.label} "
                     f"{summary.frames}/{total} frames"
                 )
             else:
-                self._lbl_utarldd_current.setText(
+                self._lbl_replay_current.setText(
                     f"目前影片：subject {summary.subject} / label {summary.label} "
                     f"{summary.frames} frames"
                 )
-            self._update_utarldd_status_strip(summary, prefix=f"UTA-RLDD {self._utarldd_mode_label}")
-            self._refresh_utarldd_parallel_status()
+            self._update_replay_status_strip(summary, prefix=f"影片回測 {self._replay_mode_label}")
+            self._refresh_replay_parallel_status()
 
-    def _utarldd_video_key(self, summary: UtaRlddVideoSummary) -> str:
+    def _replay_video_key(self, summary: ReplayVideoSummary) -> str:
         return f"{summary.subject}:{summary.label}:{summary.video_path}"
 
-    def _format_utarldd_video_label(self, summary: UtaRlddVideoSummary, *, include_status: bool = False) -> str:
+    def _format_replay_video_label(self, summary: ReplayVideoSummary, *, include_status: bool = False) -> str:
         label = f"S{summary.subject}/L{summary.label} {summary.label_name}"
         if summary.frames > 0:
             label += f" {summary.frames}f"
@@ -1731,20 +1731,20 @@ class MainWindow(QMainWindow):
                 label += f" face={summary.face_rate:.0%}"
         return label
 
-    def _refresh_utarldd_parallel_status(self) -> None:
-        active = [self._format_utarldd_video_label(summary) for summary in self._utarldd_active_videos.values()]
+    def _refresh_replay_parallel_status(self) -> None:
+        active = [self._format_replay_video_label(summary) for summary in self._replay_active_videos.values()]
         active_preview = active[:4]
         if len(active) > len(active_preview):
             active_preview.append(f"另 {len(active) - len(active_preview)} 支")
         active_text = "、".join(active_preview) if active_preview else "無"
-        recent_text = "、".join(self._utarldd_recent_done) if self._utarldd_recent_done else "尚無"
-        total_text = str(self._utarldd_total_count) if self._utarldd_total_count > 0 else "?"
-        self._lbl_utarldd_parallel_status.setText(
+        recent_text = "、".join(self._replay_recent_done) if self._replay_recent_done else "尚無"
+        total_text = str(self._replay_total_count) if self._replay_total_count > 0 else "?"
+        self._lbl_replay_parallel_status.setText(
             f"進行中：{active_text}\n"
-            f"已完成：{self._utarldd_done_count}/{total_text}；最近完成：{recent_text}"
+            f"已完成：{self._replay_done_count}/{total_text}；最近完成：{recent_text}"
         )
 
-    def _update_utarldd_status_strip(self, summary: UtaRlddVideoSummary, *, prefix: str) -> None:
+    def _update_replay_status_strip(self, summary: ReplayVideoSummary, *, prefix: str) -> None:
         self._lbl_pipeline.setText(f"管線：{prefix}")
         self._lbl_camera.setText(f"影片：S{summary.subject} / L{summary.label} {summary.label_name}")
         if summary.frames > 0:
@@ -1761,11 +1761,11 @@ class MainWindow(QMainWindow):
         else:
             self._lbl_codec.setText("解析度：—")
 
-    def _on_utarldd_preview_frame(self, image: QImage) -> None:
+    def _on_replay_preview_frame(self, image: QImage) -> None:
         if image.isNull():
             return
         pix = QPixmap.fromImage(image)
-        target = self._frame_utarldd_preview.contentsRect().size()
+        target = self._frame_replay_preview.contentsRect().size()
         if target.width() <= 0 or target.height() <= 0:
             target = QSize(640, 360)
         target = QSize(
@@ -1777,58 +1777,58 @@ class MainWindow(QMainWindow):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation,
         )
-        self._lbl_utarldd_preview.setPixmap(scaled)
+        self._lbl_replay_preview.setPixmap(scaled)
 
-    def _on_utarldd_finished_ok(self, result: UtaRlddBatchResult) -> None:
-        self._bar_utarldd_progress.setRange(0, max(result.videos_total, 1))
-        self._bar_utarldd_progress.setValue(result.videos_done + result.videos_failed)
-        self._lbl_utarldd_result.setText(
+    def _on_replay_finished_ok(self, result: ReplayBatchResult) -> None:
+        self._bar_replay_progress.setRange(0, max(result.videos_total, 1))
+        self._bar_replay_progress.setValue(result.videos_done + result.videos_failed)
+        self._lbl_replay_result.setText(
             f"摘要檔：{result.summary_csv}\n驗證報表：{result.validation_report_csv}\n完整欄位：{result.full_summary_csv}"
         )
         stopped = any(summary.status == "stopped" for summary in result.summaries)
-        if stopped or self._utarldd_stopping:
+        if stopped or self._replay_stopping:
             state = "已停止"
         elif result.videos_failed > 0:
             state = "完成但有失敗"
         else:
             state = "完成"
-        self._lbl_utarldd_current.setText(f"目前影片：{state}")
-        self._utarldd_done_count = result.videos_done + result.videos_failed
-        self._utarldd_total_count = result.videos_total
-        self._utarldd_active_videos.clear()
-        if result.summaries and not self._utarldd_recent_done:
-            self._utarldd_recent_done = [
-                self._format_utarldd_video_label(summary, include_status=True)
+        self._lbl_replay_current.setText(f"目前影片：{state}")
+        self._replay_done_count = result.videos_done + result.videos_failed
+        self._replay_total_count = result.videos_total
+        self._replay_active_videos.clear()
+        if result.summaries and not self._replay_recent_done:
+            self._replay_recent_done = [
+                self._format_replay_video_label(summary, include_status=True)
                 for summary in reversed(result.summaries[-3:])
             ]
-        self._refresh_utarldd_parallel_status()
+        self._refresh_replay_parallel_status()
         if result.summaries:
-            self._update_utarldd_status_strip(result.summaries[-1], prefix=f"UTA-RLDD {state}")
+            self._update_replay_status_strip(result.summaries[-1], prefix=f"影片回測 {state}")
         else:
-            self._lbl_pipeline.setText(f"管線：UTA-RLDD {state}")
+            self._lbl_pipeline.setText(f"管線：影片回測 {state}")
         self._append_log(
-            f"[UTA-RLDD] {state}，完成 {result.videos_done} 支，失敗 {result.videos_failed} 支，"
+            f"[影片回測] {state}，完成 {result.videos_done} 支，失敗 {result.videos_failed} 支，"
             f"摘要：{result.summary_csv}"
         )
 
-    def _on_utarldd_failed(self, msg: str) -> None:
-        self._lbl_utarldd_current.setText("目前影片：批次失敗")
-        total_text = str(self._utarldd_total_count) if self._utarldd_total_count > 0 else "?"
-        self._lbl_utarldd_parallel_status.setText(
-            f"處理清單：批次失敗；已完成 {self._utarldd_done_count}/{total_text}"
+    def _on_replay_failed(self, msg: str) -> None:
+        self._lbl_replay_current.setText("目前影片：批次失敗")
+        total_text = str(self._replay_total_count) if self._replay_total_count > 0 else "?"
+        self._lbl_replay_parallel_status.setText(
+            f"處理清單：批次失敗；已完成 {self._replay_done_count}/{total_text}"
         )
-        self._lbl_pipeline.setText("管線：UTA-RLDD 失敗")
-        self._append_log(f"[UTA-RLDD] 批次失敗：{msg}")
-        QMessageBox.warning(self, "UTA-RLDD 影片測試", msg)
+        self._lbl_pipeline.setText("管線：影片回測 失敗")
+        self._append_log(f"[影片回測] 批次失敗：{msg}")
+        QMessageBox.warning(self, "影片回測", msg)
 
-    def _on_utarldd_thread_finished(self) -> None:
-        self._utarldd_thread = None
-        self._utarldd_worker = None
-        self._utarldd_stopping = False
-        self._utarldd_mode_label = "回放中"
-        self._set_utarldd_controls_running(False)
-        if self._close_after_utarldd:
-            self._close_after_utarldd = False
+    def _on_replay_thread_finished(self) -> None:
+        self._replay_thread = None
+        self._replay_worker = None
+        self._replay_stopping = False
+        self._replay_mode_label = "回放中"
+        self._set_replay_controls_running(False)
+        if self._close_after_replay:
+            self._close_after_replay = False
             self.close()
 
     def _on_toggle_all(self, checked: bool) -> None:
@@ -2792,9 +2792,9 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self._utarldd_thread is not None:
-            self._close_after_utarldd = True
-            self._stop_utarldd_replay()
+        if self._replay_thread is not None:
+            self._close_after_replay = True
+            self._stop_replay()
             event.ignore()
             return
         self._unregister_global_hotkeys()

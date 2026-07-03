@@ -137,7 +137,7 @@ def collapse_fraction(pairs: list[tuple[float, float]], drowsy_label: float,
 
 
 def compute_accuracy_report(summaries: list[dict], score_fields: list[str]) -> dict:
-    """對每個分數欄位計算完整準確度指標。summaries 為 UtaRlddVideoSummary 的 asdict 清單。"""
+    """對每個分數欄位計算完整準確度指標。summaries 為 ReplayVideoSummary 的 asdict 清單。"""
     done = [s for s in summaries if s.get("status") == "done"]
     report: dict = {
         "n_videos": len(done),
@@ -236,7 +236,7 @@ def build_status_active_report(summaries: list[dict], labels_present: list[float
 
 
 def _run_batch(dataset_root: Path, subjects, labels, max_frames, jobs, output_dir):
-    from gui.utarldd_replay import run_replay_batch
+    from gui.video_replay import run_replay_batch
 
     if output_dir is None:
         stamp = time.strftime("%Y%m%d_%H%M%S")

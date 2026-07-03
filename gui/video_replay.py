@@ -1,7 +1,9 @@
-"""UTA-RLDD video replay analysis.
+"""Video replay analysis (generic, with a UTA-RLDD dataset preset).
 
-This module treats dataset videos as deterministic camera input and reuses the
-production fatigue/rPPG engines to write normal MetricsRecorder databases.
+This module treats any video file/folder as deterministic camera input and reuses the
+production fatigue/rPPG engines to write normal MetricsRecorder databases. When
+``labeled=True`` (default) it expects the UTA-RLDD dataset layout (0/5/10 label files);
+``labeled=False`` accepts arbitrary video files/folders.
 """
 
 from __future__ import annotations
@@ -58,7 +60,7 @@ _PERCLOS_DROWSY_TH = FatigueParams().tired_perclos_th
 
 
 @dataclass(frozen=True)
-class UtaRlddVideo:
+class ReplayVideo:
     subject: str
     label: str
     label_name: str
@@ -66,7 +68,7 @@ class UtaRlddVideo:
 
 
 @dataclass
-class UtaRlddVideoSummary:
+class ReplayVideoSummary:
     subject: str
     label: str
     label_name: str
@@ -119,7 +121,7 @@ class UtaRlddVideoSummary:
 
 
 @dataclass
-class UtaRlddBatchResult:
+class ReplayBatchResult:
     output_dir: Path
     summary_csv: Path
     full_summary_csv: Path
@@ -129,10 +131,10 @@ class UtaRlddBatchResult:
     videos_total: int
     videos_done: int
     videos_failed: int
-    summaries: list[UtaRlddVideoSummary] = field(default_factory=list)
+    summaries: list[ReplayVideoSummary] = field(default_factory=list)
 
 
-ProgressCallback = Callable[[str, int, int, UtaRlddVideoSummary | None], None]
+ProgressCallback = Callable[[str, int, int, ReplayVideoSummary | None], None]
 PreviewFrameCallback = Callable[[QImage], None]
 _PREVIEW_TARGET_FPS = 20.0
 _PREVIEW_MAX_WIDTH = 960
@@ -155,11 +157,11 @@ def discover_utarldd_videos(
     *,
     subjects: Iterable[str] | None = None,
     labels: Iterable[str] | None = None,
-) -> list[UtaRlddVideo]:
+) -> list[ReplayVideo]:
     root = Path(root)
     subject_filter = {str(s) for s in subjects or []}
     label_filter = {str(l) for l in labels or []}
-    videos: list[UtaRlddVideo] = []
+    videos: list[ReplayVideo] = []
     if not root.exists():
         raise FileNotFoundError(f"UTA-RLDD 目錄不存在: {root}")
 
@@ -175,7 +177,7 @@ def discover_utarldd_videos(
             continue
         if label_filter and label not in label_filter:
             continue
-        videos.append(UtaRlddVideo(subject=subject, label=label, label_name=label_name, path=path))
+        videos.append(ReplayVideo(subject=subject, label=label, label_name=label_name, path=path))
     videos.sort(key=lambda item: (item.subject, int(item.label), item.path.name.lower()))
     return videos
 
@@ -193,7 +195,7 @@ def discover_replay_videos(
     *,
     subjects: Iterable[str] | None = None,
     labels: Iterable[str] | None = None,
-) -> list[UtaRlddVideo]:
+) -> list[ReplayVideo]:
     """通用影片探索：接受單一影片檔或任意資料夾，不要求 UTA-RLDD 目錄/檔名結構。
 
     檔名無法解析成 UTA-RLDD 0/5/10 label 時不跳過，改標記為無 label
@@ -205,7 +207,7 @@ def discover_replay_videos(
     if not root.exists():
         raise FileNotFoundError(f"回放來源不存在: {root}")
 
-    videos: list[UtaRlddVideo] = []
+    videos: list[ReplayVideo] = []
     if root.is_file():
         if root.suffix.lower() not in GENERIC_VIDEO_EXTS:
             raise ValueError(
@@ -218,7 +220,7 @@ def discover_replay_videos(
             return videos
         if label_filter and label not in label_filter:
             return videos
-        videos.append(UtaRlddVideo(subject=subject, label=label, label_name=label_name, path=root))
+        videos.append(ReplayVideo(subject=subject, label=label, label_name=label_name, path=root))
         return videos
 
     for path in sorted(root.rglob("*")):
@@ -230,7 +232,7 @@ def discover_replay_videos(
             continue
         if label_filter and label not in label_filter:
             continue
-        videos.append(UtaRlddVideo(subject=subject, label=label, label_name=label_name, path=path))
+        videos.append(ReplayVideo(subject=subject, label=label, label_name=label_name, path=path))
     videos.sort(key=lambda item: (item.subject, item.label, item.path.name.lower()))
     return videos
 
@@ -247,9 +249,17 @@ def _fourcc_to_str(raw: int) -> str:
     return "".join(chr((raw >> (8 * i)) & 0xFF) for i in range(4)).strip("\x00").upper()
 
 
+def _make_camera_label(video: ReplayVideo, labeled: bool) -> str:
+    if labeled:
+        return f"UTA-RLDD subject={video.subject} label={video.label}"
+    if video.label and video.label != UNLABELED_LABEL:
+        return f"Replay subject={video.subject} label={video.label}"
+    return f"Replay subject={video.subject}"
+
+
 def _make_record_payload(
     *,
-    video: UtaRlddVideo,
+    video: ReplayVideo,
     timestamp: float,
     fps: float,
     width: int,
@@ -258,6 +268,7 @@ def _make_record_payload(
     r: Any,
     f: Any,
     z: Any,
+    labeled: bool = True,
 ) -> dict[str, Any]:
     return {
         "timestamp": float(timestamp),
@@ -265,7 +276,7 @@ def _make_record_payload(
         "frame_width": int(width),
         "frame_height": int(height),
         "codec": str(codec or ""),
-        "camera_label": f"UTA-RLDD subject={video.subject} label={video.label}",
+        "camera_label": _make_camera_label(video, labeled),
         "rppg_face_detected": 1 if getattr(r, "face_detected", False) else 0,
         "bpm": float(getattr(r, "bpm", 0.0) or 0.0),
         "raw_bpm": float(getattr(r, "raw_bpm", 0.0) or 0.0),
@@ -395,7 +406,7 @@ def _bgr_to_qimage(bgr: np.ndarray, *, max_width: int = 0, max_height: int = 0) 
 
 
 def run_replay_video(
-    video: UtaRlddVideo,
+    video: ReplayVideo,
     output_dir: Path,
     run_stamp: str,
     *,
@@ -404,15 +415,17 @@ def run_replay_video(
     progress_cb: ProgressCallback | None = None,
     preview_frame_cb: PreviewFrameCallback | None = None,
     stop_requested: Callable[[], bool] | None = None,
-) -> UtaRlddVideoSummary:
+    labeled: bool = True,
+) -> ReplayVideoSummary:
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary = UtaRlddVideoSummary(
+    summary = ReplayVideoSummary(
         subject=video.subject,
         label=video.label,
         label_name=video.label_name,
         video_path=str(video.path),
     )
-    db_path = output_dir / f"metrics_utarldd_{video.subject}_{video.label}_{run_stamp}.db"
+    file_prefix = "utarldd" if labeled else "replay"
+    db_path = output_dir / f"metrics_{file_prefix}_{video.subject}_{video.label}_{run_stamp}.db"
     summary.db_path = str(db_path)
     cap = cv2.VideoCapture(str(video.path))
     if not cap.isOpened():
@@ -429,7 +442,7 @@ def run_replay_video(
     summary.height = height
     writer = None
     if write_annotated_video:
-        annotated_path = output_dir / f"video_utarldd_{video.subject}_{video.label}_{run_stamp}.mp4"
+        annotated_path = output_dir / f"video_{file_prefix}_{video.subject}_{video.label}_{run_stamp}.mp4"
         writer = _writer_for(annotated_path, fps, width, height)
         if writer.isOpened():
             summary.annotated_video_path = str(annotated_path)
@@ -539,6 +552,7 @@ def run_replay_video(
                     r=r_metrics,
                     f=f_metrics,
                     z=fused,
+                    labeled=labeled,
                 )
                 recorder.record(payload)
                 status = str(payload.get("status") or "NO_FACE")
@@ -625,19 +639,22 @@ def run_replay_video(
     return summary
 
 
-def _run_replay_video_process_job(args: tuple[UtaRlddVideo, str, str, int, bool]) -> UtaRlddVideoSummary:
-    video, output_dir, run_stamp, max_frames, write_annotated_video = args
+def _run_replay_video_process_job(
+    args: tuple[ReplayVideo, str, str, int, bool, bool]
+) -> ReplayVideoSummary:
+    video, output_dir, run_stamp, max_frames, write_annotated_video, labeled = args
     return run_replay_video(
         video,
         Path(output_dir),
         run_stamp,
         max_frames=max_frames,
         write_annotated_video=write_annotated_video,
+        labeled=labeled,
     )
 
 
-def _failed_replay_summary(video: UtaRlddVideo, error: str) -> UtaRlddVideoSummary:
-    return UtaRlddVideoSummary(
+def _failed_replay_summary(video: ReplayVideo, error: str) -> ReplayVideoSummary:
+    return ReplayVideoSummary(
         subject=video.subject,
         label=video.label,
         label_name=video.label_name,
@@ -666,7 +683,7 @@ def _rate(count: int, total: int) -> float:
     return _ratio(count, total)
 
 
-def _evidence_items(summary: UtaRlddVideoSummary) -> list[tuple[str, float]]:
+def _evidence_items(summary: ReplayVideoSummary) -> list[tuple[str, float]]:
     frames = max(summary.frames, 1)
     return [
         ("PERCLOS>=0.10", _rate(summary.perclos_low_frames, frames)),
@@ -682,7 +699,7 @@ def _evidence_items(summary: UtaRlddVideoSummary) -> list[tuple[str, float]]:
     ]
 
 
-def _primary_evidence(summary: UtaRlddVideoSummary) -> str:
+def _primary_evidence(summary: ReplayVideoSummary) -> str:
     items = sorted(_evidence_items(summary), key=lambda item: item[1], reverse=True)
     strong = [f"{name} {_pct(value)}%" for name, value in items if value >= 0.01]
     if not strong:
@@ -696,7 +713,7 @@ def _primary_evidence(summary: UtaRlddVideoSummary) -> str:
     )
 
 
-def _summary_flags(summary: UtaRlddVideoSummary) -> list[str]:
+def _summary_flags(summary: ReplayVideoSummary) -> list[str]:
     frames = max(summary.frames, 1)
     flags: list[str] = []
     low_ratio = _rate(summary.low_vigilance_frames, frames)
@@ -726,7 +743,7 @@ def _summary_flags(summary: UtaRlddVideoSummary) -> list[str]:
     return flags
 
 
-def _label_alignment(summary: UtaRlddVideoSummary, flags: list[str]) -> str:
+def _label_alignment(summary: ReplayVideoSummary, flags: list[str]) -> str:
     if summary.status == "failed":
         return "處理失敗，無法判斷"
     if summary.status == "stopped":
@@ -753,7 +770,7 @@ def _label_alignment(summary: UtaRlddVideoSummary, flags: list[str]) -> str:
     return "趨勢需與同受試者 0/5/10 比較"
 
 
-def _recommended_action(summary: UtaRlddVideoSummary, flags: list[str]) -> str:
+def _recommended_action(summary: ReplayVideoSummary, flags: list[str]) -> str:
     if summary.status != "done":
         return "先修正影片處理錯誤或重新執行 replay"
     actions: list[str] = []
@@ -778,7 +795,7 @@ def _recommended_action(summary: UtaRlddVideoSummary, flags: list[str]) -> str:
     return "；".join(actions[:3])
 
 
-def _update_summary_diagnostics(summary: UtaRlddVideoSummary) -> None:
+def _update_summary_diagnostics(summary: ReplayVideoSummary) -> None:
     flags = _summary_flags(summary)
     summary.optimization_flags_json = json.dumps(flags, ensure_ascii=False)
     summary.label_alignment = _label_alignment(summary, flags)
@@ -786,7 +803,7 @@ def _update_summary_diagnostics(summary: UtaRlddVideoSummary) -> None:
     summary.recommended_next_action = _recommended_action(summary, flags)
 
 
-def _quick_reading(summary: UtaRlddVideoSummary) -> str:
+def _quick_reading(summary: ReplayVideoSummary) -> str:
     if not summary.primary_fatigue_evidence:
         _update_summary_diagnostics(summary)
     if summary.status == "failed":
@@ -808,7 +825,7 @@ def _quick_reading(summary: UtaRlddVideoSummary) -> str:
     return "未見明顯疲勞"
 
 
-def write_summary_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
+def write_summary_csv(path: Path, summaries: list[ReplayVideoSummary]) -> None:
     """Write a human-readable summary for quick review in Excel/VS Code."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -926,10 +943,10 @@ def write_summary_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
             )
 
 
-def write_full_summary_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
+def write_full_summary_csv(path: Path, summaries: list[ReplayVideoSummary]) -> None:
     """Write every summary field for downstream scripts and audits."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(asdict(UtaRlddVideoSummary(subject="", label="", label_name="", video_path="")).keys())
+    fieldnames = list(asdict(ReplayVideoSummary(subject="", label="", label_name="", video_path="")).keys())
     with path.open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
@@ -946,7 +963,7 @@ def _mean(values: list[float]) -> float:
     return float(sum(values) / len(values)) if values else 0.0
 
 
-def _validation_score(summary: UtaRlddVideoSummary) -> float:
+def _validation_score(summary: ReplayVideoSummary) -> float:
     drowsy_ratio = _ratio(
         summary.drowsy_frames + summary.critical_frames + summary.microsleep_frames,
         summary.frames,
@@ -985,7 +1002,7 @@ def _validation_conclusion(rows_done: int, rows_failed: int, monotonic_rate: flo
     return f"{base}；目前不支持分類有效"
 
 
-def write_validation_report_csv(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
+def write_validation_report_csv(path: Path, summaries: list[ReplayVideoSummary]) -> None:
     """Write validation-oriented label/subject trend checks for UTA-RLDD."""
     path.parent.mkdir(parents=True, exist_ok=True)
     done = [s for s in summaries if s.status == "done"]
@@ -1011,7 +1028,7 @@ def write_validation_report_csv(path: Path, summaries: list[UtaRlddVideoSummary]
         "結論",
         "備註",
     ]
-    by_subject: dict[str, dict[str, UtaRlddVideoSummary]] = {}
+    by_subject: dict[str, dict[str, ReplayVideoSummary]] = {}
     for summary in done:
         by_subject.setdefault(summary.subject, {})[summary.label] = summary
 
@@ -1155,7 +1172,7 @@ def _flag_count(rows: list[dict[str, object]], flag: str) -> int:
     return count
 
 
-def _summary_visual_rows(summaries: list[UtaRlddVideoSummary]) -> list[dict[str, object]]:
+def _summary_visual_rows(summaries: list[ReplayVideoSummary]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for summary in summaries:
         _update_summary_diagnostics(summary)
@@ -1239,7 +1256,12 @@ def _label_aggregates(rows: list[dict[str, object]]) -> dict[str, dict[str, floa
     return out
 
 
-def _render_visual_report(rows: list[dict[str, object]], *, title: str) -> str:
+def _render_visual_report(
+    rows: list[dict[str, object]],
+    *,
+    title: str,
+    subtitle: str = "由 UTA-RLDD replay summary CSV 產生；用途是判斷目前門檻支持度、誤報/漏報風險與下一步優化方向。",
+) -> str:
     aggregates = _label_aggregates(rows)
     total = len(rows)
     done = sum(1 for row in rows if str(row.get("處理狀態", "")) == "done")
@@ -1338,7 +1360,7 @@ code {{ white-space: pre-wrap; color: #334155; }}
 <body>
 <header>
 <h1>{_escape(title)}</h1>
-<div class="subtitle">由 UTA-RLDD replay summary CSV 產生；用途是判斷目前門檻支持度、誤報/漏報風險與下一步優化方向。</div>
+<div class="subtitle">{_escape(subtitle)}</div>
 </header>
 <main>
 <section class="cards">{card_html}</section>
@@ -1350,12 +1372,20 @@ code {{ white-space: pre-wrap; color: #334155; }}
 """
 
 
-def write_visual_report_html(path: Path, summaries: list[UtaRlddVideoSummary]) -> None:
+def write_visual_report_html(
+    path: Path, summaries: list[ReplayVideoSummary], *, labeled: bool = True
+) -> None:
     """Write a standalone HTML report from in-memory replay summaries."""
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = _summary_visual_rows(summaries)
+    if labeled:
+        title = "UTA-RLDD 疲勞驗證可視化報表"
+        subtitle = "由 UTA-RLDD replay summary CSV 產生；用途是判斷目前門檻支持度、誤報/漏報風險與下一步優化方向。"
+    else:
+        title = "影片回測可視化報表"
+        subtitle = "由影片回測 summary CSV 產生；用途是快速檢視各影片的疲勞跡象與品質指標。"
     path.write_text(
-        _render_visual_report(rows, title="UTA-RLDD 疲勞驗證可視化報表"),
+        _render_visual_report(rows, title=title, subtitle=subtitle),
         encoding="utf-8",
     )
 
@@ -1385,7 +1415,7 @@ def run_replay_batch(
     preview_frame_cb: PreviewFrameCallback | None = None,
     stop_requested: Callable[[], bool] | None = None,
     labeled: bool = True,
-) -> UtaRlddBatchResult:
+) -> ReplayBatchResult:
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if output_dir is None:
         run_subdir = "utarldd_runs" if labeled else "replay_runs"
@@ -1411,7 +1441,7 @@ def run_replay_batch(
             f"或是內含影片檔的資料夾（支援副檔名：{sorted(GENERIC_VIDEO_EXTS)}）。"
         )
 
-    summaries: list[UtaRlddVideoSummary] = []
+    summaries: list[ReplayVideoSummary] = []
     effective_jobs = max(1, int(jobs or 1))
     if preview_frame_cb is not None:
         effective_jobs = 1
@@ -1428,7 +1458,7 @@ def run_replay_batch(
                     "video_start",
                     index,
                     len(videos),
-                    UtaRlddVideoSummary(
+                    ReplayVideoSummary(
                         subject=video.subject,
                         label=video.label,
                         label_name=video.label_name,
@@ -1444,13 +1474,14 @@ def run_replay_batch(
                 progress_cb=progress_cb,
                 preview_frame_cb=preview_frame_cb,
                 stop_requested=stop_requested,
+                labeled=labeled,
             )
             summaries.append(summary)
             if progress_cb:
                 progress_cb("video_done", index, len(videos), summary)
     else:
-        indexed: list[tuple[int, UtaRlddVideo]] = list(enumerate(videos, start=1))
-        summary_by_index: dict[int, UtaRlddVideoSummary] = {}
+        indexed: list[tuple[int, ReplayVideo]] = list(enumerate(videos, start=1))
+        summary_by_index: dict[int, ReplayVideoSummary] = {}
         max_workers = min(effective_jobs, len(indexed))
         pool_error: str | None = None
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -1459,7 +1490,7 @@ def run_replay_batch(
             running = set()
             done_count = 0
 
-            def mark_failed(index: int, video: UtaRlddVideo, error: str) -> None:
+            def mark_failed(index: int, video: ReplayVideo, error: str) -> None:
                 nonlocal done_count
                 if index in summary_by_index:
                     return
@@ -1481,7 +1512,7 @@ def run_replay_batch(
                         "video_start",
                         index,
                         len(videos),
-                        UtaRlddVideoSummary(
+                        ReplayVideoSummary(
                             subject=video.subject,
                             label=video.label,
                             label_name=video.label_name,
@@ -1491,7 +1522,7 @@ def run_replay_batch(
                 try:
                     future = executor.submit(
                         _run_replay_video_process_job,
-                        (video, str(output_dir), run_stamp, max_frames, write_annotated_video_effective),
+                        (video, str(output_dir), run_stamp, max_frames, write_annotated_video_effective, labeled),
                     )
                 except BrokenProcessPool as exc:
                     pool_error = _broken_pool_error(exc)
@@ -1553,7 +1584,7 @@ def run_replay_batch(
         write_validation_report_csv(validation_report_csv, summaries)
     # labeled=False：無 label 無從驗證趨勢，略過 validation 報表產生
     # （validation_report_csv 仍回傳路徑供呼叫端參考，但該檔案不會被建立）
-    write_visual_report_html(visual_report_html, summaries)
+    write_visual_report_html(visual_report_html, summaries, labeled=labeled)
     manifest = {
         "dataset_root": str(Path(root)),
         "output_dir": str(output_dir),
@@ -1575,7 +1606,7 @@ def run_replay_batch(
         "summaries": [asdict(s) for s in summaries],
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    return UtaRlddBatchResult(
+    return ReplayBatchResult(
         output_dir=output_dir,
         summary_csv=summary_csv,
         full_summary_csv=full_summary_csv,
@@ -1589,7 +1620,7 @@ def run_replay_batch(
     )
 
 
-class UtaRlddReplayWorker(QObject):
+class VideoReplayWorker(QObject):
     progress = Signal(str, int, int, object)
     preview_frame = Signal(QImage)
     finished_ok = Signal(object)
@@ -1620,7 +1651,7 @@ class UtaRlddReplayWorker(QObject):
     def request_stop(self) -> None:
         self._stop.set()
 
-    def _progress_cb(self, event: str, current: int, total: int, summary: UtaRlddVideoSummary | None) -> None:
+    def _progress_cb(self, event: str, current: int, total: int, summary: ReplayVideoSummary | None) -> None:
         self.progress.emit(event, current, total, summary)
 
     def _preview_frame_cb(self, image: QImage) -> None:

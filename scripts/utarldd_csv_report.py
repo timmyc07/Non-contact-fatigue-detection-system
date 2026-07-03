@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gui.utarldd_replay import write_visual_report_html_from_csv
+from gui.video_replay import write_visual_report_html_from_csv
 
 
 def _default_output(summary_csv: Path) -> Path:

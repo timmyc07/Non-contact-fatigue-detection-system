@@ -55,7 +55,7 @@ def load_golden_config(path: Path) -> dict:
 
 
 def extract_golden_fields(summary: dict, field_names) -> dict:
-    """從單片 summary（UtaRlddVideoSummary 的 asdict）取出要入 baseline 的欄位。"""
+    """從單片 summary（ReplayVideoSummary 的 asdict）取出要入 baseline 的欄位。"""
     missing = [name for name in field_names if name not in summary]
     if missing:
         raise KeyError(f"summary 缺少欄位: {missing}")
@@ -142,7 +142,7 @@ def format_report(diffs: list[GoldenDiff]) -> str:
 
 def _run_subset(dataset_root: Path, config: dict, output_dir: Path | None):
     """實際執行 replay（重依賴 GUI/MediaPipe，延遲 import 以保持比對邏輯可獨立測試）。"""
-    from gui.utarldd_replay import run_replay_batch
+    from gui.video_replay import run_replay_batch
 
     subset = config["subset"]
     if output_dir is None:

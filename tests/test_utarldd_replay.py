@@ -6,11 +6,11 @@ import json
 
 import numpy as np
 
-from gui.utarldd_replay import (
+from gui.video_replay import (
     UNLABELED_LABEL,
     UNLABELED_LABEL_NAME,
-    UtaRlddVideo,
-    UtaRlddVideoSummary,
+    ReplayVideo,
+    ReplayVideoSummary,
     _bgr_to_qimage,
     discover_replay_videos,
     discover_utarldd_videos,
@@ -86,7 +86,7 @@ def test_discover_utarldd_videos_missing_root_raises(tmp_path: Path) -> None:
 
 def test_write_summary_csv(tmp_path: Path) -> None:
     out = tmp_path / "summary.csv"
-    summary = UtaRlddVideoSummary(
+    summary = ReplayVideoSummary(
         subject="01",
         label="0",
         label_name="Alert",
@@ -115,7 +115,7 @@ def test_write_summary_csv(tmp_path: Path) -> None:
 
 def test_write_full_summary_csv_keeps_machine_readable_fields(tmp_path: Path) -> None:
     out = tmp_path / "summary_full.csv"
-    summary = UtaRlddVideoSummary(
+    summary = ReplayVideoSummary(
         subject="01",
         label="10",
         label_name="Drowsy",
@@ -139,7 +139,7 @@ def test_write_visual_report_html_from_summary_csv(tmp_path: Path) -> None:
     summary_csv = tmp_path / "utarldd_summary_20260611_010203.csv"
     html_out = tmp_path / "report.html"
     summaries = [
-        UtaRlddVideoSummary(
+        ReplayVideoSummary(
             subject="01",
             label="0",
             label_name="Alert",
@@ -153,7 +153,7 @@ def test_write_visual_report_html_from_summary_csv(tmp_path: Path) -> None:
             max_perclos=0.12,
             behavior_available_frames=90,
         ),
-        UtaRlddVideoSummary(
+        ReplayVideoSummary(
             subject="01",
             label="10",
             label_name="Drowsy",
@@ -183,7 +183,7 @@ def test_write_visual_report_html_from_summary_csv(tmp_path: Path) -> None:
 def test_write_validation_report_csv_summarizes_label_and_subject_trends(tmp_path: Path) -> None:
     out = tmp_path / "validation.csv"
     summaries = [
-        UtaRlddVideoSummary(
+        ReplayVideoSummary(
             subject="01",
             label="0",
             label_name="Alert",
@@ -197,7 +197,7 @@ def test_write_validation_report_csv_summarizes_label_and_subject_trends(tmp_pat
             ok_frames=95,
             low_vigilance_frames=5,
         ),
-        UtaRlddVideoSummary(
+        ReplayVideoSummary(
             subject="01",
             label="5",
             label_name="Low Vigilant",
@@ -211,7 +211,7 @@ def test_write_validation_report_csv_summarizes_label_and_subject_trends(tmp_pat
             ok_frames=70,
             low_vigilance_frames=30,
         ),
-        UtaRlddVideoSummary(
+        ReplayVideoSummary(
             subject="01",
             label="10",
             label_name="Drowsy",
@@ -255,8 +255,8 @@ def test_bgr_to_qimage_resizes_preview_with_aspect_ratio() -> None:
 
 def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatch) -> None:
     videos = [
-        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
-        UtaRlddVideo("01", "10", "Drowsy", tmp_path / "01" / "10.MOV"),
+        ReplayVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        ReplayVideo("01", "10", "Drowsy", tmp_path / "01" / "10.MOV"),
     ]
 
     def fake_discover(root, *, subjects=None, labels=None):
@@ -264,7 +264,7 @@ def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatc
         return videos
 
     def fake_replay(video, output_dir, run_stamp, **kwargs):
-        return UtaRlddVideoSummary(
+        return ReplayVideoSummary(
             subject=video.subject,
             label=video.label,
             label_name=video.label_name,
@@ -276,8 +276,8 @@ def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatc
             face_rate=0.8,
         )
 
-    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
-    monkeypatch.setattr("gui.utarldd_replay.run_replay_video", fake_replay)
+    monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.video_replay.run_replay_video", fake_replay)
 
     result = run_replay_batch(tmp_path / "dataset", output_dir=tmp_path / "out", max_videos=2)
 
@@ -301,17 +301,17 @@ def test_run_replay_batch_writes_summary_and_manifest(tmp_path: Path, monkeypatc
 
 def test_run_replay_batch_parallel_keeps_video_order(tmp_path: Path, monkeypatch) -> None:
     videos = [
-        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
-        UtaRlddVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
-        UtaRlddVideo("01", "10", "Drowsy", tmp_path / "01" / "10.mov"),
+        ReplayVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        ReplayVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
+        ReplayVideo("01", "10", "Drowsy", tmp_path / "01" / "10.mov"),
     ]
 
     def fake_discover(root, *, subjects=None, labels=None):
         return videos
 
     def fake_process_job(args):
-        video, output_dir, run_stamp, _max_frames, _write_annotated_video = args
-        return UtaRlddVideoSummary(
+        video, output_dir, run_stamp, _max_frames, _write_annotated_video, _labeled = args
+        return ReplayVideoSummary(
             subject=video.subject,
             label=video.label,
             label_name=video.label_name,
@@ -344,10 +344,10 @@ def test_run_replay_batch_parallel_keeps_video_order(tmp_path: Path, monkeypatch
             self.futures.append(future)
             return future
 
-    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
-    monkeypatch.setattr("gui.utarldd_replay._run_replay_video_process_job", fake_process_job)
-    monkeypatch.setattr("gui.utarldd_replay.ProcessPoolExecutor", FakeExecutor)
-    monkeypatch.setattr("gui.utarldd_replay.wait", lambda futures, timeout, return_when: (set(futures), set()))
+    monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.video_replay._run_replay_video_process_job", fake_process_job)
+    monkeypatch.setattr("gui.video_replay.ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr("gui.video_replay.wait", lambda futures, timeout, return_when: (set(futures), set()))
 
     result = run_replay_batch(tmp_path / "dataset", output_dir=tmp_path / "out", jobs=2)
 
@@ -362,9 +362,9 @@ def test_run_replay_batch_parallel_keeps_video_order(tmp_path: Path, monkeypatch
 
 def test_run_replay_batch_parallel_handles_broken_process_pool(tmp_path: Path, monkeypatch) -> None:
     videos = [
-        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
-        UtaRlddVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
-        UtaRlddVideo("01", "10", "Drowsy", tmp_path / "01" / "10.mov"),
+        ReplayVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        ReplayVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
+        ReplayVideo("01", "10", "Drowsy", tmp_path / "01" / "10.mov"),
     ]
     events = []
 
@@ -401,9 +401,9 @@ def test_run_replay_batch_parallel_handles_broken_process_pool(tmp_path: Path, m
         if event == "video_done" and summary is not None:
             events.append((current, total, summary.subject, summary.label, summary.status, summary.error))
 
-    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
-    monkeypatch.setattr("gui.utarldd_replay.ProcessPoolExecutor", FakeExecutor)
-    monkeypatch.setattr("gui.utarldd_replay.wait", fake_wait)
+    monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.video_replay.ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr("gui.video_replay.wait", fake_wait)
 
     result = run_replay_batch(
         tmp_path / "dataset",
@@ -426,8 +426,8 @@ def test_run_replay_batch_parallel_handles_broken_process_pool(tmp_path: Path, m
 
 def test_run_replay_batch_parallel_disables_annotated_video(tmp_path: Path, monkeypatch) -> None:
     videos = [
-        UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
-        UtaRlddVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
+        ReplayVideo("01", "0", "Alert", tmp_path / "01" / "0.mov"),
+        ReplayVideo("01", "5", "Low Vigilant", tmp_path / "01" / "5.mov"),
     ]
     annotated_flags = []
 
@@ -435,9 +435,9 @@ def test_run_replay_batch_parallel_disables_annotated_video(tmp_path: Path, monk
         return videos
 
     def fake_process_job(args):
-        video, output_dir, run_stamp, _max_frames, write_annotated_video = args
+        video, output_dir, run_stamp, _max_frames, write_annotated_video, _labeled = args
         annotated_flags.append(write_annotated_video)
-        return UtaRlddVideoSummary(
+        return ReplayVideoSummary(
             subject=video.subject,
             label=video.label,
             label_name=video.label_name,
@@ -467,10 +467,10 @@ def test_run_replay_batch_parallel_disables_annotated_video(tmp_path: Path, monk
         def submit(self, fn, args):
             return FakeFuture(fn(args))
 
-    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_discover)
-    monkeypatch.setattr("gui.utarldd_replay._run_replay_video_process_job", fake_process_job)
-    monkeypatch.setattr("gui.utarldd_replay.ProcessPoolExecutor", FakeExecutor)
-    monkeypatch.setattr("gui.utarldd_replay.wait", lambda futures, timeout, return_when: (set(futures), set()))
+    monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_discover)
+    monkeypatch.setattr("gui.video_replay._run_replay_video_process_job", fake_process_job)
+    monkeypatch.setattr("gui.video_replay.ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr("gui.video_replay.wait", lambda futures, timeout, return_when: (set(futures), set()))
 
     result = run_replay_batch(
         tmp_path / "dataset",
@@ -544,7 +544,7 @@ def test_run_replay_batch_raises_actionable_error_on_zero_videos(tmp_path: Path,
 def test_run_replay_batch_labeled_true_uses_utarldd_discovery_and_output_dir(
     tmp_path: Path, monkeypatch
 ) -> None:
-    videos = [UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov")]
+    videos = [ReplayVideo("01", "0", "Alert", tmp_path / "01" / "0.mov")]
     calls = {"utarldd": 0, "generic": 0}
 
     def fake_utarldd_discover(root, *, subjects=None, labels=None):
@@ -556,7 +556,7 @@ def test_run_replay_batch_labeled_true_uses_utarldd_discovery_and_output_dir(
         return videos
 
     def fake_replay(video, output_dir, run_stamp, **kwargs):
-        return UtaRlddVideoSummary(
+        return ReplayVideoSummary(
             subject=video.subject,
             label=video.label,
             label_name=video.label_name,
@@ -565,9 +565,9 @@ def test_run_replay_batch_labeled_true_uses_utarldd_discovery_and_output_dir(
             frames=5,
         )
 
-    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_utarldd_discover)
-    monkeypatch.setattr("gui.utarldd_replay.discover_replay_videos", fake_generic_discover)
-    monkeypatch.setattr("gui.utarldd_replay.run_replay_video", fake_replay)
+    monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_utarldd_discover)
+    monkeypatch.setattr("gui.video_replay.discover_replay_videos", fake_generic_discover)
+    monkeypatch.setattr("gui.video_replay.run_replay_video", fake_replay)
 
     result = run_replay_batch(tmp_path / "dataset")
 
@@ -580,7 +580,7 @@ def test_run_replay_batch_labeled_true_uses_utarldd_discovery_and_output_dir(
 def test_run_replay_batch_labeled_false_uses_generic_discovery_and_skips_validation(
     tmp_path: Path, monkeypatch
 ) -> None:
-    videos = [UtaRlddVideo("clips", UNLABELED_LABEL, UNLABELED_LABEL_NAME, tmp_path / "clips" / "a.mp4")]
+    videos = [ReplayVideo("clips", UNLABELED_LABEL, UNLABELED_LABEL_NAME, tmp_path / "clips" / "a.mp4")]
     calls = {"utarldd": 0, "generic": 0}
 
     def fake_utarldd_discover(root, *, subjects=None, labels=None):
@@ -592,7 +592,7 @@ def test_run_replay_batch_labeled_false_uses_generic_discovery_and_skips_validat
         return videos
 
     def fake_replay(video, output_dir, run_stamp, **kwargs):
-        return UtaRlddVideoSummary(
+        return ReplayVideoSummary(
             subject=video.subject,
             label=video.label,
             label_name=video.label_name,
@@ -601,9 +601,9 @@ def test_run_replay_batch_labeled_false_uses_generic_discovery_and_skips_validat
             frames=5,
         )
 
-    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_utarldd_discover)
-    monkeypatch.setattr("gui.utarldd_replay.discover_replay_videos", fake_generic_discover)
-    monkeypatch.setattr("gui.utarldd_replay.run_replay_video", fake_replay)
+    monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_utarldd_discover)
+    monkeypatch.setattr("gui.video_replay.discover_replay_videos", fake_generic_discover)
+    monkeypatch.setattr("gui.video_replay.run_replay_video", fake_replay)
 
     result = run_replay_batch(tmp_path / "dataset", labeled=False)
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from gui.utarldd_replay import run_replay_batch
+from gui.video_replay import run_replay_batch
 
 
 def main() -> None:

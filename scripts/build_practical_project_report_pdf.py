@@ -450,7 +450,7 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
                     ["行為疲勞", "gui/fatigue_engine.py", "計算 EAR、PERCLOS、眨眼、凝視、頭姿、MAR、哈欠與品質分數。"],
                     ["rPPG", "rppg/rppg_worker.py", "建立 ROI、POS pulse、濾波、Welch BPM、HRV、SQI 與 BPM guard。"],
                     ["Web dashboard", "gui/web_server.py / gui/web_ui", "Socket.IO 即時 metrics、JPEG preview、歷史 DB 回放與影片串流。"],
-                    ["回放驗證", "gui/utarldd_replay.py / scripts/utarldd_replay.py", "用 UTA-RLDD 影片重用正式 pipeline，輸出 DB/CSV/HTML/manifest。"],
+                    ["回放驗證", "gui/video_replay.py / scripts/utarldd_replay.py", "用 UTA-RLDD 影片重用正式 pipeline，輸出 DB/CSV/HTML/manifest。"],
                 ],
                 [3.0, 4.6, 7.0],
                 8.4,
