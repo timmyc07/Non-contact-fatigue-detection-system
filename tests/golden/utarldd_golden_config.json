@@ -1,0 +1,42 @@
+{
+  "_comment": "UTA-RLDD golden 回歸基準設定。subset 定義固定影片子集；fields 定義比對欄位與絕對容差。容差依據：2026-07-03 同機連續兩次實跑（subject 04 × label 0/5/10 × 600 幀，jobs=1）31/31 欄位完全一致（bit-identical），pipeline 為確定性，故容差設近零——check 出現任何漂移都代表數值行為改變或執行環境變更（OpenCV/MediaPipe 版本等），兩者都應調查後才決定是否重建 baseline。改 subset 後必須重建 baseline。",
+  "subset": {
+    "subjects": ["04"],
+    "labels": ["0", "5", "10"],
+    "max_frames": 600,
+    "jobs": 1
+  },
+  "fields": {
+    "frames": {"abs_tol": 0},
+    "face_frames": {"abs_tol": 0},
+    "face_rate": {"abs_tol": 0.001},
+    "avg_fatigue_score": {"abs_tol": 0.002},
+    "p95_fatigue_score": {"abs_tol": 0.002},
+    "avg_fused_score": {"abs_tol": 0.002},
+    "p95_fused_score": {"abs_tol": 0.002},
+    "avg_perclos": {"abs_tol": 0.002},
+    "max_perclos": {"abs_tol": 0.002},
+    "avg_blink_temporal": {"abs_tol": 0.002},
+    "max_blink_temporal": {"abs_tol": 0.002},
+    "avg_rppg_quality": {"abs_tol": 0.005},
+    "avg_sqi": {"abs_tol": 0.005},
+    "avg_bpm": {"abs_tol": 0.5},
+    "bpm_guard_count": {"abs_tol": 0},
+    "low_vigilance_frames": {"abs_tol": 0},
+    "drowsy_frames": {"abs_tol": 0},
+    "critical_frames": {"abs_tol": 0},
+    "microsleep_frames": {"abs_tol": 0},
+    "no_face_frames": {"abs_tol": 0},
+    "ok_frames": {"abs_tol": 0},
+    "calibrating_frames": {"abs_tol": 0},
+    "behavior_available_frames": {"abs_tol": 0},
+    "rppg_available_frames": {"abs_tol": 0},
+    "low_quality_frames": {"abs_tol": 0},
+    "perclos_low_frames": {"abs_tol": 0},
+    "perclos_drowsy_frames": {"abs_tol": 0},
+    "blink_temporal_warn_frames": {"abs_tol": 0},
+    "squint_frames": {"abs_tol": 0},
+    "gaze_fatigue_frames": {"abs_tol": 0},
+    "yawn_frames": {"abs_tol": 0}
+  }
+}

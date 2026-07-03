@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |---|---|---|---|
 | **輕量** | 只改文件/註解/README、typo；測試檔內的 typo/註解/訊息文字；scripts 的訊息文字/log/註解（不改變輸出格式與行為） | 改到 `.py` 就跑 `compileall` 該檔；commit+push | 三重審查、完整 pytest、文件同步 |
 | **中量** | 單一子系統的程式碼改動且**不碰數值行為**：GUI 佈線、web dashboard、錄影/DB、新增或實質改寫測試邏輯、scripts 行為調整、平台適配且不影響數值（例：相機後端 fallback 順序） | 對應測試檔 pytest + `compileall`；一輪審查（自查 checklist 或 1 個 code-reviewer agent）；commit+push；改到指令/依賴/平台支援則同步 README | 三重審查 |
-| **重量** | 碰演算法數值路徑（`rppg/`、`gui/fatigue_engine.py`、`gui/fatigue_scorer.py`、校準、濾波、ROI、分數邏輯）；跨多子系統；啟動流程（`main.py` Qt plugin 順序）；資料 schema；依賴升級 | 完整 `pytest -q`；三重審查（見下）；「數值行為影響聲明」（改了什麼、哪些輸出值會變、為什麼可接受）；commit+push；同步 `docs/` 相關報告 | — |
+| **重量** | 碰演算法數值路徑（`rppg/`、`gui/fatigue_engine.py`、`gui/fatigue_scorer.py`、校準、濾波、ROI、分數邏輯）；跨多子系統；啟動流程（`main.py` Qt plugin 順序）；資料 schema；依賴升級 | 完整 `pytest -q`；golden check（見「UTA-RLDD 離線驗證」，本機有資料集才跑，漂移須寫進數值行為影響聲明）；三重審查（見下）；「數值行為影響聲明」（改了什麼、哪些輸出值會變、為什麼可接受）；commit+push；同步 `docs/` 相關報告 | — |
 
 **三重審查**（僅重量級）：3 個並行 subagent 各查一軸——(1) 官方文件/版本相容性、(2) 相關程式碼與部署設定的潛在錯誤、(3) 專案慣例與文件體系。無法用 subagent 時改三輪獨立自查，每輪換一個審查軸、寫下具體發現才算一輪。
 
@@ -104,6 +104,13 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 ```
 
 輸出至 `recordings/utarldd_runs/<timestamp>/`：每片一個 `.db`，整批含 summary CSV、validation CSV、full CSV、HTML 報表與 manifest。`--jobs N`（GUI 上限 4）走多進程並停用預覽與標註影片輸出。既有 summary CSV 可用 `scripts/utarldd_csv_report.py` 直接轉 HTML。**注意**：UTA-RLDD label 是整段影片類別、非逐幀 ground truth，不能取代真人測試。
+
+**Golden-output 回歸基準**（`scripts/utarldd_golden.py`）：重量級改動後跑 `check`，機械偵測數值漂移；比對子集/欄位/容差在 `tests/golden/utarldd_golden_config.json`，baseline 在 `tests/golden/utarldd_golden_baseline.json`（皆入版控）。漂移若屬預期，寫進數值行為影響聲明後以 `create --force` 重建 baseline。
+
+```powershell
+.venv\Scripts\python -m scripts.utarldd_golden check "<UTA-RLDD 資料夾>"    # 0=過, 1=漂移, 2=執行失敗
+.venv\Scripts\python -m scripts.utarldd_golden create "<UTA-RLDD 資料夾>" --force
+```
 
 ## 平台差異
 

@@ -131,6 +131,17 @@ canva apps doctor --ci
 
 CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。桌面 GUI 也提供「UTA-RLDD 影片測試」區塊，可選資料夾、開始/停止批次、顯示目前 subject/label/video 進度、MediaPipe 人臉特徵與 ROI 標註預覽，以及摘要檔路徑。`開始批次` 會啟用單工預覽，適合抽查偵測畫面；`平行驗證` 會依 GUI 的「平行數」設定使用多進程、停用預覽，適合正式大量驗證，GUI 平行數上限為 4。平行驗證會自動停用 `輸出標註影片`，避免多個子行程同時寫 mp4 造成 Windows/OpenCV/MediaPipe 資源壓力；需要標註影片時請用單工 `開始批次`。若某個子行程異常中止，批次會停止派發新工作，把未完成影片寫成 `failed` 並保留 CSV/manifest。平行驗證時可看 GUI 的「處理清單」：`進行中` 會列出目前正在跑的影片，`已完成` 顯示完成數/總數，`最近完成` 顯示剛處理完的 subject/label、frame 數、狀態與 face rate。GUI 預覽為了保持主視窗流暢，會以最高約 20 FPS 顯示並限制預覽影像尺寸；這只影響螢幕顯示，不影響 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
 
+### Golden-output 回歸基準
+
+`scripts/utarldd_golden.py` 以固定影片子集（`tests/golden/utarldd_golden_config.json` 定義 subject/label/幀數/欄位容差）建立數值基準，用來機械偵測演算法改動造成的數值漂移。修改 rPPG、疲勞判定、濾波、ROI 或分數邏輯後請跑 `check`：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_golden check "%USERPROFILE%\Downloads\UTA_test\Fold1_part1"    # 0=通過, 1=數值漂移, 2=執行失敗
+.\.venv\Scripts\python.exe -m scripts.utarldd_golden create "%USERPROFILE%\Downloads\UTA_test\Fold1_part1" --force   # 漂移屬預期時重建 baseline
+```
+
+baseline（`tests/golden/utarldd_golden_baseline.json`）與設定檔皆納入版控；漂移屬預期結果時，先在 commit 說明中逐欄解釋再以 `create --force` 重建。
+
 2026-06-07 最新 36 支影片測試結果整理於 `docs/2026-06-07-utarldd-analysis.md`。本次影片處理完成率為 100%，平均人臉偵測率約 99.93%，代表回放與偵測管線穩定；但融合分數未隨 `0 -> 5 -> 10` 穩定上升，因此不能宣稱三分類準確率接近 100%。同批次 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv` 已可轉成 `utarldd_visual_report_20260607_122601.html`，適合用於畢專報告的限制分析與後續門檻校正依據。
 
 ## MediaPipe tuning and calibration
@@ -259,6 +270,7 @@ fuser /dev/video0
 
 - `scripts/utarldd_replay.py`: UTA-RLDD 影片批次回放測試，輸出 SQLite、summary CSV、validation CSV、完整 CSV、HTML 與 manifest。
 - `scripts/utarldd_csv_report.py`: 將 UTA-RLDD summary CSV 轉成單檔 HTML 可視化報表，整理趨勢圖、判斷依據與優化建議。
+- `scripts/utarldd_golden.py`: UTA-RLDD golden-output 回歸基準（create/check），機械偵測演算法改動造成的數值漂移。
 
 ## Technical reports
 - `docs/無人機駕駛員疲勞狀態監測系統_實務專題報告.pdf`: 依電子工程系實務專題報告格式產生的完整 PDF 書面報告，包含首頁、中文摘要、英文摘要、目錄、圖目錄、緒言、簡介、理論、軟硬體分析、測試結果、結論、建議、附錄與參考資料。
