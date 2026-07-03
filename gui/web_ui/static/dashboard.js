@@ -38,6 +38,26 @@ function switchSubTab(name) {
     }, 100);
 }
 
+// ============ LAN 模式 shared-token 認證 ============
+// GUI 顯示的 Web 儀表板網址在 LAN 模式下會帶 ?token=<token>；單機模式（無 token）
+// 下列函式行為完全等同直接使用 fetch() / io()，不影響現狀。
+const DASHBOARD_TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+
+/** 為需由瀏覽器直接發出請求（<video src>、<a href> 等，無法附加 header）的網址附上 token。 */
+function withToken(url) {
+    if (!DASHBOARD_TOKEN) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(DASHBOARD_TOKEN)}`;
+}
+
+/** fetch() 包裝：有 token 時自動帶上 X-Dashboard-Token header，無 token 行為不變。 */
+function dashboardFetch(url, options = {}) {
+    if (!DASHBOARD_TOKEN) return fetch(url, options);
+    const headers = new Headers(options.headers || {});
+    headers.set('X-Dashboard-Token', DASHBOARD_TOKEN);
+    return fetch(url, { ...options, headers });
+}
+
 // ============ 即時監測 ============
 let socket = null;
 let isConnected = false;
@@ -69,6 +89,7 @@ function initSocket() {
     }
     socket = io({
         transports: ['polling', 'websocket'],
+        auth: DASHBOARD_TOKEN ? { token: DASHBOARD_TOKEN } : {},
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
@@ -530,7 +551,7 @@ function _resetDisplayState() {
 // 刷新錄製列表（僅本地）
 async function refreshRecordingList() {
     try {
-        const json = await fetch('/api/recordings').then(r => r.json());
+        const json = await dashboardFetch('/api/recordings').then(r => r.json());
         const items = json.success ? (json.data || []) : [];
         const search = recordingState.search.trim().toLowerCase();
         const filtered = search
@@ -731,7 +752,7 @@ async function selectRecording(idx) {
         }
 
         if (!dbPath && rec?.remote_db_path) {
-            const cacheRes = await fetch('/api/cloud-recordings/cache-db', {
+            const cacheRes = await dashboardFetch('/api/cloud-recordings/cache-db', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ object_path: rec.remote_db_path }),
@@ -749,7 +770,7 @@ async function selectRecording(idx) {
             return;
         }
 
-        const res = await fetch(`/api/playback/full?db_path=${encodeURIComponent(dbPath)}`);
+        const res = await dashboardFetch(`/api/playback/full?db_path=${encodeURIComponent(dbPath)}`);
         const json = await res.json();
         if (!json.success || !json.data || json.data.length === 0) {
             throw new Error(json.error || '資料庫為空');
@@ -773,10 +794,10 @@ async function resolveRecordingVideoUrl(rec) {
         return rec.video_route;
     }
     if (rec.video_filename) {
-        return `/api/video/${encodeURIComponent(rec.video_filename)}`;
+        return withToken(`/api/video/${encodeURIComponent(rec.video_filename)}`);
     }
     if (rec.cloud_video_path || rec.remote_video_path) {
-        const response = await fetch('/api/cloud-recordings/signed-url', {
+        const response = await dashboardFetch('/api/cloud-recordings/signed-url', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ object_path: rec.cloud_video_path || rec.remote_video_path }),
@@ -1356,7 +1377,7 @@ function fbRestoreForm() {
 
 async function fbCheckStatus() {
     try {
-        const r = await fetch('/api/fb/status');
+        const r = await dashboardFetch('/api/fb/status');
         const d = await r.json();
         _fbUpdateUI(d.authenticated, d.base_url, d.username);
         if (d.authenticated) fbRefreshList();
@@ -1376,7 +1397,7 @@ async function fbConnect() {
     const btn = document.getElementById('fb-connect-btn');
     if (btn) { btn.disabled = true; btn.textContent = '連線中...'; }
     try {
-        const r = await fetch('/api/fb/login', {
+        const r = await dashboardFetch('/api/fb/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url, username, password })
@@ -1399,7 +1420,7 @@ async function fbConnect() {
 
 async function fbDisconnect() {
     if (!confirm('確定要登出並切換帳號嗎？')) return;
-    await fetch('/api/fb/logout', { method: 'POST' }).catch(() => {});
+    await dashboardFetch('/api/fb/logout', { method: 'POST' }).catch(() => {});
     // 保留 URL 和帳號，清除密碼（除非已勾選記住密碼）
     const creds = fbLoadCredentials();
     if (creds && !creds.rememberPwd) {
@@ -1442,7 +1463,7 @@ async function fbRefreshList() {
     if (listEl) listEl.innerHTML = '';
     if (loadEl) loadEl.style.display = 'block';
     try {
-        const r = await fetch('/api/fb/recordings');
+        const r = await dashboardFetch('/api/fb/recordings');
         const d = await r.json();
         if (!d.success) throw new Error(d.error || '載入失敗');
         _cloudRecList = d.recordings || [];
@@ -1596,7 +1617,7 @@ async function selectCloudRecording(idx) {
         // 設定影片（串流 proxy）
         if (rec.has_mp4 && rec.mp4_path) {
             pbVideoAvailable = true;
-            pbVideoEl.src = `/api/fb/stream-video?path=${encodeURIComponent(rec.mp4_path)}`;
+            pbVideoEl.src = withToken(`/api/fb/stream-video?path=${encodeURIComponent(rec.mp4_path)}`);
             pbVideoEl.onerror = () => {
                 pbVideoAvailable = false;
                 pbVideoEl.style.display = 'none';
@@ -1618,7 +1639,7 @@ async function selectCloudRecording(idx) {
         if (!rec.has_db || !rec.db_path) {
             throw new Error('此雲端錄製沒有 .db 檔案');
         }
-        const cacheRes = await fetch('/api/fb/cache-db', {
+        const cacheRes = await dashboardFetch('/api/fb/cache-db', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ remote_path: rec.db_path })
@@ -1629,7 +1650,7 @@ async function selectCloudRecording(idx) {
         }
 
         // 用現有回放引擎播放
-        const res  = await fetch(`/api/playback/full?db_path=${encodeURIComponent(cacheJson.db_path)}`);
+        const res  = await dashboardFetch(`/api/playback/full?db_path=${encodeURIComponent(cacheJson.db_path)}`);
         const json = await res.json();
         if (!json.success || !json.data || json.data.length === 0) {
             throw new Error(json.error || '資料庫為空');
@@ -1657,7 +1678,7 @@ async function fbUploadRecording(recordingName, btnEl) {
     // 先即時查詢雲端，檢查是否已有同名檔案
     if (btnEl) { btnEl.disabled = true; btnEl.textContent = '檢查中...'; }
     try {
-        const checkRes = await fetch('/api/fb/recordings');
+        const checkRes = await dashboardFetch('/api/fb/recordings');
         const checkData = await checkRes.json();
         if (checkData.success) {
             const existing = (checkData.recordings || []).find(r => r.name === stem);
@@ -1685,7 +1706,7 @@ async function fbUploadRecording(recordingName, btnEl) {
     if (socket) socket.on('fb_upload_progress', onProgress);
 
     try {
-        const r = await fetch('/api/fb/upload', {
+        const r = await dashboardFetch('/api/fb/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ recording_name: recordingName })
@@ -1713,7 +1734,7 @@ function fbDownloadFile(filename) {
     if (!filename) return;
     // 透過後端 proxy 下載，讓瀏覽器直接另存新檔
     const a = document.createElement('a');
-    a.href = `/api/fb/download?filename=${encodeURIComponent(filename)}`;
+    a.href = withToken(`/api/fb/download?filename=${encodeURIComponent(filename)}`);
     a.download = filename;
     document.body.appendChild(a);
     a.click();
@@ -1727,7 +1748,7 @@ async function fbDeleteRecording(rec, idx, itemEl) {
 
     const results = await Promise.all(files.map(async filename => {
         try {
-            const r = await fetch('/api/fb/delete', {
+            const r = await dashboardFetch('/api/fb/delete', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename })

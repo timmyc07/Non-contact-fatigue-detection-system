@@ -339,6 +339,10 @@ class MainWindow(QMainWindow):
 
         self._act_web_allow_lan = QAction("允許區域網存取 Web 儀表板", self)
         self._act_web_allow_lan.setCheckable(True)
+        self._act_web_allow_lan.setToolTip(
+            "警告：啟用後將以未加密 HTTP 對區域網路廣播人臉影像與生理數據（以 shared token "
+            "驗證存取），僅限受信任網路使用。"
+        )
         self._act_web_allow_lan.toggled.connect(self._on_web_allow_lan_toggled)
 
         m_settings = self.menuBar().addMenu("設定")
@@ -1081,11 +1085,19 @@ class MainWindow(QMainWindow):
     def _web_bind_host(self) -> str:
         return "0.0.0.0" if self._web_allow_lan_enabled() else "127.0.0.1"
 
+    def _web_access_token(self) -> str | None:
+        """目前 Web 伺服器的 LAN shared-token（單機模式或伺服器未啟動時為 None）。"""
+        return getattr(self._web_server, "access_token", None) if self._web_server is not None else None
+
     def _web_dashboard_urls(self) -> list[str]:
-        return format_web_dashboard_urls(
+        urls = format_web_dashboard_urls(
             WEB_DASHBOARD_DEFAULT_PORT,
             allow_lan=self._web_allow_lan_enabled(),
         )
+        token = self._web_access_token()
+        if token:
+            urls = [f"{url}?token={token}" for url in urls]
+        return urls
 
     def _format_web_dashboard_message(self, *, include_lan_hint: bool = False) -> str:
         lines = self._web_dashboard_urls()
@@ -2706,6 +2718,10 @@ class MainWindow(QMainWindow):
         if checked:
             self._append_log(
                 f"提示：其他裝置若無法連線，請檢查防火牆是否放行 TCP {WEB_DASHBOARD_DEFAULT_PORT}。"
+            )
+            self._append_log(
+                "⚠ 警告：LAN 模式將以未加密 HTTP 廣播人臉影像與生理數據，僅限受信任網路使用；"
+                "存取需附帶網址中的 token。"
             )
 
     def _web_dashboard_url_labels(self) -> list[tuple[str, str]]:

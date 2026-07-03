@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import socket
 import threading
@@ -19,6 +20,8 @@ import re
 import sqlite3
 
 from gui.file_browser_client import FileBrowserClient
+
+logger = logging.getLogger(__name__)
 
 _ws_connected_clients: set = set()
 
@@ -91,10 +94,6 @@ def _is_local_request() -> bool:
     if remote_addr.startswith("::ffff:"):
         return remote_addr.split("::ffff:", 1)[1] in _LOCAL_HOSTS
     return False
-
-
-def _ensure_lan_endpoint_allowed() -> Optional[Response]:
-    return None
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
@@ -302,8 +301,9 @@ class PlaybackManager:
                 "limit": limit,
                 "data": data,
             }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        except Exception:
+            logger.exception("讀取回放資料失敗: %s", db_path)
+            return {"success": False, "error": "internal error"}
 
 
 def _safe_float(value: object) -> float:
@@ -323,6 +323,7 @@ def create_app(
     get_latest_packet: Optional[Callable] = None,
     shutdown_token: Optional[str] = None,
     allowed_origins: Optional[list[str]] = None,
+    access_token: Optional[str] = None,
 ) -> tuple[Flask, SocketIO]:
     _fb_client = FileBrowserClient()
     _fb_lock = threading.Lock()
@@ -360,6 +361,27 @@ def create_app(
         ping_interval=25,
         max_http_buffer_size=10_000_000,
     )
+
+    def _ensure_lan_endpoint_allowed() -> Optional[Response]:
+        """LAN 模式（伺服器綁定非 loopback）下驗證 dashboard access token。
+
+        本機來源（127.0.0.1/::1/localhost）一律放行，維持單機模式零改動；
+        未設定 access_token（未啟用 LAN、或測試直接呼叫 create_app）同樣一律放行。
+        token 可由 ``?token=`` query 參數或 ``X-Dashboard-Token`` header 提供。
+        """
+        if not access_token or _is_local_request():
+            return None
+        supplied = request.args.get("token") or request.headers.get("X-Dashboard-Token") or ""
+        if not secrets.compare_digest(supplied, access_token):
+            return jsonify({"success": False, "error": "unauthorized"}), 401
+        return None
+
+    @app.before_request
+    def _enforce_dashboard_token() -> Optional[Response]:
+        # 首頁與所有 /api/* 端點都需通過 LAN token 檢查（本機來源永遠免驗）。
+        if request.path == "/" or request.path.startswith("/api/"):
+            return _ensure_lan_endpoint_allowed()
+        return None
 
     @app.before_request
     def _restrict_fb_endpoints() -> Optional[Response]:
@@ -406,14 +428,12 @@ def create_app(
                 else playback_manager.list_recordings()
             )
             return jsonify({"success": True, "data": recordings})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+        except Exception:
+            logger.exception("讀取錄製清單失敗")
+            return jsonify({"success": False, "error": "internal error"}), 500
 
     @app.route("/api/playback")
     def playback_data():
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         from urllib.parse import unquote
 
         db_path = request.args.get("db_path")
@@ -435,9 +455,6 @@ def create_app(
 
     @app.route("/api/playback/full")
     def playback_full():
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         from urllib.parse import unquote
 
         db_path = request.args.get("db_path")
@@ -547,14 +564,12 @@ def create_app(
                     headers={"Content-Encoding": "gzip"},
                 )
             return Response(payload, content_type="application/json")
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+        except Exception:
+            logger.exception("讀取完整回放資料失敗: %s", db_path)
+            return jsonify({"success": False, "error": "internal error"}), 500
 
     @app.route("/api/video/<path:filename>")
     def serve_video(filename):
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         rel_name = str(filename or "").strip().replace("\\", "/")
         rel_path = Path(rel_name)
         if not rel_name or rel_path.is_absolute() or any(part in ("", ".", "..") for part in rel_path.parts):
@@ -578,9 +593,6 @@ def create_app(
 
     @app.route("/api/fb/login", methods=["POST"])
     def fb_login():
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         data = request.get_json(silent=True) or {}
         url = str(data.get("url") or "").strip().rstrip("/")
         username = str(data.get("username") or "").strip()
@@ -602,9 +614,6 @@ def create_app(
 
     @app.route("/api/fb/logout", methods=["POST"])
     def fb_logout():
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         _fb_client.logout()
         return jsonify({"success": True})
 
@@ -615,14 +624,12 @@ def create_app(
         try:
             recordings = _fb_client.list_recordings()
             return jsonify({"success": True, "recordings": recordings})
-        except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 500
+        except Exception:
+            logger.exception("讀取 File Browser 錄製清單失敗")
+            return jsonify({"success": False, "error": "internal error"}), 500
 
     @app.route("/api/fb/cache-db", methods=["POST"])
     def fb_cache_db():
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         if not _fb_client.is_authenticated():
             return jsonify({"success": False, "error": "尚未連線 File Browser"}), 401
         data = request.get_json(silent=True) or {}
@@ -634,8 +641,9 @@ def create_app(
         try:
             local_path = _fb_client.download_db(remote_path, _fb_cache_dir)
             return jsonify({"success": True, "db_path": str(local_path)})
-        except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 500
+        except Exception:
+            logger.exception("下載 File Browser 錄製資料庫失敗: %s", remote_path)
+            return jsonify({"success": False, "error": "internal error"}), 500
 
     @app.route("/api/fb/stream-video")
     def fb_stream_video():
@@ -649,8 +657,9 @@ def create_app(
         range_header = request.headers.get("Range")
         try:
             fb_resp = _fb_client.stream_video(remote_path, range_header)
-        except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 502
+        except Exception:
+            logger.exception("串流 File Browser 影片失敗: %s", remote_path)
+            return jsonify({"success": False, "error": "internal error"}), 502
 
         status = fb_resp.status_code
 
@@ -675,9 +684,6 @@ def create_app(
 
     @app.route("/api/fb/upload", methods=["POST"])
     def fb_upload():
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         if not _fb_client.is_authenticated():
             return jsonify({"success": False, "error": "尚未連線 File Browser"}), 401
         data = request.get_json(silent=True) or {}
@@ -739,9 +745,6 @@ def create_app(
 
     @app.route("/api/fb/delete", methods=["DELETE"])
     def fb_delete():
-        lan_guard = _ensure_lan_endpoint_allowed()
-        if lan_guard is not None:
-            return lan_guard
         if not _fb_client.is_authenticated():
             return jsonify({"success": False, "error": "尚未連線 File Browser"}), 401
         data = request.get_json(silent=True) or {}
@@ -753,8 +756,9 @@ def create_app(
             if resp.status_code in (200, 204):
                 return jsonify({"success": True})
             return jsonify({"success": False, "error": f"HTTP {resp.status_code}"}), 500
-        except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 500
+        except Exception:
+            logger.exception("刪除 File Browser 檔案失敗: %s", filename)
+            return jsonify({"success": False, "error": "internal error"}), 500
 
     @app.route("/api/fb/download")
     def fb_download():
@@ -766,8 +770,9 @@ def create_app(
         try:
             fb_resp = _fb_client._request("GET", f"/api/raw/{filename}", stream=True, timeout=300)
             fb_resp.raise_for_status()
-        except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 502
+        except Exception:
+            logger.exception("下載 File Browser 檔案失敗: %s", filename)
+            return jsonify({"success": False, "error": "internal error"}), 502
 
         def _generate():
             try:
@@ -787,7 +792,15 @@ def create_app(
         return Response(_generate(), status=200, headers=headers)
 
     @socketio.on("connect")
-    def handle_connect():
+    def handle_connect(auth=None):
+        # LAN 模式下非本機來源需附帶正確 token（auth dict 或 query string），
+        # 否則拒絕連線（回傳 False）；本機來源與單機模式（未設定 access_token）不受影響。
+        if access_token and not _is_local_request():
+            supplied = auth.get("token") if isinstance(auth, dict) else None
+            if not supplied:
+                supplied = request.args.get("token")
+            if not supplied or not secrets.compare_digest(str(supplied), access_token):
+                return False
         sid = getattr(request, "sid", None)
         if sid is not None:
             _ws_connected_clients.add(sid)
@@ -850,6 +863,7 @@ class WebServerThread(threading.Thread):
         host: str = "0.0.0.0",
         port: int = 5000,
         debug: bool = False,
+        access_token: Optional[str] = None,
     ):
         super().__init__(daemon=True, name="WebServerThread")
         self.metrics_buffer = metrics_buffer
@@ -860,6 +874,13 @@ class WebServerThread(threading.Thread):
         self.port = port
         self.debug = debug
 
+        # LAN 模式（綁定非 loopback）沒有 TLS，改以 shared token 擋掉未授權存取；
+        # 呼叫端可自行傳入既有 token（例如維持同一組網址跨重啟不變），否則自動產生。
+        # 綁定本機（127.0.0.1/localhost/::1）維持單機模式零改動，不需要 token。
+        self.access_token: Optional[str] = None
+        if host not in _LOCAL_HOSTS:
+            self.access_token = access_token or secrets.token_urlsafe(16)
+
         self._shutdown_token = secrets.token_urlsafe(32)
         self.app, self.socketio = create_app(
             metrics_buffer,
@@ -868,6 +889,7 @@ class WebServerThread(threading.Thread):
             get_latest_packet,
             shutdown_token=self._shutdown_token,
             allowed_origins=_build_allowed_origins(host, port),
+            access_token=self.access_token,
         )
         self._stop_flag = threading.Event()
         self._stopped_event = threading.Event()

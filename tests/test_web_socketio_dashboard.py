@@ -159,7 +159,9 @@ def test_web_preview_frame_encoder_returns_jpeg_base64() -> None:
 
 
 def test_socketio_broadcast_frame_event_reaches_client(tmp_path: Path) -> None:
-    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path))
+    # 顯式綁定 127.0.0.1：此測試驗證 broadcast_frame 行為，與 LAN token 機制無關；
+    # 預設 host="0.0.0.0" 會觸發自動產生 access token，導致無 token 的 test_client 連線被拒。
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1")
     client = server.socketio.test_client(server.app)
 
     try:
@@ -181,6 +183,126 @@ def test_shutdown_endpoint_rejects_invalid_token(tmp_path: Path) -> None:
     client = app.test_client()
     response = client.post("/__server/shutdown", json={"token": "wrong"})
     assert response.status_code == 403
+
+
+# ── LAN 模式 shared-token 認證 ──
+#
+# app.test_client() 預設 REMOTE_ADDR 為 127.0.0.1（本機），因此以
+# environ_overrides 覆寫為區網位址，模擬「LAN 綁定 + 非本機來源」的請求。
+
+def test_lan_api_request_without_token_returns_401(tmp_path: Path) -> None:
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        access_token="secret-lan-token",
+    )
+    client = app.test_client()
+    response = client.get(
+        "/api/recordings",
+        environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+    )
+    assert response.status_code == 401
+
+
+def test_lan_api_request_with_query_token_returns_200(tmp_path: Path) -> None:
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        access_token="secret-lan-token",
+    )
+    client = app.test_client()
+    response = client.get(
+        "/api/recordings?token=secret-lan-token",
+        environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+    )
+    assert response.status_code == 200
+
+
+def test_lan_api_request_with_header_token_returns_200(tmp_path: Path) -> None:
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        access_token="secret-lan-token",
+    )
+    client = app.test_client()
+    response = client.get(
+        "/api/recordings",
+        headers={"X-Dashboard-Token": "secret-lan-token"},
+        environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+    )
+    assert response.status_code == 200
+
+
+def test_lan_homepage_requires_token(tmp_path: Path) -> None:
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        access_token="secret-lan-token",
+    )
+    client = app.test_client()
+    response = client.get("/", environ_overrides={"REMOTE_ADDR": "192.168.1.50"})
+    assert response.status_code == 401
+
+
+def test_local_request_bypasses_token_even_when_lan_token_set(tmp_path: Path) -> None:
+    """127.0.0.1 來源一律免 token，維持單機模式零改變。"""
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        access_token="secret-lan-token",
+    )
+    client = app.test_client()
+    response = client.get("/api/recordings")  # 預設 REMOTE_ADDR=127.0.0.1
+    assert response.status_code == 200
+
+
+def test_no_access_token_leaves_single_machine_mode_unaffected(tmp_path: Path) -> None:
+    """未設定 access_token（單機模式）時，即使來源非本機也不需要 token。"""
+    app, _socketio = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
+    client = app.test_client()
+    response = client.get(
+        "/api/recordings",
+        environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+    )
+    assert response.status_code == 200
+
+
+def test_socketio_connect_rejected_without_token_when_lan_enabled(tmp_path: Path) -> None:
+    app, socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        access_token="secret-lan-token",
+    )
+    client = socketio.test_client(app)
+    try:
+        assert not client.is_connected()
+    finally:
+        if client.is_connected():
+            client.disconnect()
+
+
+def test_socketio_connect_accepted_with_correct_auth_token(tmp_path: Path) -> None:
+    app, socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        access_token="secret-lan-token",
+    )
+    client = socketio.test_client(app, auth={"token": "secret-lan-token"})
+    try:
+        assert client.is_connected()
+    finally:
+        client.disconnect()
+
+
+def test_web_server_thread_generates_access_token_for_lan_bind(tmp_path: Path) -> None:
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="0.0.0.0")
+    assert server.access_token
+    assert len(server.access_token) >= 16
+
+
+def test_web_server_thread_no_access_token_for_localhost_bind(tmp_path: Path) -> None:
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1")
+    assert server.access_token is None
 
 
 def test_live_web_preview_targets_thirty_fps() -> None:
