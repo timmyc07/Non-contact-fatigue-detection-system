@@ -70,17 +70,22 @@ class FuserConfig:
     rppg_min_roi_valid: int = 3
 
     # ── Behaviour sub-weights (internal, sum = 1.0) ───────────────────────────
-    beh_w_perclos:    float = 0.35
-    beh_w_blink_temporal: float = 0.25
-    beh_w_microsleep: float = 0.20
-    beh_w_gaze:       float = 0.10
+    # 權重依 UTA-RLDD 18 片（subject 01-06 × label 0/5/10）各通道分辨力（AUC）重配：
+    # PERCLOS AUC 0.79 為唯一強訊號 → 主導；微睡（AUC 0.42）與 blink_temporal（0.42）
+    # 在此資料上為反訊號 → 大幅降權但保留（對真實無人機場景的點頭/慢眨眼仍有價值）。
+    # 詳見 docs/2026-07-03-fatigue-accuracy-calibration.md（2026-07-03 準確度校準）
+    beh_w_perclos:    float = 0.55
+    beh_w_blink_temporal: float = 0.12
+    beh_w_microsleep: float = 0.10
+    beh_w_gaze:       float = 0.08
     beh_w_squint:     float = 0.05
     beh_w_yawn:       float = 0.05
-    beh_w_frown:      float = 0.00
+    beh_w_frown:      float = 0.05
 
-    # PERCLOS tiers
-    perclos_mild_th:  float = 0.10   # below = 0 score
-    perclos_high_th:  float = 0.25   # above = 1.0 score
+    # PERCLOS tiers — 對齊系統實際 operating range（UTA-RLDD：清醒~0.006、嗜睡~0.031、
+    # 峰值~0.067）。舊值 0.10/0.25 遠高於系統實際產生的 PERCLOS，使唯一有效訊號恆輸出 0。
+    perclos_mild_th:  float = 0.015  # below = 0 score
+    perclos_high_th:  float = 0.07   # above = 1.0 score
 
     # Squint duration that maps to score 1.0
     squint_full_sec:  float = 30.0

@@ -253,8 +253,13 @@ class FatigueParams:
     perclos_window_sec: float  = 60.0
     # 分母下限（秒）：可量測時間不足時抑制開機假尖峰（2026-07-03 審核 P2-3/M2）
     perclos_denom_floor_sec: float = 5.0
-    low_vigilance_perclos_th: float = 0.10
-    tired_perclos_th:   float  = 0.25
+    # 狀態門檻對齊實際 operating range（清醒 PERCLOS<0.018、嗜睡 median 0.035）：
+    # 舊值 0.10/0.25 系統永遠到不了，DROWSY 狀態從不觸發（2026-07-03 準確度校準）
+    low_vigilance_perclos_th: float = 0.02
+    tired_perclos_th:   float  = 0.05
+    # composite 分數的 PERCLOS 正規化飽和點，與狀態門檻「刻意分離」：狀態閘與分數尺度
+    # 是兩個獨立輸出，用各自常數才不會「想調狀態卻連動分數」（三重審查軸B W1）
+    perclos_composite_full: float = 0.05
     long_closed_sec:    float  = 1.5
     use_stable_face_area: bool = True
     tighten_strength_fatigue: float = 0.25
@@ -1393,12 +1398,16 @@ class FatigueEngine:
         # PERCLOS → standard
         # Cognitive (squint + frown + gaze fixation) → early, moderate weight
         # Yawn → late stage, very low weight
+        # 權重依 UTA-RLDD 各通道分辨力重配（2026-07-03 準確度校準）：PERCLOS 為主，
+        # 微睡（此資料上為反訊號）大幅降權；PERCLOS 以獨立的 composite 飽和點正規化到 0-1，
+        # 讓實際 operating range（~0.05）就能貢獻滿分而非被舊尺度壓成 0。
+        perclos_norm = _clamp(self.eye.last_perclos / (p.perclos_composite_full + 1e-6), 0.0, 1.0)
         fatigue_level = _clamp(
-            self.eye.last_perclos * 0.40
-            + (1.0 if microsleep_alert else 0.0) * 0.30
+            perclos_norm * 0.55
+            + (1.0 if microsleep_alert else 0.0) * 0.12
             + self.eye.blink_temporal_score * 0.10
-            + (self.eye.squint_duration / 30.0 if self.eye.is_squinting else 0.0) * 0.15
-            + (0.08 if self.eye.is_frowning else 0.0)
+            + (self.eye.squint_duration / 30.0 if self.eye.is_squinting else 0.0) * 0.10
+            + (0.05 if self.eye.is_frowning else 0.0)
             + (0.08 if self.gaze.gaze_mental_fatigue else 0.0)
             + (0.05 if self.eye.blend_eye_squint > p.blend_squint_gate else 0.0)
             + (0.05 if self.eye.blend_brow_down > p.blend_brow_gate else 0.0)

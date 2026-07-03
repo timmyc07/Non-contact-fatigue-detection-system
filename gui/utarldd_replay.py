@@ -26,7 +26,7 @@ from PySide6.QtGui import QImage
 from mediapipe.tasks import python as _mp_python
 from mediapipe.tasks.python import vision as _mp_vision
 
-from gui.fatigue_engine import FatigueEngine
+from gui.fatigue_engine import FatigueEngine, FatigueParams
 from gui.fatigue_scorer import FatigueFuser
 from gui.fatigue_worker import draw_fatigue_annotations
 from gui.mediapipe_tuning import load_mediapipe_tuning
@@ -47,6 +47,10 @@ UTARLDD_LABELS: dict[str, str] = {
     "10": "Drowsy",
 }
 VIDEO_EXTS = {".mov", ".mp4"}
+
+# 報表 PERCLOS 計數門檻引用引擎狀態門檻預設值，隨其一起校準（勿再硬編碼）
+_PERCLOS_LOW_TH = FatigueParams().low_vigilance_perclos_th
+_PERCLOS_DROWSY_TH = FatigueParams().tired_perclos_th
 
 
 @dataclass(frozen=True)
@@ -488,9 +492,11 @@ def run_replay_video(
                     summary.rppg_available_frames += 1
                 if float(payload.get("fatigue_quality_score", 0.0) or 0.0) < 0.55:
                     summary.low_quality_frames += 1
-                if float(payload.get("perclos", 0.0) or 0.0) >= 0.10:
+                # 報表 PERCLOS 計數門檻引用實際狀態門檻，避免與狀態欄矛盾
+                # （2026-07-03 準確度校準：門檻已降到 operating range，硬編碼 0.10/0.25 會恆為 0）
+                if float(payload.get("perclos", 0.0) or 0.0) >= _PERCLOS_LOW_TH:
                     summary.perclos_low_frames += 1
-                if float(payload.get("perclos", 0.0) or 0.0) >= 0.25:
+                if float(payload.get("perclos", 0.0) or 0.0) >= _PERCLOS_DROWSY_TH:
                     summary.perclos_drowsy_frames += 1
                 if float(payload.get("blink_temporal_score", 0.0) or 0.0) >= 0.45:
                     summary.blink_temporal_warn_frames += 1

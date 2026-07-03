@@ -9,8 +9,31 @@ _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from gui.fatigue_scorer import _LEVELS, FatigueFuser  # noqa: E402
+from gui.fatigue_scorer import _LEVELS, FatigueFuser, FuserConfig  # noqa: E402
 from gui.fatigue_engine import FatigueMetrics  # noqa: E402
+
+
+def test_perclos_scores_in_actual_operating_range() -> None:
+    # 2026-07-03 準確度校準：PERCLOS 計分門檻對齊系統實際 operating range
+    # （清醒~0.006、嗜睡~0.031）。嗜睡級 PERCLOS 必須產生有意義的行為分數，
+    # 清醒級接近 0——這是把 AUC 0.79 訊號從「恆為 0」救回輸出的關鍵回歸鎖定。
+    drowsy = FatigueMetrics(face_detected=True, calibrated=True, perclos=0.03, fatigue_level=0.0)
+    alert = FatigueMetrics(face_detected=True, calibrated=True, perclos=0.005, fatigue_level=0.0)
+    s_drowsy = FatigueFuser().update(None, drowsy)
+    s_alert = FatigueFuser().update(None, alert)
+    assert s_drowsy.behavior_sub > s_alert.behavior_sub
+    assert s_drowsy.behavior_sub > 0.08   # 嗜睡 PERCLOS 現在有實質分數（舊門檻下為 0）
+    assert s_alert.behavior_sub < 0.03    # 清醒仍接近 0
+
+
+def test_perclos_weight_dominates_behavior() -> None:
+    # PERCLOS 為此資料上唯一強訊號（AUC 0.79），必須是行為柱最大權重
+    cfg = FuserConfig()
+    assert cfg.beh_w_perclos >= 0.50
+    assert cfg.beh_w_perclos > cfg.beh_w_microsleep + cfg.beh_w_blink_temporal
+    weights = (cfg.beh_w_perclos + cfg.beh_w_blink_temporal + cfg.beh_w_microsleep
+               + cfg.beh_w_gaze + cfg.beh_w_squint + cfg.beh_w_yawn + cfg.beh_w_frown)
+    assert abs(weights - 1.0) < 1e-9   # 行為子權重仍總和為 1
 
 
 def test_fuser_no_data_reports_nodata_not_alert() -> None:

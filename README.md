@@ -154,6 +154,16 @@ CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--job
 
 baseline（`tests/golden/utarldd_golden_baseline.json`）與設定檔皆納入版控；漂移屬預期結果時，先在 commit 說明中逐欄解釋再以 `create --force` 重建。
 
+### 準確度量測（判斷邏輯調整後必跑）
+
+golden 只驗「數值有沒有變」，`scripts/utarldd_accuracy.py` 驗「數值對不對」：把 label 0/5/10 當序位真值，量各分數欄位隨標籤的單調性、Drowsy vs Alert 的 AUC 與尺度塌陷率。修改疲勞判斷/門檻/權重後用它確認準確度不退化：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_accuracy "%USERPROFILE%\Downloads\UTA_test\Fold1_part1" --subjects '01,02,03,04,05,06' --max-frames 1200 --jobs 4 --out report.json
+```
+
+2026-07-03 的準確度校準（PERCLOS 計分門檻與權重重配）把最終輸出的 Drowsy-vs-Alert AUC 從 0.53 提升到 0.75（校準集）／0.69（留出集），詳見 `docs/2026-07-03-fatigue-accuracy-calibration.md`。**注意 subjects 參數在 PowerShell 需加引號**（`'01,02'`），否則會被當整數陣列去掉前導零而對不上目錄。
+
 2026-06-07 最新 36 支影片測試結果整理於 `docs/2026-06-07-utarldd-analysis.md`。本次影片處理完成率為 100%，平均人臉偵測率約 99.93%，代表回放與偵測管線穩定；但融合分數未隨 `0 -> 5 -> 10` 穩定上升，因此不能宣稱三分類準確率接近 100%。同批次 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv` 已可轉成 `utarldd_visual_report_20260607_122601.html`，適合用於畢專報告的限制分析與後續門檻校正依據。
 
 ## MediaPipe tuning and calibration
@@ -283,6 +293,7 @@ fuser /dev/video0
 - `scripts/utarldd_replay.py`: UTA-RLDD 影片批次回放測試，輸出 SQLite、summary CSV、validation CSV、完整 CSV、HTML 與 manifest。
 - `scripts/utarldd_csv_report.py`: 將 UTA-RLDD summary CSV 轉成單檔 HTML 可視化報表，整理趨勢圖、判斷依據與優化建議。
 - `scripts/utarldd_golden.py`: UTA-RLDD golden-output 回歸基準（create/check），機械偵測演算法改動造成的數值漂移。
+- `scripts/utarldd_accuracy.py`: UTA-RLDD 疲勞判斷準確度量測（各標籤分數分佈、Spearman、Drowsy vs Alert 的 AUC、尺度塌陷診斷），調整判斷邏輯後用來確認準確度不退化。詳見 `docs/2026-07-03-fatigue-accuracy-calibration.md`。
 
 ## Technical reports
 - `docs/無人機駕駛員疲勞狀態監測系統_實務專題報告.pdf`: 依電子工程系實務專題報告格式產生的完整 PDF 書面報告，包含首頁、中文摘要、英文摘要、目錄、圖目錄、緒言、簡介、理論、軟硬體分析、測試結果、結論、建議、附錄與參考資料。
