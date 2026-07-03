@@ -47,6 +47,10 @@ UTARLDD_LABELS: dict[str, str] = {
     "10": "Drowsy",
 }
 VIDEO_EXTS = {".mov", ".mp4"}
+# 通用（非 UTA-RLDD）回放支援更廣的副檔名；獨立常數，不影響 VIDEO_EXTS 既有行為。
+GENERIC_VIDEO_EXTS = VIDEO_EXTS | {".avi", ".mkv", ".m4v", ".webm"}
+UNLABELED_LABEL = ""
+UNLABELED_LABEL_NAME = "Unlabeled"
 
 # 報表 PERCLOS 計數門檻引用引擎狀態門檻預設值，隨其一起校準（勿再硬編碼）
 _PERCLOS_LOW_TH = FatigueParams().low_vigilance_perclos_th
@@ -173,6 +177,61 @@ def discover_utarldd_videos(
             continue
         videos.append(UtaRlddVideo(subject=subject, label=label, label_name=label_name, path=path))
     videos.sort(key=lambda item: (item.subject, int(item.label), item.path.name.lower()))
+    return videos
+
+
+def _infer_label(path: Path) -> tuple[str, str]:
+    """Best-effort UTA-RLDD 0/5/10 label；解析失敗時視為無 label（通用回放用）。"""
+    try:
+        return parse_utarldd_label(path)
+    except ValueError:
+        return UNLABELED_LABEL, UNLABELED_LABEL_NAME
+
+
+def discover_replay_videos(
+    root: Path,
+    *,
+    subjects: Iterable[str] | None = None,
+    labels: Iterable[str] | None = None,
+) -> list[UtaRlddVideo]:
+    """通用影片探索：接受單一影片檔或任意資料夾，不要求 UTA-RLDD 目錄/檔名結構。
+
+    檔名無法解析成 UTA-RLDD 0/5/10 label 時不跳過，改標記為無 label
+    （label="", label_name="Unlabeled"）。
+    """
+    root = Path(root)
+    subject_filter = {str(s) for s in subjects or []}
+    label_filter = {str(l) for l in labels or []}
+    if not root.exists():
+        raise FileNotFoundError(f"回放來源不存在: {root}")
+
+    videos: list[UtaRlddVideo] = []
+    if root.is_file():
+        if root.suffix.lower() not in GENERIC_VIDEO_EXTS:
+            raise ValueError(
+                f"不支援的影片副檔名: {root.name}"
+                f"（支援副檔名：{sorted(GENERIC_VIDEO_EXTS)}）"
+            )
+        subject = root.parent.name or "video"
+        label, label_name = _infer_label(root)
+        if subject_filter and subject not in subject_filter:
+            return videos
+        if label_filter and label not in label_filter:
+            return videos
+        videos.append(UtaRlddVideo(subject=subject, label=label, label_name=label_name, path=root))
+        return videos
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in GENERIC_VIDEO_EXTS:
+            continue
+        label, label_name = _infer_label(path)
+        subject = path.parent.name
+        if subject_filter and subject not in subject_filter:
+            continue
+        if label_filter and label not in label_filter:
+            continue
+        videos.append(UtaRlddVideo(subject=subject, label=label, label_name=label_name, path=path))
+    videos.sort(key=lambda item: (item.subject, item.label, item.path.name.lower()))
     return videos
 
 
@@ -1325,15 +1384,32 @@ def run_replay_batch(
     progress_cb: ProgressCallback | None = None,
     preview_frame_cb: PreviewFrameCallback | None = None,
     stop_requested: Callable[[], bool] | None = None,
+    labeled: bool = True,
 ) -> UtaRlddBatchResult:
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if output_dir is None:
-        output_dir = Path(__file__).resolve().parents[1] / "recordings" / "utarldd_runs" / run_stamp
+        run_subdir = "utarldd_runs" if labeled else "replay_runs"
+        output_dir = Path(__file__).resolve().parents[1] / "recordings" / run_subdir / run_stamp
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    videos = discover_utarldd_videos(root, subjects=subjects, labels=labels)
+    if labeled:
+        videos = discover_utarldd_videos(root, subjects=subjects, labels=labels)
+    else:
+        videos = discover_replay_videos(root, subjects=subjects, labels=labels)
     if max_videos > 0:
         videos = videos[:max_videos]
+    if not videos:
+        root_display = Path(root)
+        if labeled:
+            raise ValueError(
+                f"找不到可回放的影片: {root_display}。請確認路徑存在、內含影片檔，"
+                "且檔名（不含副檔名）需為 UTA-RLDD label 0、5 或 10（例如 0.mov）。"
+                "若要回放任意影片（無 label 要求），請改用 labeled=False 或 scripts/video_replay.py。"
+            )
+        raise ValueError(
+            f"找不到可回放的影片: {root_display}。請確認路徑是一支存在的影片檔，"
+            f"或是內含影片檔的資料夾（支援副檔名：{sorted(GENERIC_VIDEO_EXTS)}）。"
+        )
 
     summaries: list[UtaRlddVideoSummary] = []
     effective_jobs = max(1, int(jobs or 1))
@@ -1465,26 +1541,30 @@ def run_replay_batch(
                     summary_by_index[index] = _failed_replay_summary(video, pool_error)
         summaries = [summary_by_index[index] for index, _video in indexed if index in summary_by_index]
 
-    summary_csv = output_dir / f"utarldd_summary_{run_stamp}.csv"
-    full_summary_csv = output_dir / f"utarldd_summary_full_{run_stamp}.csv"
-    validation_report_csv = output_dir / f"utarldd_validation_report_{run_stamp}.csv"
-    visual_report_html = output_dir / f"utarldd_visual_report_{run_stamp}.html"
-    manifest_path = output_dir / f"utarldd_manifest_{run_stamp}.json"
+    prefix = "utarldd" if labeled else "replay"
+    summary_csv = output_dir / f"{prefix}_summary_{run_stamp}.csv"
+    full_summary_csv = output_dir / f"{prefix}_summary_full_{run_stamp}.csv"
+    validation_report_csv = output_dir / f"{prefix}_validation_report_{run_stamp}.csv"
+    visual_report_html = output_dir / f"{prefix}_visual_report_{run_stamp}.html"
+    manifest_path = output_dir / f"{prefix}_manifest_{run_stamp}.json"
     write_summary_csv(summary_csv, summaries)
     write_full_summary_csv(full_summary_csv, summaries)
-    write_validation_report_csv(validation_report_csv, summaries)
+    if labeled:
+        write_validation_report_csv(validation_report_csv, summaries)
+    # labeled=False：無 label 無從驗證趨勢，略過 validation 報表產生
+    # （validation_report_csv 仍回傳路徑供呼叫端參考，但該檔案不會被建立）
     write_visual_report_html(visual_report_html, summaries)
     manifest = {
         "dataset_root": str(Path(root)),
         "output_dir": str(output_dir),
         "summary_csv": str(summary_csv),
         "full_summary_csv": str(full_summary_csv),
-        "validation_report_csv": str(validation_report_csv),
+        "validation_report_csv": str(validation_report_csv) if labeled else "",
         "visual_report_html": str(visual_report_html),
         "created_at": run_stamp,
-        "source": "UTA-RLDD",
-        "source_url": "https://sites.google.com/view/utarldd/home",
-        "labels": UTARLDD_LABELS,
+        "source": "UTA-RLDD" if labeled else "generic-video",
+        "source_url": "https://sites.google.com/view/utarldd/home" if labeled else "",
+        "labels": UTARLDD_LABELS if labeled else {},
         "jobs_requested": int(jobs or 1),
         "jobs_effective": effective_jobs,
         "write_annotated_video_requested": bool(write_annotated_video),

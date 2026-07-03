@@ -7,9 +7,12 @@ import json
 import numpy as np
 
 from gui.utarldd_replay import (
+    UNLABELED_LABEL,
+    UNLABELED_LABEL_NAME,
     UtaRlddVideo,
     UtaRlddVideoSummary,
     _bgr_to_qimage,
+    discover_replay_videos,
     discover_utarldd_videos,
     parse_utarldd_label,
     run_replay_batch,
@@ -481,3 +484,136 @@ def test_run_replay_batch_parallel_disables_annotated_video(tmp_path: Path, monk
     assert annotated_flags == [False, False]
     assert manifest["write_annotated_video_requested"] is True
     assert manifest["write_annotated_video_effective"] is False
+
+
+def test_discover_replay_videos_accepts_single_video_file(tmp_path: Path) -> None:
+    video_path = tmp_path / "clips" / "my_drive.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.write_bytes(b"stub")
+
+    videos = discover_replay_videos(video_path)
+
+    assert len(videos) == 1
+    assert videos[0].path == video_path
+    assert videos[0].subject == "clips"
+    assert videos[0].label == UNLABELED_LABEL
+    assert videos[0].label_name == UNLABELED_LABEL_NAME
+
+
+def test_discover_replay_videos_treats_unrecognized_filenames_as_unlabeled(tmp_path: Path) -> None:
+    for name in ("session_a.mp4", "0.mov", "flight_log.avi"):
+        p = tmp_path / "pilot01" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"stub")
+
+    videos = discover_replay_videos(tmp_path)
+
+    by_name = {v.path.name: v for v in videos}
+    assert len(videos) == 3
+    assert by_name["session_a.mp4"].label == UNLABELED_LABEL
+    assert by_name["session_a.mp4"].label_name == UNLABELED_LABEL_NAME
+    assert by_name["flight_log.avi"].label == UNLABELED_LABEL
+    # 已知 UTA-RLDD 檔名仍可正常解析出 label，不被通用探索改壞
+    assert by_name["0.mov"].label == "0"
+    assert by_name["0.mov"].label_name == "Alert"
+
+
+def test_run_replay_batch_raises_actionable_error_on_zero_videos(tmp_path: Path, monkeypatch) -> None:
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    try:
+        run_replay_batch(empty_dir, output_dir=tmp_path / "out", labeled=False)
+    except ValueError as exc:
+        message = str(exc)
+        assert "找不到可回放的影片" in message
+        assert str(empty_dir) in message
+    else:
+        raise AssertionError("empty root with no videos should raise ValueError")
+
+    try:
+        run_replay_batch(empty_dir, output_dir=tmp_path / "out2", labeled=True)
+    except ValueError as exc:
+        message = str(exc)
+        assert "找不到可回放的影片" in message
+        assert "0、5 或 10" in message
+    else:
+        raise AssertionError("empty root with no videos should raise ValueError (labeled mode)")
+
+
+def test_run_replay_batch_labeled_true_uses_utarldd_discovery_and_output_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    videos = [UtaRlddVideo("01", "0", "Alert", tmp_path / "01" / "0.mov")]
+    calls = {"utarldd": 0, "generic": 0}
+
+    def fake_utarldd_discover(root, *, subjects=None, labels=None):
+        calls["utarldd"] += 1
+        return videos
+
+    def fake_generic_discover(root, *, subjects=None, labels=None):
+        calls["generic"] += 1
+        return videos
+
+    def fake_replay(video, output_dir, run_stamp, **kwargs):
+        return UtaRlddVideoSummary(
+            subject=video.subject,
+            label=video.label,
+            label_name=video.label_name,
+            video_path=str(video.path),
+            status="done",
+            frames=5,
+        )
+
+    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_utarldd_discover)
+    monkeypatch.setattr("gui.utarldd_replay.discover_replay_videos", fake_generic_discover)
+    monkeypatch.setattr("gui.utarldd_replay.run_replay_video", fake_replay)
+
+    result = run_replay_batch(tmp_path / "dataset")
+
+    assert calls == {"utarldd": 1, "generic": 0}
+    assert result.output_dir.parent.name == "utarldd_runs"
+    assert result.summary_csv.name.startswith("utarldd_summary_")
+    assert result.validation_report_csv.exists()
+
+
+def test_run_replay_batch_labeled_false_uses_generic_discovery_and_skips_validation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    videos = [UtaRlddVideo("clips", UNLABELED_LABEL, UNLABELED_LABEL_NAME, tmp_path / "clips" / "a.mp4")]
+    calls = {"utarldd": 0, "generic": 0}
+
+    def fake_utarldd_discover(root, *, subjects=None, labels=None):
+        calls["utarldd"] += 1
+        return videos
+
+    def fake_generic_discover(root, *, subjects=None, labels=None):
+        calls["generic"] += 1
+        return videos
+
+    def fake_replay(video, output_dir, run_stamp, **kwargs):
+        return UtaRlddVideoSummary(
+            subject=video.subject,
+            label=video.label,
+            label_name=video.label_name,
+            video_path=str(video.path),
+            status="done",
+            frames=5,
+        )
+
+    monkeypatch.setattr("gui.utarldd_replay.discover_utarldd_videos", fake_utarldd_discover)
+    monkeypatch.setattr("gui.utarldd_replay.discover_replay_videos", fake_generic_discover)
+    monkeypatch.setattr("gui.utarldd_replay.run_replay_video", fake_replay)
+
+    result = run_replay_batch(tmp_path / "dataset", labeled=False)
+
+    assert calls == {"utarldd": 0, "generic": 1}
+    assert result.output_dir.parent.name == "replay_runs"
+    assert result.summary_csv.name.startswith("replay_summary_")
+    assert not result.validation_report_csv.exists()
+    assert result.summary_csv.exists()
+    assert result.full_summary_csv.exists()
+    assert result.visual_report_html.exists()
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["source"] == "generic-video"
+    assert manifest["validation_report_csv"] == ""
