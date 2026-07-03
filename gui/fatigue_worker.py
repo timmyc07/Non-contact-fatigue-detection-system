@@ -27,6 +27,7 @@ _HAS_MP = True
 _ANNOTATED_PREVIEW_MAX_FPS = 30.0
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
+from .personal_profile import PersonalProfile
 from .frame_queue import get_latest
 from .mediapipe_tuning import load_mediapipe_tuning
 from rppg.rppg_worker import ensure_face_model, _MODELS_DIR
@@ -363,15 +364,26 @@ class FatigueWorker(QObject):
         frame_queue: "queue.Queue[tuple[float, np.ndarray]]",
         target_fps: float = 30.0,
         params: Optional[FatigueParams] = None,
+        personal_profile: Optional[PersonalProfile] = None,
     ) -> None:
         super().__init__()
         self._queue      = frame_queue
         self._target_fps = target_fps
         self._params     = params or FatigueParams()
         self._stop       = False
+        # 個人清醒基線：建構期注入 + 執行中熱換（仿 request_stop 旗標輪詢）。
+        self._personal_profile = personal_profile
+        self._fatigue_engine: Optional[FatigueEngine] = None
+        self._pending_profile: Optional[PersonalProfile] = None
+        self._has_pending_profile = False
 
     def request_stop(self) -> None:
         self._stop = True
+
+    def set_personal_profile(self, profile: Optional[PersonalProfile]) -> None:
+        """執行緒安全熱換個人基線（主執行緒設旗標，run 迴圈輪詢套用）。"""
+        self._pending_profile = profile
+        self._has_pending_profile = True
 
     @Slot()
     def run(self) -> None:
@@ -408,7 +420,9 @@ class FatigueWorker(QObject):
             running_mode=_mp_vision.RunningMode.VIDEO,
         )
 
-        engine    = FatigueEngine(params=self._params)
+        engine    = FatigueEngine(params=self._params,
+                                  personal_profile=self._personal_profile)
+        self._fatigue_engine = engine
         last_face = False
         t_origin: Optional[float] = None
         ts_ms_prev = 0
@@ -419,6 +433,9 @@ class FatigueWorker(QObject):
 
         with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
             while not self._stop:
+                if self._has_pending_profile:
+                    engine.set_personal_profile(self._pending_profile)
+                    self._has_pending_profile = False
                 try:
                     ts, bgr = get_latest(self._queue, timeout=0.1)
                 except queue.Empty:

@@ -40,6 +40,7 @@ _ANNOTATED_PREVIEW_MAX_FPS = 30.0
 log = logging.getLogger(__name__)
 
 from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
+from .personal_profile import PersonalProfile
 from .frame_queue import get_latest
 from .mediapipe_tuning import load_mediapipe_tuning
 from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig
@@ -102,6 +103,7 @@ class CombinedWorker(QObject):
         calibration_loader: Optional[Callable[[], object]] = None,
         live_feed_writer: Optional[Callable[[RppgMetrics], None]] = None,
         fuser_config: Optional[FuserConfig] = None,
+        personal_profile: Optional[PersonalProfile] = None,
     ) -> None:
         super().__init__()
         self._queue          = frame_queue
@@ -115,9 +117,19 @@ class CombinedWorker(QObject):
         self._live_feed_writer = live_feed_writer
         self._stop           = False
         self._tuning         = load_mediapipe_tuning()
+        # 個人清醒基線：建構期注入（跨 session 載入）+ 執行中熱換（手動記錄基線）。
+        self._personal_profile = personal_profile
+        self._fatigue_engine: Optional[FatigueEngine] = None
+        self._pending_profile: Optional[PersonalProfile] = None
+        self._has_pending_profile = False
 
     def request_stop(self) -> None:
         self._stop = True
+
+    def set_personal_profile(self, profile: Optional[PersonalProfile]) -> None:
+        """執行緒安全熱換個人基線（仿 request_stop：主執行緒設旗標，run 迴圈輪詢套用）。"""
+        self._pending_profile = profile
+        self._has_pending_profile = True
 
     @Slot()
     def run(self) -> None:
@@ -163,7 +175,10 @@ class CombinedWorker(QObject):
         rppg_engine    = RppgEngine(buffer_sec=self._buffer_sec,
                                     target_fps=self._target_fps) if self._enable_rppg else None
         roi_tracker    = RoiGeometryTracker() if self._enable_rppg else None
-        fatigue_engine = FatigueEngine(params=self._fatigue_params) if self._enable_fatigue else None
+        fatigue_engine = (FatigueEngine(params=self._fatigue_params,
+                                        personal_profile=self._personal_profile)
+                          if self._enable_fatigue else None)
+        self._fatigue_engine = fatigue_engine
 
         last_face      = False
         t_origin: Optional[float] = None
@@ -180,6 +195,9 @@ class CombinedWorker(QObject):
 
         with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
             while not self._stop:
+                if self._has_pending_profile and fatigue_engine is not None:
+                    fatigue_engine.set_personal_profile(self._pending_profile)
+                    self._has_pending_profile = False
                 try:
                     ts, bgr = get_latest(self._queue, timeout=0.1)
                 except queue.Empty:

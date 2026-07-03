@@ -45,6 +45,7 @@ from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
 from gui.belt_runtime import BeltRuntime
+from gui.personal_profile import PersonalBaselineCollector, PersonalProfileStore
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
 from rppg.hr_belt_ble import hr_is_stale, load_hr_belt_config
@@ -290,6 +291,12 @@ class MainWindow(QMainWindow):
         self._replay_recent_done: list[str] = []
         self._alarm_config = AlarmConfig.defaults()
         self._rppg_calibration_store = CalibrationVersionStore()
+        # 個人清醒基線：跨 session 載入上次的 manual profile（無則 None → 行為門檻走預設）。
+        self._personal_profile_store = PersonalProfileStore()
+        self._personal_profile = self._personal_profile_store.load()
+        # 啟動自動蒐集（暫定基線）與手動「記錄清醒基線」按鈕各自的蒐集器。
+        self._auto_baseline_collector: PersonalBaselineCollector | None = None
+        self._manual_baseline_collector: PersonalBaselineCollector | None = None
         self._belt_runtime = BeltRuntime()
         # 心跳帶真值校準（背景）：心跳帶 HR 當參考，線上微調 rPPG BPM offset，
         # 不進疲勞融合分數（見 _ensure_belt_calibration / OnlineBpmCalibrator）。
@@ -531,6 +538,23 @@ class MainWindow(QMainWindow):
         row_mode.addWidget(self._lbl_belt_status)
         row_mode.addStretch(1)
         ctl.addLayout(row_mode)
+
+        row_profile = QHBoxLayout()
+        self._btn_record_baseline = QPushButton("記錄清醒基線")
+        self._btn_record_baseline.setToolTip(
+            "在你精神狀態良好時按下，系統會擷取約 60 秒的清醒基線（PERCLOS／注視／眉距／"
+            "眨眼等），把疲勞判斷門檻校準到「你個人的正常範圍」，並存成個人 profile 供下次"
+            "開機自動載入。需先按「開始」啟動偵測。\n"
+            "心跳帶數值不參與此基線。"
+        )
+        self._btn_record_baseline.clicked.connect(self._on_record_baseline_clicked)
+        self._lbl_profile_status = QLabel(
+            "個人基線：已載入" if self._personal_profile is not None else "個人基線：未建立")
+        self._lbl_profile_status.setObjectName("hintLabel")
+        row_profile.addWidget(self._btn_record_baseline)
+        row_profile.addWidget(self._lbl_profile_status)
+        row_profile.addStretch(1)
+        ctl.addLayout(row_profile)
 
         row_c = QHBoxLayout()
         self._btn_record = QPushButton("開始記錄")
@@ -2229,6 +2253,7 @@ class MainWindow(QMainWindow):
             calibration_loader=self._load_rppg_calibration_version,
             live_feed_writer=write_live_feed,
             fuser_config=FuserConfig.for_rppg(),
+            personal_profile=self._personal_profile,
         )
         worker.moveToThread(thread)
 
@@ -2247,6 +2272,7 @@ class MainWindow(QMainWindow):
         self._combined_worker = worker
         thread.start()
 
+        self._begin_auto_baseline()
         self._update_frame_routing()
         self._preview_overlay.show_rppg_panel(enable_rppg)
         self._preview_overlay.show_fatigue_panel(True)
@@ -2261,6 +2287,7 @@ class MainWindow(QMainWindow):
             self._combined_thread.wait(5000)
         self._combined_thread = None
         self._combined_worker = None
+        self._end_baseline_collection()
         if self._combined_queue is not None and self._cam_worker is not None:
             self._cam_worker.detach_bgr_queue(self._combined_queue)
         self._combined_queue = None
@@ -2386,7 +2413,8 @@ class MainWindow(QMainWindow):
         self._cam_worker.attach_bgr_queue(self._fatigue_queue)
 
         thread = QThread(self)
-        worker = FatigueWorker(self._fatigue_queue, target_fps=30.0)
+        worker = FatigueWorker(self._fatigue_queue, target_fps=30.0,
+                               personal_profile=self._personal_profile)
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
@@ -2402,6 +2430,7 @@ class MainWindow(QMainWindow):
         self._fatigue_worker = worker
         thread.start()
 
+        self._begin_auto_baseline()
         self._update_frame_routing()
         self._preview_overlay.show_fatigue_panel(True)
         self._append_log("▶ 行為警覺引擎啟動（V2：EAR + 瞳孔 + 注視 + 頭部）")
@@ -2414,6 +2443,7 @@ class MainWindow(QMainWindow):
             self._fatigue_thread.wait(4000)
         self._fatigue_thread = None
         self._fatigue_worker = None
+        self._end_baseline_collection()
         if self._fatigue_queue is not None and self._cam_worker is not None:
             self._cam_worker.detach_bgr_queue(self._fatigue_queue)
         self._fatigue_queue = None
@@ -2428,8 +2458,91 @@ class MainWindow(QMainWindow):
         self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
         self._latest_fatigue_metrics = metrics
         self._alarm_controller.on_metrics(metrics)
+        self._feed_baseline_collectors(metrics)
         self._record_metrics()
         self._emit_web_metrics()
+
+    # ── 個人清醒基線：自動蒐集 + 手動記錄 + 熱換 ────────────────────────────
+    def _active_fatigue_worker(self) -> object | None:
+        """回傳目前持有 FatigueEngine、可接受 set_personal_profile 的 worker（或 None）。"""
+        if self._combined_worker is not None:
+            return self._combined_worker
+        if self._fatigue_worker is not None:
+            return self._fatigue_worker
+        return None
+
+    def _begin_auto_baseline(self) -> None:
+        """worker 啟動時開始蒐集暫定清醒基線（前 ~75s）。已有 manual profile 則不覆蓋使用中值，
+        但仍蒐集以便必要時觀察；手動記錄永遠優先。"""
+        self._auto_baseline_collector = PersonalBaselineCollector(
+            window_sec=75.0, now_iso=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        if self._personal_profile is None:
+            self._set_profile_status("個人基線：自動校準中…")
+
+    def _end_baseline_collection(self) -> None:
+        self._auto_baseline_collector = None
+        self._manual_baseline_collector = None
+
+    def _feed_baseline_collectors(self, metrics: object) -> None:
+        t = time.perf_counter()
+        manual = self._manual_baseline_collector
+        if manual is not None:
+            manual.observe(metrics, t)  # type: ignore[arg-type]
+            self._set_profile_status(f"記錄清醒基線中… {manual.progress * 100:.0f}%")
+            if manual.is_full():
+                self._manual_baseline_collector = None
+                self._finalize_manual_baseline(manual)
+            return
+        auto = self._auto_baseline_collector
+        if auto is not None:
+            auto.observe(metrics, t)  # type: ignore[arg-type]
+            if auto.is_full():
+                self._auto_baseline_collector = None
+                self._finalize_auto_baseline(auto)
+
+    def _finalize_auto_baseline(self, collector: PersonalBaselineCollector) -> None:
+        prof = collector.finalize(source="auto")
+        # 自動基線只在「尚無 manual profile」時作為本 session 暫定值套用，不落檔。
+        if self._personal_profile is not None and self._personal_profile.source == "manual":
+            return
+        if not prof.valid:
+            self._set_profile_status("個人基線：自動校準樣本不足，沿用預設")
+            return
+        self._hot_swap_profile(prof)
+        self._set_profile_status("個人基線：自動（暫定，未儲存）")
+        self._append_log("[基線] 自動清醒基線已建立（本 session 暫定，未落檔）")
+
+    def _finalize_manual_baseline(self, collector: PersonalBaselineCollector) -> None:
+        prof = collector.finalize(source="manual")
+        self._btn_record_baseline.setEnabled(True)
+        if not prof.valid:
+            self._set_profile_status("個人基線：樣本不足，請保持臉部在畫面內重試")
+            self._append_log("[基線] 手動記錄樣本不足，未儲存")
+            return
+        self._personal_profile_store.save(prof)
+        self._personal_profile = prof
+        self._hot_swap_profile(prof)
+        self._set_profile_status("個人基線：已記錄並儲存 ✓")
+        self._append_log("[基線] 手動清醒基線已記錄、儲存並即時套用，下次開機自動載入")
+
+    def _hot_swap_profile(self, prof: object) -> None:
+        worker = self._active_fatigue_worker()
+        if worker is not None:
+            worker.set_personal_profile(prof)  # type: ignore[attr-defined]
+
+    def _set_profile_status(self, text: str) -> None:
+        if hasattr(self, "_lbl_profile_status"):
+            self._lbl_profile_status.setText(text)
+
+    def _on_record_baseline_clicked(self) -> None:
+        if self._active_fatigue_worker() is None:
+            self._set_profile_status("個人基線：請先按「開始」啟動偵測")
+            return
+        self._manual_baseline_collector = PersonalBaselineCollector(
+            window_sec=60.0, now_iso=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        self._btn_record_baseline.setEnabled(False)
+        self._set_profile_status("記錄清醒基線中… 0%")
+        self._append_log("[基線] 開始手動記錄清醒基線（約 60 秒，請保持清醒自然狀態）")
 
     def _on_fatigue_face_detected(self, detected: bool) -> None:
         if self._rppg_worker is None:
