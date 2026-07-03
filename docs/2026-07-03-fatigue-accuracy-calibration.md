@@ -91,6 +91,9 @@ Alert↔Drowsy 判別。）
   某些人的清醒態偏高。目前的 per-session EAR 校準只正規化 EAR 尺度、未正規化 PERCLOS 基線。
   **下一步最高槓桿**：加一段「清醒基線 PERCLOS」校準，把每個人的分數改成相對其自身清醒基線的
   偏移量（而非絕對值），可望同時提升跨個體一致性與真實場景轉移性。
+  → **已於 2026-07-04 實作**（PERCLOS/gaze/frown/blink/yawn 全面個人化基線 + GUI 記錄按鈕），
+  見 `docs/2026-07-04-personal-baseline-personalization.md`。準確度提升的最終量化仍待在有資料集/真人
+  場景的機器上以 per-subject profile 注入版 `utarldd_accuracy.py` 復量。
 - **統計顯著性不足（誠實條款）**：每組 6 片，AUC 的 bootstrap 95% CI 很寬且下界接近 0.5
   （校準 0.39、留出 0.36），單次量測**未達 α=0.05 顯著**。本次結論靠「點估計大幅上升 + 單調性
   翻正 + 留出重現」三者方向一致來支撐，不是靠單一 AUC 的統計檢定。要達顯著需擴大到更多受試者
