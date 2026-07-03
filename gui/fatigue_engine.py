@@ -1050,6 +1050,8 @@ class HeadMouthModule:
         self._mouth_blend_calibrated = False
         self._mouth_blend_samples: list[float] = []
         self._mouth_blend_baseline = 0.0
+        # 個人化哈欠嘴開門檻（由 FatigueEngine 每幀依 profile 設定）；None → 退回 self.p 常數。
+        self._eff_mouth_open_yawn_th: Optional[float] = None
 
     def step(
         self,
@@ -1062,6 +1064,8 @@ class HeadMouthModule:
     ) -> tuple[bool, bool]:
         """Returns (microsleep_alert, yawn_detected)."""
         p = self.p
+        mouth_open_yawn_th = (self._eff_mouth_open_yawn_th
+                              if self._eff_mouth_open_yawn_th is not None else p.mouth_open_yawn_th)
         bs = _blendshape_map(blendshapes)
 
         # ── Head pose (LOW_FREQ) ─────────────────────────────────────────────
@@ -1153,7 +1157,7 @@ class HeadMouthModule:
         yawn_detected = False
         if (
             self.mar > p.mar_yawn_th
-            and self.mouth_open_ratio > p.mouth_open_yawn_th
+            and self.mouth_open_ratio > mouth_open_yawn_th
             and self.mouth_blend_stretch > p.blend_jaw_gate
         ):
             if self._yawn_open_start is None:
@@ -1410,6 +1414,10 @@ class FatigueEngine:
             _gprof.saccade_low_pm(1.0) if _gprof is not None else None)
         self.gaze.step(lm, t_now, has_iris, eyes_closed=eyes_closed)
 
+        # 哈欠嘴開門檻個人化：有 profile 則設 effective 值，否則 None（head.step 退回常數）。
+        self.head._eff_mouth_open_yawn_th = (
+            self._profile.mouth_open_yawn_th(p.mouth_open_yawn_th)
+            if self._profile is not None else None)
         microsleep_alert, yawn_detected = self.head.step(
             lm,
             w,

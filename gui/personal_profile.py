@@ -39,6 +39,7 @@ PERCLOS_SCORE_MILD_MARGIN = 0.005  # score mild_th ≈ awake_p90 + 此值（典�
 PERCLOS_SCORE_HIGH_MARGIN = 0.06   # score high_th ≈ awake_p90 + 此值（典型 → ~0.07）
 GAZE_STD_FACTOR = 1.5          # gaze 固定門檻 ≈ 清醒 gaze 位置 std × 此值（典型 → ~0.015）
 SACCADE_LOW_FACTOR = 0.6       # 低掃視門檻 ≈ 清醒掃視頻率 × 此值（典型 → ~1.0/min）
+MOUTH_OPEN_MARGIN = 0.19       # 哈欠嘴開門檻 ≈ 清醒靜息嘴開度 + 此值（典型 → ~0.24）
 #   防呆：個人化門檻夾在 [fallback × LO, fallback × HI]，避免異常基線把系統拉歪。
 CLAMP_LO_FACTOR = 0.5
 CLAMP_HI_FACTOR = 3.0
@@ -108,6 +109,7 @@ class PersonalProfile:
     saccade_freq_awake_pm: Optional[float] = None
     fixation_dur_awake: Optional[float] = None
     brow_dist_norm_awake: Optional[float] = None
+    mouth_open_awake: Optional[float] = None
     blink_dur_mean: Optional[float] = None
     blink_dur_std: Optional[float] = None
     blink_amp_mean: Optional[float] = None
@@ -167,6 +169,13 @@ class PersonalProfile:
         if not (self.valid and self.saccade_freq_awake_pm is not None):
             return fallback
         personalized = self.saccade_freq_awake_pm * SACCADE_LOW_FACTOR
+        return _clamp(personalized, fallback * CLAMP_LO_FACTOR, fallback * CLAMP_HI_FACTOR)
+
+    def mouth_open_yawn_th(self, fallback: float) -> float:
+        # 哈欠嘴開門檻相對靜息嘴開度（P4 消費）；靜息微張嘴者門檻提高，減少誤觸發。
+        if not (self.valid and self.mouth_open_awake is not None):
+            return fallback
+        personalized = self.mouth_open_awake + MOUTH_OPEN_MARGIN
         return _clamp(personalized, fallback * CLAMP_LO_FACTOR, fallback * CLAMP_HI_FACTOR)
 
     # ── 跨 session 免暖機 seed（P3 消費）──────────────────────────────────
@@ -270,6 +279,7 @@ class PersonalBaselineCollector:
         self._saccade_pm: list[float] = []
         self._fixation: list[float] = []
         self._brow: list[float] = []
+        self._mouth_open: list[float] = []
         self._blink_dur: list[float] = []
         self._blink_amp: list[float] = []
         self._blink_openvel: list[float] = []
@@ -301,6 +311,7 @@ class PersonalBaselineCollector:
         self._gaze_x.append(float(metrics.gaze_x))
         self._gaze_y.append(float(metrics.gaze_y))
         self._brow.append(float(metrics.brow_dist_norm))
+        self._mouth_open.append(float(metrics.mouth_open_ratio))
         if getattr(metrics, "saccade_window_ready", False):
             self._saccade_pm.append(float(metrics.saccade_freq_pm))
         if float(metrics.fixation_duration) > 0.0:
@@ -346,6 +357,7 @@ class PersonalBaselineCollector:
             saccade_freq_awake_pm=_median_or_none(self._saccade_pm),
             fixation_dur_awake=_median_or_none(self._fixation),
             brow_dist_norm_awake=_median_or_none(self._brow),
+            mouth_open_awake=_median_or_none(self._mouth_open),
             blink_dur_mean=blink_dur_mean,
             blink_dur_std=blink_dur_std,
             blink_amp_mean=blink_amp_mean,

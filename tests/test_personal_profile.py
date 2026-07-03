@@ -31,6 +31,7 @@ _TH_METHODS = [
     ("perclos_score_high_th", 0.07),
     ("gaze_fixed_std_th", 0.015),
     ("saccade_low_pm", 1.0),
+    ("mouth_open_yawn_th", 0.24),
 ]
 
 _ODD_FALLBACKS = [0.017345, 0.5, 1.0, 42.0, 0.0]
@@ -66,11 +67,13 @@ def test_typical_awake_baseline_reproduces_defaults() -> None:
         perclos_awake_p90=0.01,
         gaze_fix_std_awake=0.01,
         saccade_freq_awake_pm=1.6667,
+        mouth_open_awake=0.05,
     )
     assert abs(p.perclos_low_th(0.02) - 0.02) < 1e-9
     assert abs(p.perclos_tired_th(0.05) - 0.05) < 1e-9
     assert abs(p.gaze_fixed_std_th(0.015) - 0.015) < 1e-9
     assert abs(p.saccade_low_pm(1.0) - 1.0) < 1e-3
+    assert abs(p.mouth_open_yawn_th(0.24) - 0.24) < 1e-9
 
 
 def test_droopy_baseline_raises_perclos_threshold() -> None:
@@ -120,6 +123,7 @@ def _feed(collector: PersonalBaselineCollector, n: int, *, fps: float = 30.0,
             gaze_x=0.5 + (0.002 if i % 2 else -0.002),
             gaze_y=0.5 + (0.001 if i % 3 else -0.001),
             brow_dist_norm=1.0,
+            mouth_open_ratio=0.05,
             saccade_freq_pm=1.5,
             saccade_window_ready=True,
             fixation_duration=0.4,
@@ -140,6 +144,7 @@ def test_collector_finalize_populates_fields() -> None:
     assert prof.source == "manual"
     assert prof.perclos_awake_median is not None
     assert prof.perclos_awake_p90 is not None
+    assert prof.mouth_open_awake is not None
     assert prof.gaze_fix_std_awake is not None
     assert prof.saccade_freq_awake_pm is not None
     assert prof.fixation_dur_awake is not None
