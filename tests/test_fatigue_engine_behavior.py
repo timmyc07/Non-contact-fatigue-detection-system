@@ -179,6 +179,37 @@ def test_blink_does_not_register_fake_saccade() -> None:
 
 # ── P2-1：掃視觀測窗暖機 ─────────────────────────────────────────────────────
 
+def test_engine_seeds_baselines_from_profile() -> None:
+    # P3：帶眉距/blink-temporal 基線的 profile → engine 建構即預置進 eye（免暖機）。
+    from gui.personal_profile import PersonalProfile
+    prof = PersonalProfile(
+        valid=True, brow_dist_norm_awake=0.42,
+        blink_dur_mean=0.12, blink_dur_std=0.02,
+        blink_amp_mean=0.3, blink_amp_std=0.05,
+        blink_openvel_mean=0.8, blink_openvel_std=0.1,
+    )
+    engine = FatigueEngine(personal_profile=prof)
+    assert engine.eye._brow_baseline == 0.42
+    assert engine.eye._blink_feature_baseline is not None
+    assert engine.eye._blink_feature_baseline["duration"] == (0.12, 0.02)
+
+
+def test_engine_without_profile_has_no_seeded_baselines() -> None:
+    # 無 profile → 不預置任何基線（維持當 session 暖機建立，bit-identical）。
+    engine = FatigueEngine()
+    assert engine.eye._brow_baseline is None
+    assert engine.eye._blink_feature_baseline is None
+
+
+def test_seed_does_not_clobber_existing_baseline() -> None:
+    # seed 只在尚未建立時生效：已建立的 session 基線不被 profile 覆寫。
+    from gui.personal_profile import PersonalProfile
+    engine = FatigueEngine()
+    engine.eye._brow_baseline = 0.9
+    engine.set_personal_profile(PersonalProfile(valid=True, brow_dist_norm_awake=0.42))
+    assert engine.eye._brow_baseline == 0.9
+
+
 def _gaze_landmarks(iris_dx: float) -> list[SimpleNamespace]:
     """眼角固定（眼寬 0.2）、虹膜相對眼心偏移 iris_dx 的假臉；用來製造可控 gaze 位置。"""
     import gui.fatigue_engine as fe

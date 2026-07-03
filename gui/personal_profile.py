@@ -83,7 +83,8 @@ def _mean_std(values: list[float]) -> tuple[Optional[float], Optional[float]]:
     if len(values) < MIN_BLINK_SAMPLES:
         return None, None
     mean = float(statistics.fmean(values))
-    std = float(statistics.pstdev(values)) if len(values) > 1 else 0.0
+    # 樣本標準差（ddof=1），與 fatigue_engine 建 blink baseline 用的 np.std(ddof=1) 一致
+    std = float(statistics.stdev(values)) if len(values) > 1 else 0.0
     return mean, std
 
 
@@ -109,6 +110,8 @@ class PersonalProfile:
     brow_dist_norm_awake: Optional[float] = None
     blink_dur_mean: Optional[float] = None
     blink_dur_std: Optional[float] = None
+    blink_amp_mean: Optional[float] = None
+    blink_amp_std: Optional[float] = None
     blink_openvel_mean: Optional[float] = None
     blink_openvel_std: Optional[float] = None
 
@@ -165,6 +168,28 @@ class PersonalProfile:
             return fallback
         personalized = self.saccade_freq_awake_pm * SACCADE_LOW_FACTOR
         return _clamp(personalized, fallback * CLAMP_LO_FACTOR, fallback * CLAMP_HI_FACTOR)
+
+    # ── 跨 session 免暖機 seed（P3 消費）──────────────────────────────────
+    def brow_baseline(self) -> Optional[float]:
+        """眉距個人基線；無有效基線回 None（→ engine 沿用當 session 120 幀建立）。"""
+        if self.valid and self.brow_dist_norm_awake is not None:
+            return self.brow_dist_norm_awake
+        return None
+
+    def blink_feature_baseline(self) -> Optional[dict[str, tuple[float, float]]]:
+        """blink-temporal 個人基線 dict（結構同 fatigue_engine）；欄位不齊回 None。"""
+        if not self.valid:
+            return None
+        fields = (self.blink_dur_mean, self.blink_dur_std,
+                  self.blink_amp_mean, self.blink_amp_std,
+                  self.blink_openvel_mean, self.blink_openvel_std)
+        if any(v is None for v in fields):
+            return None
+        return {
+            "duration": (float(self.blink_dur_mean), float(self.blink_dur_std)),
+            "amplitude": (float(self.blink_amp_mean), float(self.blink_amp_std)),
+            "opening_velocity": (float(self.blink_openvel_mean), float(self.blink_openvel_std)),
+        }
 
     # ── 序列化 ────────────────────────────────────────────────────────────
     def to_dict(self) -> dict[str, Any]:
@@ -246,6 +271,7 @@ class PersonalBaselineCollector:
         self._fixation: list[float] = []
         self._brow: list[float] = []
         self._blink_dur: list[float] = []
+        self._blink_amp: list[float] = []
         self._blink_openvel: list[float] = []
 
     @property
@@ -285,6 +311,8 @@ class PersonalBaselineCollector:
         if self._last_blink_count is not None and bc > self._last_blink_count:
             if float(metrics.blink_duration_sec) > 0.0:
                 self._blink_dur.append(float(metrics.blink_duration_sec))
+            if float(metrics.blink_amplitude) > 0.0:
+                self._blink_amp.append(float(metrics.blink_amplitude))
             if float(metrics.blink_opening_velocity) > 0.0:
                 self._blink_openvel.append(float(metrics.blink_opening_velocity))
         self._last_blink_count = bc
@@ -297,6 +325,7 @@ class PersonalBaselineCollector:
             ))
 
         blink_dur_mean, blink_dur_std = _mean_std(self._blink_dur)
+        blink_amp_mean, blink_amp_std = _mean_std(self._blink_amp)
         blink_ov_mean, blink_ov_std = _mean_std(self._blink_openvel)
 
         valid = self._n_frames >= self.min_frames
@@ -319,6 +348,8 @@ class PersonalBaselineCollector:
             brow_dist_norm_awake=_median_or_none(self._brow),
             blink_dur_mean=blink_dur_mean,
             blink_dur_std=blink_dur_std,
+            blink_amp_mean=blink_amp_mean,
+            blink_amp_std=blink_amp_std,
             blink_openvel_mean=blink_ov_mean,
             blink_openvel_std=blink_ov_std,
         )

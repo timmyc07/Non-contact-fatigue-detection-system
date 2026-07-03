@@ -496,6 +496,17 @@ class EyeCognitiveModule:
         self._prev_t: Optional[float] = None
         self.nose_speed = 0.0
 
+    # ── 跨 session 免暖機 seed（P3）────────────────────────────────────────
+    def seed_brow_baseline(self, value: float) -> None:
+        """由個人 profile 預置眉距基線，跳過當 session 120 幀暖機。只在尚未建立時生效。"""
+        if self._brow_baseline is None:
+            self._brow_baseline = float(value)
+
+    def seed_blink_feature_baseline(self, baseline: dict[str, tuple[float, float]]) -> None:
+        """由個人 profile 預置 blink-temporal 基線，跳過 12 次眨眼暖機。只在尚未建立時生效。"""
+        if self._blink_feature_baseline is None:
+            self._blink_feature_baseline = dict(baseline)
+
     # ── PERCLOS helpers ──────────────────────────────────────────────────────
 
     def _open_interval(self, t: float, q: float) -> None:
@@ -1194,6 +1205,7 @@ class FatigueEngine:
         self._no_face_since: Optional[float] = None
         self._no_face_reset_done = False
         self._load_persisted_calibration()
+        self._seed_from_profile()
 
     def reset(self) -> None:
         self.eye.reset(full=True)
@@ -1203,10 +1215,28 @@ class FatigueEngine:
         self._no_face_since = None
         self._no_face_reset_done = False
         self._load_persisted_calibration()
+        self._seed_from_profile()
 
     def set_personal_profile(self, profile: Optional[PersonalProfile]) -> None:
         """session 中熱換個人清醒基線（P5：手動「記錄清醒基線」完成後即時生效）。"""
         self._profile = profile
+        self._seed_from_profile()
+
+    def _seed_from_profile(self) -> None:
+        """把個人 profile 的眉距 / blink-temporal 基線預置進 eye 模組（免暖機）。
+
+        prof=None 時完全不動；seed 方法本身只在對應基線尚未建立時生效，
+        不覆寫當 session 已建立的基線 → 無 profile 路徑逐位元不變。
+        """
+        prof = self._profile
+        if prof is None:
+            return
+        brow = prof.brow_baseline()
+        if brow is not None:
+            self.eye.seed_brow_baseline(brow)
+        blink_base = prof.blink_feature_baseline()
+        if blink_base is not None:
+            self.eye.seed_blink_feature_baseline(blink_base)
 
     def _load_persisted_calibration(self) -> None:
         eye_cal = self._calibration_store.get_section("fatigue_eye_blendshape")

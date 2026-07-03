@@ -125,6 +125,7 @@ def _feed(collector: PersonalBaselineCollector, n: int, *, fps: float = 30.0,
             fixation_duration=0.4,
             blink_count=bc,
             blink_duration_sec=0.12,
+            blink_amplitude=0.3,
             blink_opening_velocity=0.8,
         )
         collector.observe(m, i * dt)
@@ -144,6 +145,46 @@ def test_collector_finalize_populates_fields() -> None:
     assert prof.fixation_dur_awake is not None
     assert prof.blink_dur_mean is not None
     assert abs(prof.blink_dur_mean - 0.12) < 1e-6
+
+
+def test_collector_populates_blink_amplitude() -> None:
+    c = PersonalBaselineCollector(window_sec=2.0, min_frames=50)
+    _feed(c, 90)
+    prof = c.finalize()
+    assert prof.blink_amp_mean is not None
+    assert prof.blink_openvel_mean is not None
+
+
+def test_blink_feature_baseline_helper() -> None:
+    # 欄位齊全 → 回結構完整 dict；缺 amplitude → None；invalid → None。
+    full = PersonalProfile(
+        valid=True, blink_dur_mean=0.12, blink_dur_std=0.02,
+        blink_amp_mean=0.3, blink_amp_std=0.05,
+        blink_openvel_mean=0.8, blink_openvel_std=0.1,
+    )
+    base = full.blink_feature_baseline()
+    assert base is not None
+    assert set(base.keys()) == {"duration", "amplitude", "opening_velocity"}
+    assert base["duration"] == (0.12, 0.02)
+
+    missing_amp = PersonalProfile(
+        valid=True, blink_dur_mean=0.12, blink_dur_std=0.02,
+        blink_openvel_mean=0.8, blink_openvel_std=0.1,
+    )
+    assert missing_amp.blink_feature_baseline() is None
+
+    invalid = PersonalProfile(
+        valid=False, blink_dur_mean=0.12, blink_dur_std=0.02,
+        blink_amp_mean=0.3, blink_amp_std=0.05,
+        blink_openvel_mean=0.8, blink_openvel_std=0.1,
+    )
+    assert invalid.blink_feature_baseline() is None
+
+
+def test_brow_baseline_helper() -> None:
+    assert PersonalProfile(valid=True, brow_dist_norm_awake=0.42).brow_baseline() == 0.42
+    assert PersonalProfile(valid=False, brow_dist_norm_awake=0.42).brow_baseline() is None
+    assert PersonalProfile(valid=True).brow_baseline() is None
 
 
 def test_collector_insufficient_samples_is_invalid() -> None:
