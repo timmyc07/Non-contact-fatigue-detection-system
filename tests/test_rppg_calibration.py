@@ -109,3 +109,47 @@ def test_version_store_save_and_switch(tmp_path: Path):
 
     manifest = json.loads((tmp_path / "rppg_calibration" / "manifest.json").read_text(encoding="utf-8"))
     assert len(manifest["versions"]) >= 2
+
+
+# ── P6：rppg_params 向後相容擴充 ───────────────────────────────────────────
+
+def test_calibration_params_default_rppg_params_is_none():
+    assert CalibrationParams().rppg_params is None
+
+
+def test_version_without_rppg_params_serializes_bit_identical():
+    # 不帶 rppg_params 的版本，序列化的 params 只有 bpm_offset/bpm_scale（無 null 噪音）。
+    v = CalibrationVersion(id="v1", name="n", model="bias",
+                           params=CalibrationParams(bpm_offset=2.0, bpm_scale=1.0))
+    params = v.to_dict()["params"]
+    assert set(params.keys()) == {"bpm_offset", "bpm_scale"}
+    assert "rppg_params" not in params
+
+
+def test_version_with_rppg_params_round_trip():
+    rp = {"roi_weights": {"forehead": 0.4, "L_cheek": 0.2, "R_cheek": 0.2, "glabella": 0.2},
+          "band": [0.65, 3.7]}
+    v = CalibrationVersion(id="v2", name="learned", model="bias",
+                           params=CalibrationParams(bpm_offset=1.0, rppg_params=rp))
+    restored = CalibrationVersion.from_dict(v.to_dict())
+    assert restored.params.rppg_params == rp
+    assert restored.params.bpm_offset == 1.0
+    # 帶 rppg_params 的版本即使 BPM 修正微小也非 identity
+    assert restored.is_identity is False
+
+
+def test_old_version_dict_without_rppg_params_loads_as_none():
+    # 舊版本檔（無 rppg_params 欄位）載入後 rppg_params 為 None，向後相容。
+    old = {"id": "v0", "name": "old", "model": "bias",
+           "params": {"bpm_offset": 3.0, "bpm_scale": 1.0}}
+    v = CalibrationVersion.from_dict(old)
+    assert v.params.rppg_params is None
+
+
+def test_save_new_version_persists_rppg_params(tmp_path: Path):
+    store = CalibrationVersionStore(root=tmp_path / "rppg_calibration")
+    rp = {"roi_weights": {"forehead": 0.5}}
+    version = store.save_new_version("learned", offset_bpm=1.5, rppg_params=rp)
+    reloaded = CalibrationVersionStore(root=tmp_path / "rppg_calibration").get_active_version()
+    assert reloaded.id == version.id
+    assert reloaded.params.rppg_params == rp

@@ -7,6 +7,7 @@ import pytest
 from rppg.adaptive_calibration import (
     CONF_LOW,
     OnlineBpmCalibrator,
+    RppgParamAbEvaluator,
 )
 from rppg.calibration import apply_bpm_calibration
 
@@ -175,3 +176,69 @@ def test_live_version_applies_current_offset():
     # rPPG 原始 70 + offset(~10) 應被校正到接近 80
     assert apply_bpm_calibration(70.0, version) == pytest.approx(70.0 + cal.offset)
     assert apply_bpm_calibration(70.0, version) == pytest.approx(80.0, abs=1.0)
+
+
+# ── P6：rPPG 解析參數有護欄 A/B 評估 ───────────────────────────────────────
+
+def _feed_ab(ev, *, belt, current, candidate, n, t0=0.0):
+    for i in range(n):
+        ev.observe(t0 + i, belt, current, candidate)
+
+
+def test_ab_insufficient_pairs_is_pending():
+    ev = RppgParamAbEvaluator(min_pairs=6, confirm_windows=2)
+    _feed_ab(ev, belt=80, current=70, candidate=79, n=3)
+    v = ev.evaluate()
+    assert v.verdict == "pending"
+    assert v.pairs_used == 3
+
+
+def test_ab_candidate_clearly_better_adopts_after_confirm():
+    # 候選殘差 1（|80-79|）明顯小於現行殘差 10（|80-70|）→ 連續 confirm 次後 adopt。
+    ev = RppgParamAbEvaluator(min_pairs=6, improve_margin_bpm=1.5, confirm_windows=3)
+    _feed_ab(ev, belt=80, current=70, candidate=79, n=10)
+    verdicts = [ev.evaluate().verdict for _ in range(3)]
+    assert verdicts[-1] == "adopt"
+    assert verdicts[0] == "pending"   # 第一次評估尚未達 confirm
+
+
+def test_ab_candidate_clearly_worse_rolls_back():
+    # 候選殘差 10 明顯大於現行殘差 1 → 連續 confirm 次後 rollback。
+    ev = RppgParamAbEvaluator(min_pairs=6, worsen_margin_bpm=2.0, confirm_windows=2)
+    _feed_ab(ev, belt=80, current=79, candidate=70, n=10)
+    assert ev.evaluate().verdict == "pending"
+    assert ev.evaluate().verdict == "rollback"
+
+
+def test_ab_marginal_difference_stays_pending():
+    # 差距小於 improve_margin → 永遠 pending（不採用也不回退）。
+    ev = RppgParamAbEvaluator(min_pairs=6, improve_margin_bpm=1.5,
+                              worsen_margin_bpm=2.0, confirm_windows=2)
+    _feed_ab(ev, belt=80, current=78.5, candidate=79.0, n=10)
+    for _ in range(5):
+        assert ev.evaluate().verdict == "pending"
+
+
+def test_ab_rejects_outlier_pairs():
+    # 殘差超過 max_pair_bpm_gap 的壞樣本不計入。
+    ev = RppgParamAbEvaluator(min_pairs=3, max_pair_bpm_gap=40.0)
+    ev.observe(0.0, 80, 10, 79)    # |80-10|=70 > 40 → 拒
+    ev.observe(1.0, 80, 200, 79)   # |80-200|=120 > 40 → 拒
+    assert ev.evaluate().pairs_used == 0
+
+
+def test_ab_window_trims_old_pairs():
+    ev = RppgParamAbEvaluator(window_sec=10.0, min_pairs=1)
+    _feed_ab(ev, belt=80, current=70, candidate=79, n=5, t0=0.0)
+    ev.observe(100.0, 80, 70, 79)   # 遠未來 → 舊配對被修剪
+    assert ev.evaluate().pairs_used == 1
+
+
+def test_ab_reset_clears_state():
+    ev = RppgParamAbEvaluator(min_pairs=6, confirm_windows=2)
+    _feed_ab(ev, belt=80, current=70, candidate=79, n=10)
+    ev.evaluate(); ev.evaluate()
+    ev.reset()
+    v = ev.evaluate()
+    assert v.pairs_used == 0
+    assert v.improve_streak == 0 and v.worsen_streak == 0

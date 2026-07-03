@@ -253,10 +253,121 @@ def _clamp_abs(value: float, limit: float) -> float:
     return value
 
 
+# ── P6：rPPG 解析參數有護欄 A/B 評估（純運算）──────────────────────────────
+
+@dataclass(frozen=True)
+class RppgParamAbVerdict:
+    """A/B 評估快照。verdict ∈ {"pending", "adopt", "rollback"}。"""
+
+    verdict: str = "pending"
+    current_residual_bpm: float | None = None
+    candidate_residual_bpm: float | None = None
+    pairs_used: int = 0
+    improve_streak: int = 0
+    worsen_streak: int = 0
+
+
+class RppgParamAbEvaluator:
+    """有護欄的 rPPG 解析參數 A/B 評估。
+
+    對**同一段訊號**分別以「現行參數」與「候選參數」重算的 BPM，各自對心跳帶真值算
+    中位殘差。候選需在心跳帶上**明確更好**（殘差低於現行達 improve_margin）且連續
+    confirm_windows 次評估才判 ``adopt``；**明確更差**（高於現行達 worsen_margin）連續
+    confirm_windows 次則 ``rollback``；否則 ``pending``（維持現行）。
+
+    這是使用者要的護欄核心「只採用被真值證明更好的參數、變差則回退」的決策層。
+    本類別**不**產生候選參數內容、**不**套用參數、**不**觸碰 rPPG 引擎——那些屬 live
+    自適應協調層，依專案護欄需在離線驗證管線落地後才啟用（見 CLAUDE.md P6）。
+
+    純運算：無 Qt / 無執行緒 / 無 I/O；時間戳由呼叫端傳入。
+    """
+
+    def __init__(
+        self,
+        *,
+        window_sec: float = 45.0,
+        min_pairs: int = 6,
+        improve_margin_bpm: float = 1.5,
+        worsen_margin_bpm: float = 2.0,
+        confirm_windows: int = 3,
+        max_pair_bpm_gap: float = 40.0,
+    ) -> None:
+        self.window_sec = float(window_sec)
+        self.min_pairs = int(min_pairs)
+        self.improve_margin_bpm = float(improve_margin_bpm)
+        self.worsen_margin_bpm = float(worsen_margin_bpm)
+        self.confirm_windows = int(confirm_windows)
+        self.max_pair_bpm_gap = float(max_pair_bpm_gap)
+        # (ts, |belt−current|, |belt−candidate|)
+        self._pairs: deque[tuple[float, float, float]] = deque()
+        self._improve_streak = 0
+        self._worsen_streak = 0
+
+    def observe(
+        self,
+        t_now: float,
+        belt_bpm: float,
+        rppg_current_bpm: float,
+        rppg_candidate_bpm: float,
+    ) -> None:
+        """餵入一筆三方配對（心跳帶真值、現行參數 BPM、候選參數 BPM）。"""
+        if belt_bpm <= 0 or rppg_current_bpm <= 0 or rppg_candidate_bpm <= 0:
+            return
+        res_cur = abs(float(belt_bpm) - float(rppg_current_bpm))
+        res_cand = abs(float(belt_bpm) - float(rppg_candidate_bpm))
+        # 離群保護：任一殘差超過門檻視為壞樣本，不計入
+        if res_cur > self.max_pair_bpm_gap or res_cand > self.max_pair_bpm_gap:
+            return
+        self._pairs.append((float(t_now), res_cur, res_cand))
+        cutoff = float(t_now) - self.window_sec
+        while self._pairs and self._pairs[0][0] < cutoff:
+            self._pairs.popleft()
+
+    def evaluate(self) -> RppgParamAbVerdict:
+        """依目前視窗內的配對計算一次 A/B 判決並更新遲滯計數。"""
+        n = len(self._pairs)
+        if n < self.min_pairs:
+            return RppgParamAbVerdict(
+                verdict="pending", pairs_used=n,
+                improve_streak=self._improve_streak, worsen_streak=self._worsen_streak,
+            )
+        cur = statistics.median(res_cur for _, res_cur, _ in self._pairs)
+        cand = statistics.median(res_cand for _, _, res_cand in self._pairs)
+        if cand + self.improve_margin_bpm <= cur:
+            self._improve_streak += 1
+            self._worsen_streak = 0
+        elif cand >= cur + self.worsen_margin_bpm:
+            self._worsen_streak += 1
+            self._improve_streak = 0
+        else:
+            self._improve_streak = 0
+            self._worsen_streak = 0
+        verdict = "pending"
+        if self._improve_streak >= self.confirm_windows:
+            verdict = "adopt"
+        elif self._worsen_streak >= self.confirm_windows:
+            verdict = "rollback"
+        return RppgParamAbVerdict(
+            verdict=verdict,
+            current_residual_bpm=float(cur),
+            candidate_residual_bpm=float(cand),
+            pairs_used=n,
+            improve_streak=self._improve_streak,
+            worsen_streak=self._worsen_streak,
+        )
+
+    def reset(self) -> None:
+        self._pairs.clear()
+        self._improve_streak = 0
+        self._worsen_streak = 0
+
+
 __all__ = [
     "ADAPTIVE_QUALITY_GATES",
     "AdaptiveCalibState",
     "OnlineBpmCalibrator",
+    "RppgParamAbEvaluator",
+    "RppgParamAbVerdict",
     "CONF_HIGH",
     "CONF_MED",
     "CONF_LOW",

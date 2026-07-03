@@ -47,6 +47,11 @@ CALIBRATION_SESSION_QUALITY_GATES = {
 class CalibrationParams:
     bpm_offset: float = 0.0
     bpm_scale: float = 1.0
+    # P6：心跳帶有護欄自適應學到的 rPPG 解析參數（ROI 權重 / 頻帶 / PSD 峰選）。
+    # None（預設，且所有既有版本檔）→ rPPG 走 config/mediapipe_tuning.json，逐位元不變。
+    # 僅在離線驗證通過並主動採用的版本才非 None。結構如：
+    #   {"roi_weights": {"forehead": 0.4, ...}, "band": [0.65, 3.7]}
+    rppg_params: dict[str, Any] | None = None
 
 
 @dataclass
@@ -62,11 +67,18 @@ class CalibrationVersion:
     metrics: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        # 條件式序列化 params：rppg_params 為 None 時不寫出，維持既有版本檔逐位元不變。
+        params_dict: dict[str, Any] = {
+            "bpm_offset": self.params.bpm_offset,
+            "bpm_scale": self.params.bpm_scale,
+        }
+        if self.params.rppg_params is not None:
+            params_dict["rppg_params"] = self.params.rppg_params
         data = {
             "id": self.id,
             "name": self.name,
             "model": self.model,
-            "params": asdict(self.params),
+            "params": params_dict,
             "created_at": self.created_at,
             "builtin": self.builtin,
             "note": self.note,
@@ -80,9 +92,11 @@ class CalibrationVersion:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "CalibrationVersion":
         params_raw = data.get("params") or {}
+        rppg_params_raw = params_raw.get("rppg_params")
         params = CalibrationParams(
             bpm_offset=float(params_raw.get("bpm_offset", 0.0) or 0.0),
             bpm_scale=float(params_raw.get("bpm_scale", 1.0) or 1.0),
+            rppg_params=dict(rppg_params_raw) if isinstance(rppg_params_raw, dict) else None,
         )
         return cls(
             id=str(data.get("id", "")),
@@ -98,8 +112,11 @@ class CalibrationVersion:
 
     @property
     def is_identity(self) -> bool:
+        # 帶 rppg_params 的版本即使 BPM 修正為零也非 identity（它改變解析參數）。
         return self.model == "identity" or (
-            abs(self.params.bpm_offset) < 1e-9 and abs(self.params.bpm_scale - 1.0) < 1e-9
+            abs(self.params.bpm_offset) < 1e-9
+            and abs(self.params.bpm_scale - 1.0) < 1e-9
+            and self.params.rppg_params is None
         )
 
 
@@ -406,6 +423,7 @@ class CalibrationVersionStore:
         session: Mapping[str, Any] | None = None,
         metrics: Mapping[str, Any] | None = None,
         scale: float = 1.0,
+        rppg_params: Mapping[str, Any] | None = None,
     ) -> CalibrationVersion:
         self.reload()
         version_id = _new_version_id()
@@ -414,7 +432,8 @@ class CalibrationVersionStore:
             id=version_id,
             name=name.strip() or version_id,
             model="bias",
-            params=CalibrationParams(bpm_offset=float(offset_bpm), bpm_scale=float(scale)),
+            params=CalibrationParams(bpm_offset=float(offset_bpm), bpm_scale=float(scale),
+                                     rppg_params=dict(rppg_params) if rppg_params else None),
             created_at=created_at,
             builtin=False,
             note=note.strip(),
