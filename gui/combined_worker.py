@@ -48,7 +48,7 @@ from .fatigue_worker import draw_fatigue_annotations
 from rppg.rppg_worker import (
     RppgEngine, RppgMetrics,
     draw_rois,
-    RoiGeometryTracker, collect_rppg_roi_sample,
+    RoiGeometryTracker, collect_rppg_roi_sample_with_means,
     ensure_face_model, _MODELS_DIR,
 )
 from rppg.calibration import apply_calibration_to_metrics
@@ -251,12 +251,15 @@ class CombinedWorker(QObject):
                         # ── Step 2: rPPG ROI extraction + engine (draws on top)
                         if rppg_engine is not None:
                             assert roi_tracker is not None
-                            sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
+                            sample, roi_weights, roi_valid_count, per_roi_means = collect_rppg_roi_sample_with_means(
                                 bgr, lm, transform_matrix, roi_tracker, self._tuning
                             )
                             draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
                             if sample is not None:
                                 rppg_engine.push(ts, sample[0], sample[1], sample[2])
+                            # P6b-1 新增：per-ROI 旁路緩衝，不影響上面既有 push() 的輸入/行為。
+                            if per_roi_means:
+                                rppg_engine.push_roi_means(ts, per_roi_means)
                             r_metrics = rppg_engine.compute(
                                 ts,
                                 bgr,

@@ -410,6 +410,67 @@ def collect_rppg_roi_sample(
     return sample, effective_weights, len(rgbs)
 
 
+def collect_rppg_roi_sample_with_means(
+    frame_bgr: np.ndarray,
+    lm: Any,
+    transform_matrix: Any | None,
+    tracker: RoiGeometryTracker,
+    tuning: MediaPipeTuning,
+) -> tuple[Optional[tuple[float, float, float]], dict[str, float], int, dict[str, tuple[float, float, float]]]:
+    """P6b-1 新增：伴生函式（companion），與 collect_rppg_roi_sample() 邏輯完全相同，
+    額外回傳每個 ROI 各自的 (R,G,B) 均值 per_roi_means，供之後「候選 ROI 權重對同段
+    訊號重算 BPM」做 A/B 使用。
+
+    刻意不修改、也不呼叫 collect_rppg_roi_sample()：tracker（RoiGeometryTracker）
+    是每幀狀態機（begin_frame()/update_landmarks()/update_roi_area() 每幀只能推進
+    一次），若兩函式在同一幀各呼叫一次會使 jitter/area-stability 狀態被重複推進、
+    改變既有數值行為。因此本函式獨立複製一份完全相同的運算，呼叫端每幀應二擇一。
+
+    回傳的 sample/effective_weights/len(rgbs) 與 collect_rppg_roi_sample() 在同一輸入
+    下逐位元相同（程式碼與運算順序未變動，only surfaces 額外資訊）。
+    """
+    h, w = frame_bgr.shape[:2]
+    tracker.begin_frame()
+    tracker.update_landmarks(lm, w, h)
+    roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(transform_matrix, lm, w, h)
+    roi_weights = _roi_weights_from_pose(roll_deg, yaw_deg, pitch_deg, lm, w, h, tuning)
+    rgbs: list[tuple[float, float, float]] = []
+    areas: list[float] = []
+    effective_weights: dict[str, float] = {name: 0.0 for name, _ in ROI_SPECS}
+    per_roi_means: dict[str, tuple[float, float, float]] = {}
+    for name, indices in ROI_SPECS:
+        if tracker is not None and name in tracker.last_roi_pts:
+            pts = tracker.last_roi_pts[name]
+        else:
+            pts = roi_points(frame_bgr, lm, indices, name, transform_matrix, tracker, tuning)
+        areas.append(_polygon_area(pts))
+        val = roi_mean_from_points(frame_bgr, pts)
+        obstruction = roi_obstruction_score_from_points(frame_bgr, pts, tuning)
+        weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
+        if weight < tuning.rppg_roi.min_roi_weight:
+            weight = 0.0
+        effective_weights[name] = float(weight)
+        if val is not None:
+            # 記錄每個 ROI 的原始均值，不受當前姿態/遮蔽權重篩選——之後若候選權重
+            # 給予目前零權重的 ROI 非零權重，仍能對同段訊號重算 BPM。
+            per_roi_means[name] = val
+        if val is not None and weight > 0.0:
+            rgbs.append(val)
+    tracker.update_roi_area(areas, float(h * w), tuning)
+    if not rgbs:
+        return None, effective_weights, 0, per_roi_means
+    # Keep the first-version rPPG sampling behavior: valid skin ROIs are
+    # averaged equally. The pose/obstruction weights remain diagnostic only.
+    sample = (
+        sum(x[0] for x in rgbs) / len(rgbs),
+        sum(x[1] for x in rgbs) / len(rgbs),
+        sum(x[2] for x in rgbs) / len(rgbs),
+    )
+    norm_total = sum(effective_weights.values()) or 1.0
+    effective_weights = {k: float(v / norm_total) if v > 0.0 else 0.0 for k, v in effective_weights.items()}
+    return sample, effective_weights, len(rgbs), per_roi_means
+
+
 def _pose_from_matrix(
     transform_matrix: Any | None,
     lm: Any,
@@ -877,6 +938,17 @@ class RppgEngine:
         self._g: deque[float] = deque(maxlen=100_000)
         self._b: deque[float] = deque(maxlen=100_000)
         self._t: deque[float] = deque(maxlen=100_000)
+        # P6b-1 新增：per-ROI 均值緩衝（旁路，不參與既有 BPM 計算），供之後候選 ROI
+        # 權重對同段訊號重算 BPM 做 A/B。maxlen 與既有混合緩衝一致。
+        self._roi_buffers: dict[str, dict[str, deque[float]]] = {
+            name: {
+                "t": deque(maxlen=100_000),
+                "r": deque(maxlen=100_000),
+                "g": deque(maxlen=100_000),
+                "b": deque(maxlen=100_000),
+            }
+            for name, _ in ROI_SPECS
+        }
         self._last_fs: float = target_fps
         self._prev_face_center: Optional[tuple[float, float]] = None
         self._prev_face_center_t: Optional[float] = None
@@ -894,6 +966,10 @@ class RppgEngine:
     def reset(self) -> None:
         self._r.clear(); self._g.clear()
         self._b.clear(); self._t.clear()
+        # P6b-1 新增：一併清空 per-ROI 旁路緩衝，避免殘留跨 session/跨錄影的舊資料。
+        for buf in self._roi_buffers.values():
+            buf["t"].clear(); buf["r"].clear()
+            buf["g"].clear(); buf["b"].clear()
         self._prev_face_center = None
         self._prev_face_center_t = None
         self._face_motion_speed = 0.0
@@ -910,6 +986,52 @@ class RppgEngine:
     def push(self, t: float, r: float, g: float, b: float) -> None:
         self._r.append(r); self._g.append(g)
         self._b.append(b); self._t.append(t)
+
+    def push_roi_means(self, t: float, roi_means: dict[str, tuple[float, float, float]]) -> None:
+        """P6b-1 新增：旁路緩衝每個 ROI 的 (R,G,B) 均值，供之後候選 ROI 權重 A/B 重算
+        BPM 使用。純新增方法，不讀取也不修改 push()/_r/_g/_b/_t 既有混合緩衝，不影響
+        既有 BPM 計算輸入。未知 ROI 名稱靜默略過（維持向後相容，不因新 ROI 而報錯）。
+
+        注意：per_roi_means 不受混合權重篩選（零權重 ROI 只要遮罩成功就會入緩衝，
+        屬刻意設計，供未來零權重 ROI 也能參與重算），因此 per-ROI 緩衝樣本數可能多於
+        混合緩衝，兩者長度不保證一致。執行緒安全假設：本方法與 get_roi_window 目前
+        僅供同一 worker 執行緒呼叫；若未來要跨執行緒讀取，須先補鎖或改為快照複製。
+        """
+        for name, rgb in roi_means.items():
+            buf = self._roi_buffers.get(name)
+            if buf is None:
+                continue
+            buf["t"].append(t)
+            buf["r"].append(rgb[0])
+            buf["g"].append(rgb[1])
+            buf["b"].append(rgb[2])
+
+    def get_roi_window(
+        self,
+        name: str,
+        window_sec: float,
+        t_now: float | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """P6b-1 新增：唯讀回傳指定 ROI 最近 window_sec 秒內的 (t, r, g, b) 序列快照，
+        供之後離線重算使用。不修改任何緩衝狀態。ROI 名稱不存在或緩衝為空時回傳四個
+        空陣列。
+
+        注意：t_now=None 時以「該 ROI 緩衝最後一筆時間戳」為基準；不同 ROI 的最後
+        更新時間可能因遮蔽而不同步，故跨多個 ROI 做 A/B 比較時，呼叫端務必顯式傳入
+        同一個全域 t_now，確保各 ROI 取到相同的時間窗。
+        """
+        buf = self._roi_buffers.get(name)
+        if buf is None or not buf["t"]:
+            empty = np.array([], dtype=np.float64)
+            return empty, empty, empty, empty
+        t_arr = np.array(buf["t"], dtype=np.float64)
+        ref_t = float(t_now) if t_now is not None else float(t_arr[-1])
+        cutoff = ref_t - window_sec
+        mask = t_arr >= cutoff
+        r_arr = np.array(buf["r"], dtype=np.float64)[mask]
+        g_arr = np.array(buf["g"], dtype=np.float64)[mask]
+        b_arr = np.array(buf["b"], dtype=np.float64)[mask]
+        return t_arr[mask], r_arr, g_arr, b_arr
 
     def _trim(self, t_now: float) -> None:
         keep_sec = max(self.buffer_sec, self.hrv_window_sec)
@@ -1352,12 +1474,15 @@ class RppgWorker(QObject):
                         roll_deg, yaw_deg, pitch_deg, _scale = _pose_from_matrix(
                             transform_matrix, lm, bgr.shape[1], bgr.shape[0]
                         )
-                        sample, roi_weights, roi_valid_count = collect_rppg_roi_sample(
+                        sample, roi_weights, roi_valid_count, per_roi_means = collect_rppg_roi_sample_with_means(
                             bgr, lm, transform_matrix, roi_tracker, self._tuning
                         )
                         draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
                         if sample is not None:
                             engine.push(ts, sample[0], sample[1], sample[2])
+                        # P6b-1 新增：per-ROI 旁路緩衝，不影響上面既有 push() 的輸入/行為。
+                        if per_roi_means:
+                            engine.push_roi_means(ts, per_roi_means)
 
                         metrics = engine.compute(
                             ts,
