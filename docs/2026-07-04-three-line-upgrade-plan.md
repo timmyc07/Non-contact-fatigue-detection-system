@@ -136,3 +136,48 @@ C:\Users\USER\.claude\plans\frolicking-growing-waterfall.md，先整份讀完再
 - 計畫檔在 `~/.claude/plans/`，不會被專案自動載入——務必手動 Read 一次。
 - 三個探索與四個 QA 決策的結論都已濃縮進本計畫檔上半部「關鍵事實基礎」，不需重跑探索。
 - 若要把計畫搬進 repo 版控（plan 檔不在 repo 內），可另存一份到 `docs/`，但別覆蓋既有檔。
+
+---
+
+## 進度更新 — session 2（2026-07-04，大量完成）
+
+**已完成並推送 main（依序 commit）：**
+- 階段 1 GUI 深色監控風重設計全部：`2d1ca80`(視覺系統) / `9b4877c`(心跳帶專屬區塊含HRV) / `1e17b30`(overlay可讀性) / `1286acb`(overlay中文改Pillow渲染修方塊)。
+- 階段 2a UTA 準確度基準：`1620412`，`docs/2026-07-04-uta-accuracy-baseline.md`。根因＝尺度塌陷（門檻映射壓死分數）。
+- 階段 2b rPPG 改善計畫：`a6824f0`，`docs/rppg-improvement-plan.md`。
+- 階段 3 持續閉眼強通道（重量級完整流程）：`43a60f7`，`docs/2026-07-04-eye-closure-channel.md`。
+  修好「閉眼10秒僅輕度」——加 additive 強通道，閉眼10s→高度、3s→中度、眨眼/無閉眼 bit-identical。
+  三重審查全過、golden PASS 免重建、424 passed。
+
+**關鍵方法論教訓（已寫進 memory fatigue-accuracy-perclos）：**
+- UTA「整段平均」與「即時瞬時體驗」是兩回事，別用前者評估後者（平均會稀釋間歇疲勞）。
+- UTA drowsy 無「頭端正持續閉眼」場景 → closure 通道在 UTA/golden 零觸發、指標零變化 →
+  **閉眼類即時修復 UTA 測不到**，只能靠合成驗算 + 實機驗證。
+- additive 鐵律模式：新通道未觸發時恰 +0.0 逐位元回退 → golden 零漂移免重建、其他情境零污染。
+
+**待使用者做（尚未完成的唯一驗證）：實機驗證**
+- 戴機、頭端正、持續閉眼 ~10 秒 → 應顯示「高度疲勞」（3秒左右進中度）。同時目視 GUI 深色風 +
+  心跳帶區塊（戴心跳帶勾校準才有數值，HRV 要暖機幾十秒）+ overlay 中文是否正常。
+
+### 下個 session 接續 prompt（實機驗證後貼這段）
+```
+接續「非接觸式疲勞偵測系統」升級。先讀 docs/2026-07-04-three-line-upgrade-plan.md 的
+「進度更新 session 2」段掌握現況，再讀 docs/2026-07-04-eye-closure-channel.md 與
+docs/2026-07-04-uta-accuracy-baseline.md。memory fatigue-accuracy-perclos 有方法論教訓。
+
+已完成：GUI 深色重設計全部、心跳帶區塊含HRV、overlay中文修復、UTA基準、rPPG計畫、
+持續閉眼強通道（閉眼10s→高度，已推 main 43a60f7）。UTA 資料集在 C:\Users\USER\Downloads\UTA_test。
+
+我實機驗證的結果是：【在此填我戴機閉眼10秒/GUI觀感/overlay中文的實測結果】
+
+依結果選下一步：
+(a) closure 通道太靈敏/不夠力 → 微調 onset(1.0s)/full(8.0s)/權重(engine0.35/beh0.30)，
+    只改 gui/fatigue_scorer.py 常數，走重量級流程（三審+golden+數值聲明）。
+(b) 修頭低 10-15° pitch 死區（閉眼偵測另一盲區，見 eye-closure-channel.md「既有邊界」與
+    fatigue_engine.py pitch gate :1376-1409 / microsleep :1121）。
+(c) GUI 觀感要微調（純視覺、快又安全）。
+(d) 回頭做 rPPG 半頻/諧波抑制（docs/rppg-improvement-plan.md，重量級）或資料集擴充。
+
+紅線：碰 rppg/、fatigue_engine、fatigue_scorer 數值行為＝重量級（完整pytest+golden+三審+
+數值聲明+先問我）。派工守 ~/.claude/rules/（指揮官不下場、驗證不自驗、同任務最多2輪）。
+```
