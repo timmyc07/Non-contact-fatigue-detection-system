@@ -1,6 +1,7 @@
 mediapipe>=0.10.14
 opencv-python>=4.8.0
 numpy>=1.24.0
+Pillow>=10.0.0  # 疲勞 overlay 中文文字渲染（cv2 內建字型無 CJK glyph）
 scipy>=1.11.0
 PySide6>=6.6.0
 pygrabber>=0.2; sys_platform == "win32"

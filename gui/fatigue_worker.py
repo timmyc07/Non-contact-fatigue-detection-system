@@ -10,6 +10,8 @@ Uses the same face_landmarker.task model as RppgWorker (shared download).
 
 from __future__ import annotations
 
+import functools
+import os
 import queue
 import time
 from typing import Optional
@@ -17,6 +19,7 @@ from typing import Optional
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
+from PIL import Image as _PILImage, ImageDraw as _PILImageDraw, ImageFont as _PILImageFont
 
 import cv2
 import mediapipe as mp
@@ -176,8 +179,67 @@ def _draw_head_pose_axes(
                         tipLength=0.25, line_type=cv2.LINE_AA)
 
 
+# ── CJK-capable text rendering (Pillow) ──────────────────────────────────────
+#
+# cv2.putText's built-in Hershey fonts have no CJK glyphs — Chinese labels
+# (鼻動/皺眉/口/哈欠/DROWSY 狀態文字等) render as "?" boxes. All *text* now
+# renders through Pillow instead; every non-text cv2 drawing primitive
+# (lines/circles/rectangles/arrows/PERCLOS bar) is untouched.
+#
+# Perf: `draw_fatigue_annotations` is called once per frame on the hot path
+# with ~15 text draws. Doing a numpy<->PIL round trip per text call would be
+# far too slow, so callers *queue* text draws via `_put_outlined_text` (now a
+# queue-append, not an immediate draw) and the frame is flushed to PIL and
+# back only at a small, fixed number of checkpoints per frame — see the two
+# `_flush_text_queue` call sites in `draw_fatigue_annotations`.
+
+_CV2_SCALE_TO_PX = 34   # heuristic px-per-cv2-font-scale-unit, tuned to roughly
+                        # match the visual size of the previous Hershey text.
+
+# Windows (Traditional-Chinese-friendly) → common Linux CJK font paths, in
+# priority order. First existing path wins; if none exist we fall back to
+# PIL's built-in default font (readable for ASCII, CJK glyphs will be boxes —
+# same degraded behaviour as before, never a crash).
+_CJK_FONT_CANDIDATES: tuple[str, ...] = (
+    "C:/Windows/Fonts/msjh.ttc",
+    "C:/Windows/Fonts/msjhbd.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-TC-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _cjk_font_path() -> Optional[str]:
+    """Resolve the first existing CJK font path on this machine (cached once)."""
+    for path in _CJK_FONT_CANDIDATES:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+@functools.lru_cache(maxsize=None)
+def _resolve_cjk_font(size: int):
+    """Return a cached Pillow font object for `size` px (loaded at most once per size)."""
+    path = _cjk_font_path()
+    if path:
+        try:
+            return _PILImageFont.truetype(path, size)
+        except Exception:
+            pass
+    try:
+        return _PILImageFont.load_default(size=size)
+    except TypeError:
+        # Older Pillow without the `size` kwarg on load_default — still usable,
+        # just not scalable; never crashes the overlay.
+        return _PILImageFont.load_default()
+
+
 def _put_outlined_text(
-    img: np.ndarray,
+    text_queue: list,
     text: str,
     org: tuple[int, int],
     font: int,
@@ -187,12 +249,64 @@ def _put_outlined_text(
     outline_thickness: int = 3,
     outline_color: tuple = (0, 0, 0),
 ) -> None:
-    """Draw text with a black outline pass first for contrast on any background.
+    """Queue a text draw for later batched PIL rendering.
 
-    Pure drawing helper — does not touch the text content, only how it renders.
+    Signature-compatible with the old immediate-draw helper (`font` — a cv2
+    font id — and `thickness` are accepted but unused; kept so call sites
+    below did not need to change). Appends to `text_queue`, drawn by
+    `_flush_text_queue`. Does not touch text content — only how/when it renders.
     """
-    cv2.putText(img, text, org, font, scale, outline_color, outline_thickness, cv2.LINE_AA)
-    cv2.putText(img, text, org, font, scale, color, thickness, cv2.LINE_AA)
+    text_queue.append((text, org, scale, color, outline_thickness, outline_color))
+
+
+def _flush_text_queue(out: np.ndarray, text_queue: list) -> np.ndarray:
+    """Render all queued text onto `out` via a single numpy<->PIL round trip.
+
+    BGR (cv2) <-> RGB (PIL) converted once regardless of queue length, so the
+    per-frame cost is a small, fixed number of these (see call sites) rather
+    than one per text label.
+    """
+    if not text_queue:
+        return out
+    rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+    pil_img = _PILImage.fromarray(rgb)
+    draw = _PILImageDraw.Draw(pil_img)
+    for text, org, scale, color_bgr, outline_thickness, outline_color_bgr in text_queue:
+        px = max(8, round(scale * _CV2_SCALE_TO_PX))
+        pil_font = _resolve_cjk_font(px)
+        color_rgb = (int(color_bgr[2]), int(color_bgr[1]), int(color_bgr[0]))
+        outline_rgb = (int(outline_color_bgr[2]), int(outline_color_bgr[1]), int(outline_color_bgr[0]))
+        stroke_w = max(1, outline_thickness // 2)
+        try:
+            draw.text(org, text, font=pil_font, fill=color_rgb,
+                      stroke_width=stroke_w, stroke_fill=outline_rgb, anchor="ls")
+        except (ValueError, TypeError):
+            # Extreme fallback (e.g. bitmap default font without anchor/stroke
+            # support): draw without those kwargs rather than crash the overlay.
+            draw.text(org, text, font=pil_font, fill=color_rgb)
+    text_queue.clear()
+    out_rgb = np.array(pil_img)
+    return cv2.cvtColor(out_rgb, cv2.COLOR_RGB2BGR)
+
+
+def _pil_text_size(text: str, scale: float) -> tuple[int, int]:
+    """Measure text pixel size the same way it will be rendered (PIL).
+
+    Used only to size cv2-drawn background boxes behind text (pose readout /
+    alert badges) — `cv2.getTextSize` uses Hershey font metrics and cannot
+    measure CJK glyph widths, so a box sized from it no longer matches the
+    PIL-rendered text once Chinese labels are involved.
+    """
+    px = max(8, round(scale * _CV2_SCALE_TO_PX))
+    pil_font = _resolve_cjk_font(px)
+    probe = _PILImage.new("RGB", (1, 1))
+    draw = _PILImageDraw.Draw(probe)
+    try:
+        left, top, right, bottom = draw.textbbox((0, 0), text, font=pil_font, anchor="la")
+        return max(1, right - left), max(1, bottom - top)
+    except Exception:
+        # Never let a measurement fallback crash the overlay.
+        return max(1, int(len(text) * px * 0.6)), max(1, px)
 
 
 def draw_fatigue_annotations(
@@ -208,6 +322,9 @@ def draw_fatigue_annotations(
     h, w = out.shape[:2]
     font  = cv2.FONT_HERSHEY_SIMPLEX
     s_col = _STATUS_COLOR.get(metrics.status, (180, 180, 180))
+    # 待畫文字佇列：批次走 PIL（支援中文），只在固定幾個檢查點做 numpy<->PIL
+    # 往返，而非每則文字各做一次（見下方兩處 _flush_text_queue）。
+    text_q: list = []
 
     # ── 1. Face oval ─────────────────────────────────────────────────────────
     oval_pts = np.array([_lm_px(lm, w, h, i) for i in _FACE_OVAL], np.int32)
@@ -221,7 +338,7 @@ def draw_fatigue_annotations(
     cv2.line(out, nose_bridge, nose_tip, nose_col, 1, lineType=cv2.LINE_AA)
     cv2.circle(out, nose_tip, 2, nose_col, -1, lineType=cv2.LINE_AA)
     _put_outlined_text(
-        out,
+        text_q,
         f"鼻動:{metrics.nose_speed:.0f}",
         (nose_tip[0] + 4, nose_tip[1] - 4),
         font, _LM_LABEL_FONT_SCALE, nose_col, _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK,
@@ -241,7 +358,7 @@ def draw_fatigue_annotations(
     cv2.line(out, lb, rb, brow_line_col, 1, lineType=cv2.LINE_AA)
     if metrics.is_frowning:
         mid = ((lb[0] + rb[0]) // 2, (lb[1] + rb[1]) // 2 - 6)
-        _put_outlined_text(out, "皺眉", mid, font, _LM_LABEL_FONT_SCALE, (0, 60, 255),
+        _put_outlined_text(text_q, "皺眉", mid, font, _LM_LABEL_FONT_SCALE, (0, 60, 255),
                             _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
 
     # ── 3. Eye contours (colour-coded) ────────────────────────────────────────
@@ -261,18 +378,18 @@ def draw_fatigue_annotations(
     # EAR label beside each eye
     l_outer = _lm_px(lm, w, h, 263)
     r_outer = _lm_px(lm, w, h, 33)
-    _put_outlined_text(out, f"{metrics.ear_smooth:.2f}",
+    _put_outlined_text(text_q, f"{metrics.ear_smooth:.2f}",
                         (l_outer[0] + 4, l_outer[1] - 4),
                         font, _LM_LABEL_FONT_SCALE, eye_col,
                         _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
-    _put_outlined_text(out, f"{metrics.ear_smooth:.2f}",
+    _put_outlined_text(text_q, f"{metrics.ear_smooth:.2f}",
                         (r_outer[0] - 30, r_outer[1] - 4),
                         font, _LM_LABEL_FONT_SCALE, eye_col,
                         _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
-    _put_outlined_text(out, f"L:{metrics.lid_open_left:.2f}", (l_outer[0] + 4, l_outer[1] + 10),
+    _put_outlined_text(text_q, f"L:{metrics.lid_open_left:.2f}", (l_outer[0] + 4, l_outer[1] + 10),
                         font, _LM_SUBLABEL_FONT_SCALE, (120, 220, 120),
                         _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
-    _put_outlined_text(out, f"R:{metrics.lid_open_right:.2f}", (r_outer[0] - 30, r_outer[1] + 10),
+    _put_outlined_text(text_q, f"R:{metrics.lid_open_right:.2f}", (r_outer[0] - 30, r_outer[1] + 10),
                         font, _LM_SUBLABEL_FONT_SCALE, (120, 220, 120),
                         _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
 
@@ -322,15 +439,19 @@ def draw_fatigue_annotations(
         mouth_col = (0, 50, 255) if metrics.yawn_count > 0 or metrics.mar > 0.55 else (80, 80, 200)
         cv2.polylines(out, [mouth_pts], isClosed=True,
                       color=mouth_col, thickness=1, lineType=cv2.LINE_AA)
-        _put_outlined_text(out, f"口:{metrics.mouth_open_ratio:.2f}",
+        _put_outlined_text(text_q, f"口:{metrics.mouth_open_ratio:.2f}",
                             (mouth_pts[0][0] - 8, mouth_pts[0][1] - 8),
                             font, _LM_LABEL_FONT_SCALE, mouth_col,
                             _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
         if metrics.mar > 0.55:
             mc = _lm_px(lm, w, h, 13)
-            _put_outlined_text(out, "哈欠", (mc[0] - 12, mc[1] - 6),
+            _put_outlined_text(text_q, "哈欠", (mc[0] - 12, mc[1] - 6),
                                 font, _YAWN_LABEL_FONT_SCALE, (0, 50, 255),
                                 _LM_LABEL_THICKNESS + 1, _LM_LABEL_OUTLINE_THICK)
+
+    # 檢查點 1：步驟 1–7 的文字先落版（維持「文字被閃爍疊層蓋暗」的原有視覺
+    # 層次——閃爍疊層在下面步驟 8 用 cv2 直接畫在 `out` 上，時序不變）。
+    out = _flush_text_queue(out, text_q)
 
     # ── 8. Microsleep / drowsy flash overlay ──────────────────────────────────
     if metrics.status in ("MICROSLEEP", "DROWSY", "CRITICAL"):
@@ -353,7 +474,7 @@ def draw_fatigue_annotations(
         f"  PERCLOS:{metrics.perclos*100:.0f}%"
         f"  眨眼:{metrics.blink_rate_pm:.0f}/min"
     )
-    _put_outlined_text(out, hud_txt, (6, h - 8), font, _HUD_FONT_SCALE, s_col,
+    _put_outlined_text(text_q, hud_txt, (6, h - 8), font, _HUD_FONT_SCALE, s_col,
                         _HUD_TEXT_THICKNESS, _HUD_OUTLINE_THICK)
 
     # ── 10. Top-right: head pose angles ───────────────────────────────────────
@@ -362,14 +483,16 @@ def draw_fatigue_annotations(
         f" Y:{metrics.head_yaw:+.0f}"
         f" R:{metrics.head_roll:+.0f}"
     )
-    (pw, ph), _ = cv2.getTextSize(pose_txt, font, _POSE_FONT_SCALE, _POSE_TEXT_THICKNESS)
+    # 用 PIL 量測（而非 cv2.getTextSize，其 Hershey 字型量不出中文寬度），
+    # 讓底板尺寸與實際渲染的文字一致。
+    pw, ph = _pil_text_size(pose_txt, _POSE_FONT_SCALE)
     ox = w - pw - _POSE_BG_PAD - 2
     overlay2 = out.copy()
     cv2.rectangle(overlay2, (ox - _POSE_BG_PAD, 2), (w - 2, ph + _POSE_BG_PAD + 6), (0, 0, 0), -1)
     cv2.addWeighted(overlay2, _POSE_BG_ALPHA, out, 1 - _POSE_BG_ALPHA, 0, out)
     # Pitch colour warning
     p_col = (0, 60, 220) if metrics.head_pitch < -12.0 else (150, 200, 100)
-    _put_outlined_text(out, pose_txt, (ox, ph + _POSE_BG_PAD), font, _POSE_FONT_SCALE, p_col,
+    _put_outlined_text(text_q, pose_txt, (ox, ph + _POSE_BG_PAD), font, _POSE_FONT_SCALE, p_col,
                         _POSE_TEXT_THICKNESS, _POSE_OUTLINE_THICK)
 
     # ── 11. Top-left: alert badges ────────────────────────────────────────────
@@ -391,12 +514,13 @@ def draw_fatigue_annotations(
 
     y_off = 4
     for badge_txt, badge_col in alerts:
-        (bw, bh), _ = cv2.getTextSize(badge_txt, font, _BADGE_FONT_SCALE, _BADGE_TEXT_THICKNESS)
+        # 同上：改用 PIL 量測，中文徽章底板才會貼合實際文字寬高。
+        bw, bh = _pil_text_size(badge_txt, _BADGE_FONT_SCALE)
         overlay3 = out.copy()
         cv2.rectangle(overlay3, (0, y_off),
                       (bw + _BADGE_BG_PAD_X * 2, y_off + bh + _BADGE_BG_PAD_Y * 2), (0, 0, 0), -1)
         cv2.addWeighted(overlay3, _BADGE_BG_ALPHA, out, 1 - _BADGE_BG_ALPHA, 0, out)
-        _put_outlined_text(out, badge_txt, (_BADGE_BG_PAD_X - 5, y_off + bh + _BADGE_BG_PAD_Y),
+        _put_outlined_text(text_q, badge_txt, (_BADGE_BG_PAD_X - 5, y_off + bh + _BADGE_BG_PAD_Y),
                             font, _BADGE_FONT_SCALE, badge_col,
                             _BADGE_TEXT_THICKNESS, _BADGE_OUTLINE_THICK)
         y_off += bh + _BADGE_BG_PAD_Y * 2 + _BADGE_GAP
@@ -414,9 +538,12 @@ def draw_fatigue_annotations(
         cv2.rectangle(out, (0, bar_y0), (bar_w, h - 20), bar_col, -1)
         cv2.rectangle(out, (0, h - 20 - bar_max_h), (bar_w, h - 20),
                       _PERCLOS_BAR_BORDER_COLOR, 1, lineType=cv2.LINE_AA)
-        _put_outlined_text(out, f"{metrics.perclos*100:.0f}%",
+        _put_outlined_text(text_q, f"{metrics.perclos*100:.0f}%",
                             (bar_w + 2, h - 20), font, _PERCLOS_BAR_LABEL_SCALE, bar_col,
                             _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
+
+    # 檢查點 2：步驟 9–12 的剩餘文字一次落版。
+    out = _flush_text_queue(out, text_q)
 
     return out
 
