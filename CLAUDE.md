@@ -109,7 +109,21 @@ ROI 權重覆寫」，涵蓋 production 走 `calibration_loader → rppg_params`
 active 無 `rppg_params`（OFF 路徑常態）時 carried=None、行為與現況一致。**仍存的已知限制**：
 尚無逐 ROI 對心跳帶真值的即時殘差來源，live 呼叫端固定傳空 `per_roi_residual_hint`，
 候選方向退化為「挑目前權重最小者探索」的啟發式（adopt/rollback 仍由心跳帶真值 A/B
-決定，護欄未繞過）；live 迴圈端到端與離線驗證（需心跳帶硬體）仍屬 P6b 待辦。裝置設定走 `config/hr_belt.json`（機器特定、不入版控，`load_hr_belt_config()`
+決定，護欄未繞過）；live 迴圈端到端（需心跳帶硬體）仍屬 P6b 待辦。**P6b-4 離線驗證
+基礎設施已完成（2026-07-04）**：`config/hr_belt.json` 新增 `capture_enabled`（bool，
+缺項/非 bool 回退 False）開關；開啟時 `gui/main_window.py` 的 `_start_belt_calibration`
+透過 `gui/belt_runtime.py` 的 `BeltRuntime.create_truth_capture_writer()` 建立
+`rppg/belt_truth_capture.py` 的 `BeltTruthCaptureWriter`（純 I/O 模組，唯讀觀察既有
+資料流，不動任何數值路徑），把每幀 per-ROI RGB 均值與當下心跳帶 BPM（可能 None）
+對齊寫入 `recordings/belt_truth_capture/*.jsonl`；`RppgWorker`/`CombinedWorker` 皆新增
+`set_belt_truth_capture()` pending-flag 與 `_maybe_capture_belt_truth()`（writer=None
+時 early-return，逐幀路徑逐位元不變，同 `_maybe_emit_candidate_bpm` 的 OFF 早退模式）。
+`scripts/rppg_param_replay.py`（`python -m scripts.rppg_param_replay <capture 檔>
+--candidate-weights '{"forehead":0.5,...}'`）讀 capture 檔，用
+`rppg/adaptive_calibration.py` 的 `recompute_raw_bpm_from_roi_windows()` 對整段錄製做
+滑動視窗，分別以現行/候選 ROI 權重重算 BPM、對心跳帶真值算 MAE，回報哪組權重更接近
+真值——不需心跳帶硬體連線即可離線驗證候選權重，是開 live 自適應迴圈前的驗證工具。
+裝置設定走 `config/hr_belt.json`（機器特定、不入版控，`load_hr_belt_config()`
 容錯載入）；連線中超過 `HR_STALE_AFTER_SEC` 無有效心率由 `hr_is_stale()` 判定並在
 GUI/dashboard 顯示警告；免 GUI 診斷用 `python -m scripts.hr_belt_monitor`。實機 GATT
 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。

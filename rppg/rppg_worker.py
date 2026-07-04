@@ -40,6 +40,7 @@ from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 from gui.frame_queue import get_latest
 from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
 from rppg.adaptive_calibration import recompute_raw_bpm_from_roi_windows
+from rppg.belt_truth_capture import BeltTruthCaptureWriter
 from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rppg
 
 _HAS_MP = True
@@ -1604,6 +1605,9 @@ class RppgWorker(QObject):
         # 初值 0.0 屬刻意：候選剛設定後，只要當前 t_now 大於節奏門檻即立即觸發第一次
         # 重算（提早讓 GUI 拿到 A/B 首筆），非遺漏的初始化。
         self._last_candidate_recompute_t: float = 0.0
+        # P6b-4：belt-truth 同步錄製 writer（None＝停用，離線驗證基礎設施關閉，
+        # 逐幀路徑逐位元不變）。pending-flag 熱設定，同 set_candidate_roi_weights。
+        self._belt_truth_capture: Optional[BeltTruthCaptureWriter] = None
 
     def request_stop(self) -> None:
         self._stop = True
@@ -1627,6 +1631,27 @@ class RppgWorker(QObject):
         worker 讀到舊值最多一個週期，不影響正確性（下一輪會讀到新值）。
         """
         self._candidate_roi_weights = weights
+
+    def set_belt_truth_capture(self, writer: Optional[BeltTruthCaptureWriter]) -> None:
+        """P6b-4：hot-swap belt-truth 同步錄製 writer（None＝停用）。
+
+        GUI 主執行緒呼叫（心跳帶真值校準啟動/停止時）；worker 執行緒於下一幀讀取
+        生效。執行緒安全假設同 ``set_candidate_roi_weights``：單一參照賦值，CPython
+        GIL 下具原子性，讀寫不需額外鎖。
+        """
+        self._belt_truth_capture = writer
+
+    def _maybe_capture_belt_truth(
+        self, ts: float, per_roi_means: dict[str, tuple[float, float, float]]
+    ) -> None:
+        """P6b-4：OFF（``self._belt_truth_capture is None``，預設值）時立即返回，
+        不做任何額外運算／I/O，確保逐幀路徑與現況逐位元不變。ON 時把本幀 per-ROI
+        均值旁路寫入 capture 檔（唯讀觀察，見 rppg/belt_truth_capture.py）。
+        """
+        writer = self._belt_truth_capture
+        if writer is None:
+            return
+        writer.record(ts, per_roi_means)
 
     def _maybe_emit_candidate_bpm(
         self,
@@ -1779,6 +1804,8 @@ class RppgWorker(QObject):
                         # P6b-1 新增：per-ROI 旁路緩衝，不影響上面既有 push() 的輸入/行為。
                         if per_roi_means:
                             engine.push_roi_means(ts, per_roi_means)
+                            # P6b-4：OFF（無 writer）時 early-return，不影響既有流程。
+                            self._maybe_capture_belt_truth(ts, per_roi_means)
                         # P6b-3b：OFF（無候選）時 early-return，不影響本行以下既有流程。
                         self._maybe_emit_candidate_bpm(engine, rppg_tuning, ts)
 

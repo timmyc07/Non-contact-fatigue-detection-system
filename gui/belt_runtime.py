@@ -8,9 +8,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import Optional
 
+from rppg.belt_truth_capture import BeltTruthCaptureWriter, default_capture_path
 from rppg.calibration_watch import WatchHrHub
-from rppg.hr_belt_ble import HrBeltBleClient, HrBeltConfig, HrBeltStatus
+from rppg.hr_belt_ble import HrBeltBleClient, HrBeltConfig, HrBeltStatus, hr_is_stale
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +63,26 @@ class BeltRuntime:
         if self._belt is None:
             return None
         return self._belt.status()
+
+    def create_truth_capture_writer(
+        self, path: str | Path | None = None
+    ) -> BeltTruthCaptureWriter:
+        """建立 belt-truth 同步錄製 writer（P6b-4 離線驗證基礎設施）。
+
+        ``belt_bpm_provider`` 讀本 runtime 目前的即時心跳帶狀態：只在已連線、
+        BPM > 0、且資料未停滯（見 ``hr_is_stale``）時回傳 BPM，否則回傳 ``None``
+        （由 :class:`BeltTruthCaptureWriter` 記為該筆的 ``belt_bpm: null``，不中斷
+        錄製）。呼叫端（``gui/main_window.py``）負責在心跳帶真值校準啟動時建立、
+        停止時 ``close()``。
+        """
+        target = Path(path) if path is not None else default_capture_path()
+
+        def _provider() -> Optional[float]:
+            st = self.belt_status()
+            if st is None or st.state != "connected" or st.bpm <= 0:
+                return None
+            if hr_is_stale(st):
+                return None
+            return float(st.bpm)
+
+        return BeltTruthCaptureWriter(target, belt_bpm_provider=_provider)

@@ -82,6 +82,12 @@ class HrBeltConfig:
     # OnlineBpmCalibrator 收斂且殘差仍偏大時，才會嘗試產生候選 ROI 權重並以
     # 心跳帶真值 A/B（見 RppgParamCoordinator）。關閉時整條協調層完全不動作。
     rppg_param_tuning_enabled: bool = False
+    # P6b-4：belt-truth 同步錄製開關（預設 False＝關閉）。開啟後，心跳帶真值校準
+    # 啟動期間會把每幀 per-ROI RGB 均值與當下心跳帶 BPM 對齊寫入
+    # recordings/belt_truth_capture/ 下的 JSONL 檔（見 rppg.belt_truth_capture），
+    # 供 scripts/rppg_param_replay.py 離線比較 ROI 權重候選。關閉時 worker 不建立
+    # 任何 writer、逐幀路徑逐位元不變。
+    capture_enabled: bool = False
 
 
 def _validated_float(value: Any, default: float, lo: float, hi: float, label: str) -> float:
@@ -109,7 +115,8 @@ def load_hr_belt_config(path: Path | str | None = None) -> HrBeltConfig:
 
     支援欄位：``name_prefix``（str）、``address``（str，指定 MAC/UUID 時
     跳過名稱比對）、``scan_timeout_sec``（1–60）、``reconnect_delay_sec``（0.5–60）、
-    ``rppg_param_tuning_enabled``（bool，P6b-3b，缺項或非 bool 一律回退 False）。
+    ``rppg_param_tuning_enabled``（bool，P6b-3b，缺項或非 bool 一律回退 False）、
+    ``capture_enabled``（bool，P6b-4 belt-truth 同步錄製，缺項或非 bool 一律回退 False）。
     """
     cfg_path = DEFAULT_CONFIG_PATH if path is None else Path(path)
     defaults = HrBeltConfig()
@@ -147,6 +154,10 @@ def load_hr_belt_config(path: Path | str | None = None) -> HrBeltConfig:
         rppg_param_tuning_enabled=_validated_bool(
             data.get("rppg_param_tuning_enabled", defaults.rppg_param_tuning_enabled),
             defaults.rppg_param_tuning_enabled, "rppg_param_tuning_enabled",
+        ),
+        capture_enabled=_validated_bool(
+            data.get("capture_enabled", defaults.capture_enabled),
+            defaults.capture_enabled, "capture_enabled",
         ),
     )
 

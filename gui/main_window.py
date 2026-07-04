@@ -48,6 +48,7 @@ from gui.belt_runtime import BeltRuntime
 from gui.personal_profile import PersonalBaselineCollector, PersonalProfileStore
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
+from rppg.belt_truth_capture import BeltTruthCaptureWriter
 from rppg.hr_belt_ble import HrBeltConfig, hr_is_stale, load_hr_belt_config
 from rppg.rppg_worker import RppgWorker, ROI_BASE_WEIGHTS, resolve_roi_weights_override
 from rppg.adaptive_calibration import CONF_LOW, OnlineBpmCalibrator, RppgParamCoordinator
@@ -309,6 +310,10 @@ class MainWindow(QMainWindow):
         # 啟動且設定檔開關為 True 時才建立；為 None 時 GUI tick / worker 候選重算
         # 全部 early-return，逐位元回退現況。
         self._belt_cfg: HrBeltConfig | None = None
+        # P6b-4：belt-truth 同步錄製 writer（預設 OFF，見 HrBeltConfig.capture_enabled）。
+        # 只在心跳帶真值校準啟動且設定檔開關為 True 時才建立；為 None 時 worker
+        # 的 _maybe_capture_belt_truth 全部 early-return，逐位元回退現況。
+        self._belt_truth_capture: BeltTruthCaptureWriter | None = None
         self._rppg_param_coordinator: RppgParamCoordinator | None = None
         self._rppg_param_current_weights: dict[str, float] = dict(ROI_BASE_WEIGHTS)
         self._belt_ui_timer = QTimer(self)
@@ -2108,7 +2113,29 @@ class MainWindow(QMainWindow):
             self._append_log("▶ rPPG 參數線上協調層已啟用（P6b-3b，實驗性）")
         else:
             self._rppg_param_coordinator = None
+        # P6b-4：belt-truth 同步錄製（預設 OFF，見 HrBeltConfig.capture_enabled）。
+        # 開啟時建立 writer 並下發給目前運行中的 worker；關閉時維持 None，
+        # worker 的 _maybe_capture_belt_truth 全部 early-return。
+        if belt_cfg.capture_enabled:
+            try:
+                writer = self._belt_runtime.create_truth_capture_writer()
+            except OSError as exc:
+                self._belt_truth_capture = None
+                self._append_log(f"⚠ belt-truth 錄製檔建立失敗，本次停用錄製：{exc}")
+            else:
+                self._belt_truth_capture = writer
+                self._dispatch_belt_truth_capture(writer)
+                self._append_log(f"▶ belt-truth 同步錄製已啟用 → {writer.path}")
+        else:
+            self._belt_truth_capture = None
         self._update_belt_status_label()
+
+    def _dispatch_belt_truth_capture(self, writer: BeltTruthCaptureWriter | None) -> None:
+        """把 belt-truth 錄製 writer（或 None＝停用）下發給目前運行中的 worker。"""
+        if self._combined_worker is not None:
+            self._combined_worker.set_belt_truth_capture(writer)
+        if self._rppg_worker is not None:
+            self._rppg_worker.set_belt_truth_capture(writer)
 
     def _resolve_current_roi_weights(self) -> dict[str, float]:
         """P6b-3b：取得目前生效的 ROI base_weights，作為協調層 A/B 的「現行」基準。
@@ -2133,6 +2160,14 @@ class MainWindow(QMainWindow):
         # 會因 self._rppg_param_coordinator is None 而 no-op——但屬多餘 CPU 成本）。
         self._rppg_param_coordinator = None
         self._clear_candidate_roi_weights()
+        # P6b-4：停用錄製並關檔（None 時 dispatch/close 皆為 no-op，行為與現況相同）。
+        if self._belt_truth_capture is not None:
+            self._dispatch_belt_truth_capture(None)
+            writer = self._belt_truth_capture
+            self._belt_truth_capture = None
+            count = writer.record_count
+            writer.close()
+            self._append_log(f"■ belt-truth 同步錄製已停止（{count} 筆）→ {writer.path}")
         if self._belt_runtime.belt_running:
             self._belt_runtime.stop_belt()
         self._append_log("■ 心跳帶真值校準停止。")
