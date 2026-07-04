@@ -42,6 +42,24 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 PERCLOS_MILD_TH_DEFAULT = 0.015  # below = 0 score
 PERCLOS_HIGH_TH_DEFAULT = 0.07   # above = 1.0 score
 
+# 持續閉眼強通道映射常數（"持續閉眼→高分" 治本設計，2026-07-04）：純函式，engine 與
+# scorer 共用同一語意——eye_closure_sec 低於 CLOSURE_ONSET_SEC 視為眨眼/正常短閉眼不計，
+# 達 CLOSURE_FULL_SEC 起飽和為 1.0。單一權威來源，engine 端 import 自本模組。
+CLOSURE_ONSET_SEC = 1.0   # 秒；低於此不計（防眨眼/正常短閉眼）
+CLOSURE_FULL_SEC  = 8.0   # 秒；此值起 closure_s = 1.0
+
+
+def compute_closure_s(eye_closure_sec: float, onset_sec: float, full_sec: float) -> float:
+    """持續閉眼秒數 → [0,1] 分數：低於 ``onset_sec`` 回 0.0、達 ``full_sec`` 起飽和為 1.0、
+    其間線性。engine ``fatigue_level`` 與 scorer behavior pillar 共用此單一純函式，
+    確保「共用語意」為結構保證而非約定（2026-07-04 三重審查軸 A 建議）。
+
+    additive 鐵律：``eye_closure_sec ≤ onset_sec``（含眨眼/正常短閉眼）時回 ``0.0``，
+    使呼叫端的 ``+ w * closure_s`` 恰為 ``+0.0``、逐位元不影響既有輸出。
+    ``+1e-9`` 防 ``full == onset`` 除零。
+    """
+    return _clamp((eye_closure_sec - onset_sec) / (full_sec - onset_sec + 1e-9))
+
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -86,6 +104,14 @@ class FuserConfig:
     beh_w_squint:     float = 0.05
     beh_w_yawn:       float = 0.05
     beh_w_frown:      float = 0.05
+
+    # ── Persistent eye closure ("持續閉眼強通道", 2026-07-04) ──────────────────
+    # additive 強化項，*不*計入上方 sum=1.0 的加權籃子——PERCLOS 主導權重 0.55 會稀釋
+    # 純閉眼訊號，另開一條獨立通道疊加在 pillar 末端（見 _behavior_sub_score）。
+    # onset/full 常數與 engine 共用同一權威來源（CLOSURE_ONSET_SEC/CLOSURE_FULL_SEC）。
+    closure_onset_sec: float = CLOSURE_ONSET_SEC
+    closure_full_sec:  float = CLOSURE_FULL_SEC
+    beh_w_eye_closure: float = 0.30
 
     # PERCLOS tiers — 對齊系統實際 operating range（UTA-RLDD：清醒~0.006、嗜睡~0.031、
     # 峰值~0.067）。舊值 0.10/0.25 遠高於系統實際產生的 PERCLOS，使唯一有效訊號恆輸出 0。
@@ -158,6 +184,7 @@ class FusedFatigueScore:
     beh_gaze_score:     float = 0.0
     beh_frown_score:    float = 0.0
     beh_yawn_score:     float = 0.0
+    beh_eye_closure_score: float = 0.0
 
     # Timestamp
     timestamp: float = field(default_factory=time.perf_counter)
@@ -257,7 +284,7 @@ class FatigueFuser:
     # ── Behaviour pillar ──────────────────────────────────────────────────────
 
     def _behavior_sub_score(self, f: "FatigueMetrics") -> tuple[float, ...]:
-        """Returns (pillar_score, perclos_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s)."""
+        """Returns (pillar_score, perclos_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s, closure_s)."""
         cfg = self.cfg
 
         # PERCLOS：個人化門檻優先（engine 於 live+profile 時填入哨兵欄位），
@@ -311,6 +338,15 @@ class FatigueFuser:
         # Yawn (late-stage, low weight)
         yawn_s = _clamp(f.yawn_count / (cfg.yawn_full_count + 1e-6))
 
+        # Persistent eye closure ("持續閉眼強通道", 2026-07-04)：additive 強化項。
+        # eye_closure_sec 預設 0.0（無長閉眼）→ closure_s=0 → 本項 = +0.0，逐位元不影響
+        # 既有輸出（additive 鐵律）。純函式映射與 engine fatigue_level 共用同一常數。
+        closure_s = compute_closure_s(
+            float(getattr(f, "eye_closure_sec", 0.0) or 0.0),
+            cfg.closure_onset_sec,
+            cfg.closure_full_sec,
+        )
+
         pillar = _clamp(
             cfg.beh_w_perclos    * perc_s
             + cfg.beh_w_blink_temporal * blink_s
@@ -319,8 +355,9 @@ class FatigueFuser:
             + cfg.beh_w_gaze     * gaze_s
             + cfg.beh_w_frown    * frown_s
             + cfg.beh_w_yawn     * yawn_s
+            + cfg.beh_w_eye_closure * closure_s
         )
-        return pillar, perc_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s
+        return pillar, perc_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s, closure_s
 
     # ── Main update ───────────────────────────────────────────────────────────
 
@@ -352,11 +389,11 @@ class FatigueFuser:
         # ── Behaviour pillar ──────────────────────────────────────────────────
         beh_avail    = False
         beh_sub      = 0.0
-        perc_s = blink_s = squint_s = micro_s = gaze_s = frown_s = yawn_s = 0.0
+        perc_s = blink_s = squint_s = micro_s = gaze_s = frown_s = yawn_s = closure_s = 0.0
 
         if fatigue is not None and fatigue.face_detected and fatigue.calibrated:
             out = self._behavior_sub_score(fatigue)
-            beh_sub, perc_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s = out
+            beh_sub, perc_s, blink_s, squint_s, micro_s, gaze_s, frown_s, yawn_s, closure_s = out
             beh_avail = True
 
         # Also use fatigue.fatigue_level as a cross-check blend
@@ -416,5 +453,6 @@ class FatigueFuser:
             beh_squint_score=squint_s,
             beh_microsleep_score=micro_s, beh_gaze_score=gaze_s,
             beh_frown_score=frown_s,      beh_yawn_score=yawn_s,
+            beh_eye_closure_score=closure_s,
             timestamp=t_now,
         )

@@ -28,7 +28,13 @@ import cv2 as _cv2
 
 from .mediapipe_tuning import CalibrationStore, MediaPipeTuning, load_mediapipe_tuning
 from .personal_profile import PersonalProfile
-from .fatigue_scorer import PERCLOS_HIGH_TH_DEFAULT, PERCLOS_MILD_TH_DEFAULT
+from .fatigue_scorer import (
+    CLOSURE_FULL_SEC,
+    CLOSURE_ONSET_SEC,
+    PERCLOS_HIGH_TH_DEFAULT,
+    PERCLOS_MILD_TH_DEFAULT,
+    compute_closure_s,
+)
 
 _CV2_OK = True
 log = logging.getLogger(__name__)
@@ -322,6 +328,14 @@ class FatigueParams:
     blink_duration_warn_z: float = 1.5
     blink_opening_velocity_warn_z: float = -1.5
 
+    # V2 — Persistent eye closure ("持續閉眼強通道", 2026-07-04)：additive 項，讓頭端正
+    # 持續閉眼獨立於 PERCLOS 主導權重觸發高分。onset/full 常數與 scorer 共用同一權威
+    # 來源（fatigue_scorer.CLOSURE_ONSET_SEC/CLOSURE_FULL_SEC）。不做個人化（頭端正持續
+    # 閉眼跨人差異小，維持寫死常數；personal_profile=None 逐位元回退不受影響）。
+    closure_onset_sec: float = CLOSURE_ONSET_SEC
+    closure_full_sec:  float = CLOSURE_FULL_SEC
+    w_engine_closure:  float = 0.35
+
 
 # ── Output metrics dataclass ─────────────────────────────────────────────────
 
@@ -351,6 +365,9 @@ class FatigueMetrics:
     blink_opening_velocity: float = 0.0
     blink_opening_velocity_z: float = 0.0
     blink_temporal_score: float = 0.0
+    # 持續閉眼強通道（2026-07-04）：當前持續閉眼秒數，睜眼/未閉眼 = 0.0（additive 鐵律
+    # 錨點：scorer 與 engine 皆以此欄位映射 closure_s，預設 0.0 → 逐位元不變）。
+    eye_closure_sec: float = 0.0
 
     # V2 micro-expressions
     is_squinting:      bool  = False
@@ -782,6 +799,7 @@ class EyeCognitiveModule:
         self.ear_smooth     = ear_s
         self.long_closed    = long_closed
         self.fat_dur        = fat_dur
+        self.eye_closure_sec = fat_dur
         self.calib_progress = calib_progress
 
         # Explicit eyelid openness and asymmetry
@@ -1485,6 +1503,12 @@ class FatigueEngine:
         # 微睡（此資料上為反訊號）大幅降權；PERCLOS 以獨立的 composite 飽和點正規化到 0-1，
         # 讓實際 operating range（~0.05）就能貢獻滿分而非被舊尺度壓成 0。
         perclos_norm = _clamp(self.eye.last_perclos / (perclos_full + 1e-6), 0.0, 1.0)
+        # 持續閉眼強通道（2026-07-04）：eye_closure_sec 在 closure_onset_sec 以下不計
+        # （防眨眼/正常短閉眼），達 closure_full_sec 起飽和為 1.0。closure_s=0 時本項
+        # additive = +0.0，對 fatigue_level 逐位元無影響（additive 鐵律）。
+        closure_s = compute_closure_s(
+            self.eye.eye_closure_sec, p.closure_onset_sec, p.closure_full_sec
+        )
         fatigue_level = _clamp(
             perclos_norm * 0.55
             + (1.0 if microsleep_alert else 0.0) * 0.12
@@ -1494,7 +1518,8 @@ class FatigueEngine:
             + (0.08 if self.gaze.gaze_mental_fatigue else 0.0)
             + (0.05 if self.eye.blend_eye_squint > p.blend_squint_gate else 0.0)
             + (0.05 if self.eye.blend_brow_down > p.blend_brow_gate else 0.0)
-            + (self.head.yawn_count / 10.0) * 0.05,
+            + (self.head.yawn_count / 10.0) * 0.05
+            + closure_s * p.w_engine_closure,
             0.0, 1.0,
         )
         quality_score = _clamp(fatigue_q, 0.0, 1.0)
@@ -1520,6 +1545,7 @@ class FatigueEngine:
             blink_opening_velocity = self.eye.blink_opening_velocity,
             blink_opening_velocity_z = self.eye.blink_opening_velocity_z,
             blink_temporal_score = self.eye.blink_temporal_score,
+            eye_closure_sec = self.eye.eye_closure_sec,
             # Micro-expressions
             is_squinting    = self.eye.is_squinting,
             squint_duration = self.eye.squint_duration,

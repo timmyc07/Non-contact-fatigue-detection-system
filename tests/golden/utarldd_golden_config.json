@@ -1,5 +1,5 @@
 {
-  "_comment": "UTA-RLDD golden 回歸基準設定。subset 定義固定影片子集；fields 定義比對欄位與絕對容差。容差依據：2026-07-03 同機連續兩次實跑（subject 04 × label 0/5/10 × 600 幀，jobs=1）31/31 欄位完全一致（bit-identical），pipeline 為確定性，故容差設近零——check 出現任何漂移都代表數值行為改變或執行環境變更（OpenCV/MediaPipe 版本等），兩者都應調查後才決定是否重建 baseline。改 subset 後必須重建 baseline。",
+  "_comment": "UTA-RLDD golden 回歸基準設定。subset 定義固定影片子集；fields 定義比對欄位與絕對容差。容差依據：2026-07-03 同機連續兩次實跑（subject 04 × label 0/5/10 × 600 幀，jobs=1）31/31 欄位完全一致（bit-identical），pipeline 為確定性，故容差設近零——check 出現任何漂移都代表數值行為改變或執行環境變更（OpenCV/MediaPipe 版本等），兩者都應調查後才決定是否重建 baseline。改 subset 後必須重建 baseline。注意：2026-07-04 新增的『持續閉眼強通道』（見 docs/2026-07-04-eye-closure-channel.md）在此 subset（subject 04）零漂移，僅代表該通道未被觸發（無頭端正持續閉眼>1s 片段），不代表通道數值本身已被此基準覆蓋——通道正確性由 tests/test_eye_closure_channel.py 的公式/效果/bit-identical 測試保證。",
   "subset": {
     "subjects": ["04"],
     "labels": ["0", "5", "10"],
