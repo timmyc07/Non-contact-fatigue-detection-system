@@ -2325,7 +2325,10 @@ class MainWindow(QMainWindow):
         self._cam_worker.attach_bgr_queue(self._bgr_queue)
 
         thread = QThread(self)
-        worker = RppgWorker(self._bgr_queue, target_fps=30.0, buffer_sec=12.0)
+        worker = RppgWorker(
+            self._bgr_queue, target_fps=30.0, buffer_sec=12.0,
+            calibration_loader=self._load_rppg_calibration_version,
+        )
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)

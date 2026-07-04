@@ -50,6 +50,7 @@ from rppg.rppg_worker import (
     draw_rois,
     RoiGeometryTracker, collect_rppg_roi_sample_with_means,
     ensure_face_model, _MODELS_DIR,
+    resolve_effective_rppg_tuning,
 )
 from rppg.calibration import apply_calibration_to_metrics
 
@@ -122,9 +123,17 @@ class CombinedWorker(QObject):
         self._fatigue_engine: Optional[FatigueEngine] = None
         self._pending_profile: Optional[PersonalProfile] = None
         self._has_pending_profile = False
+        # P6b-2：ROI base_weights 覆寫（None＝不覆寫，逐位元回退現行 tuning）。
+        self._roi_weights_override: Optional[dict[str, float]] = None
 
     def request_stop(self) -> None:
         self._stop = True
+
+    def set_roi_base_weights_override(self, weights: Optional[dict[str, float]]) -> None:
+        """P6b-2：顯式設定 ROI base_weights 覆寫。僅供 ``run()`` 開始前呼叫；
+        套用只發生於 run() 啟動時的一次性讀取，不支援執行中熱切換
+        （熱切換屬 P6b-3 線上協調層範疇）。"""
+        self._roi_weights_override = weights
 
     def set_personal_profile(self, profile: Optional[PersonalProfile]) -> None:
         """執行緒安全熱換個人基線（仿 request_stop：主執行緒設旗標，run 迴圈輪詢套用）。"""
@@ -185,6 +194,12 @@ class CombinedWorker(QObject):
         ts_ms_prev     = 0
         last_preview_emit = 0.0
         preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
+
+        # P6b-2：啟動時解析一次 ROI base_weights 覆寫（無覆寫時 rppg_tuning 與
+        # self._tuning 為同一物件，逐幀路徑不變）。
+        rppg_tuning = resolve_effective_rppg_tuning(
+            self._tuning, self._roi_weights_override, self._calibration_loader
+        )
 
         parts = []
         if self._enable_rppg:
@@ -252,7 +267,7 @@ class CombinedWorker(QObject):
                         if rppg_engine is not None:
                             assert roi_tracker is not None
                             sample, roi_weights, roi_valid_count, per_roi_means = collect_rppg_roi_sample_with_means(
-                                bgr, lm, transform_matrix, roi_tracker, self._tuning
+                                bgr, lm, transform_matrix, roi_tracker, rppg_tuning
                             )
                             draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
                             if sample is not None:

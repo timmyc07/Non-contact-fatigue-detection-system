@@ -17,13 +17,14 @@ Usage:
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import time
 import urllib.request
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Mapping, Optional, cast
 
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
@@ -65,6 +66,176 @@ ROI_BASE_WEIGHTS = {
     "R_cheek": 0.25,
     "glabella": 0.16,
 }
+
+# P6b-2：套用心跳帶有護欄自適應學到的 ROI base_weights 時，個別 ROI 正規化後
+# 佔比的護欄範圍——避免單一 ROI 因候選權重異常而近乎獨佔（進而使其餘 ROI 在
+# `_roi_weights_from_pose` 的姿態/遮蔽衰減後被 `min_roi_weight` 門檻完全排除），
+# 同時仍允許有意義的重新配重。範圍本身是可討論的設計取捨，
+# 見 docs/2026-07-04-p6b-handoff.md 的 P6b-2 clamp/正規化語意說明。
+ROI_WEIGHT_OVERRIDE_MIN_FRACTION = 0.05
+ROI_WEIGHT_OVERRIDE_MAX_FRACTION = 0.70
+
+
+def resolve_roi_weights_override(
+    rppg_params: Mapping[str, Any] | None,
+) -> Optional[dict[str, float]]:
+    """從 ``CalibrationParams.rppg_params`` 解析 ROI base_weights 覆寫（P6b-2）。
+
+    Schema：``{"roi_weights": {"forehead": float, "L_cheek": float,
+    "R_cheek": float, "glabella": float}}``（鍵名須與 :data:`ROI_SPECS` 完全
+    一致，多一個或少一個都視為不完整集合）。
+
+    回傳值：驗證通過時回傳 clamp 後正規化（總和為 1.0，與 ``RppgRoiTuning
+    .base_weights`` 預設的語意一致）的 4-ROI dict；``rppg_params`` 為 None/空、
+    或任何欄位異常（缺 ROI、含未知 ROI 名稱、非數值、NaN/Inf、非正值）一律
+    回傳 None——**不做部分套用**，任一欄位異常即整組覆寫失效並記 warning，
+    呼叫端應以 None 視為「維持現行 tuning，不覆寫」。本函式純運算、不丟例外。
+    """
+    if not rppg_params:
+        return None
+    if not isinstance(rppg_params, Mapping):
+        log.warning("rppg_params 型別非 dict（%r），忽略 ROI 權重覆寫", type(rppg_params))
+        return None
+    raw = rppg_params.get("roi_weights")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        log.warning("rppg_params.roi_weights 型別非 dict（%r），忽略 ROI 權重覆寫", type(raw))
+        return None
+
+    expected_names = {name for name, _ in ROI_SPECS}
+    given_names = set(raw.keys())
+    if given_names != expected_names:
+        log.warning(
+            "rppg_params.roi_weights ROI 名稱不完整或含未知名稱（預期 %s，收到 %s），"
+            "忽略整組 ROI 權重覆寫",
+            sorted(expected_names), sorted(given_names),
+        )
+        return None
+
+    values: dict[str, float] = {}
+    for name in expected_names:
+        raw_v = raw[name]
+        try:
+            fv = float(raw_v)
+        except (TypeError, ValueError):
+            log.warning(
+                "rppg_params.roi_weights[%s]=%r 非數值，忽略整組 ROI 權重覆寫", name, raw_v
+            )
+            return None
+        if not math.isfinite(fv) or fv <= 0.0:
+            log.warning(
+                "rppg_params.roi_weights[%s]=%r 非正值或非有限值，忽略整組 ROI 權重覆寫",
+                name, fv,
+            )
+            return None
+        values[name] = fv
+
+    total = sum(values.values())
+    if total <= 0.0:
+        log.warning("rppg_params.roi_weights 總和非正，忽略整組 ROI 權重覆寫")
+        return None
+
+    fractions = {k: v / total for k, v in values.items()}
+    return _project_fractions_onto_bounds(
+        fractions, ROI_WEIGHT_OVERRIDE_MIN_FRACTION, ROI_WEIGHT_OVERRIDE_MAX_FRACTION
+    )
+
+
+def _project_fractions_onto_bounds(
+    fractions: dict[str, float], lo: float, hi: float
+) -> dict[str, float]:
+    """把已正規化（總和 1.0）的比例投影到 [lo, hi] 範圍內，投影後總和仍為 1.0。
+
+    單純「clamp 後再除以新總和」在多個值同時被 clamp 到同一邊界時，重新正規化
+    會把已 clamp 的值再度推出邊界（例：一個 ROI 給極端大值、其餘給極小值時，
+    三個下限違規與一個上限違規若同時固定，會使上限違規者吃下全部剩餘 budget
+    而再度超過 hi）。這裡改用疊代水位法：每輪只固定「偏離邊界最遠」的單一
+    元素在其邊界值，其餘元素依剩餘比例分攤剩餘總和（1.0 減去已固定值）後
+    重新檢查，直到沒有元素再違反邊界或只剩一個自由元素。每輪固定恰好一個
+    元素，故最多疊代 n-1 輪（n=元素數）即收斂。僅在 ``lo * n <= 1.0 <= hi * n``
+    時保證收斂到界內；本專案預設邊界（0.05~0.70，n=4）滿足此條件。
+    """
+    fixed: dict[str, float] = {}
+    free = dict(fractions)
+    while free:
+        budget = 1.0 - sum(fixed.values())
+        if len(free) == 1:
+            (only_key,) = free.keys()
+            fixed[only_key] = budget
+            free = {}
+            break
+        free_total = sum(free.values())
+        if free_total <= 0.0:
+            # 數值退化（剩餘元素原始比例都趨近 0）：均分剩餘 budget 作為安全回退。
+            share = budget / len(free)
+            for k in free:
+                fixed[k] = share
+            free = {}
+            break
+        scale = budget / free_total
+        scaled = {k: v * scale for k, v in free.items()}
+        violators = {k: v for k, v in scaled.items() if v < lo or v > hi}
+        if not violators:
+            fixed.update(scaled)
+            free = {}
+            break
+        # 只固定本輪偏離邊界最遠的單一元素，避免一次固定多個造成總和跑掉
+        # （其餘違規元素留到下一輪，以更新後的 budget/free_total 重新評估）。
+        worst_key = max(
+            violators,
+            key=lambda k: (lo - violators[k]) if violators[k] < lo else (violators[k] - hi),
+        )
+        worst_val = scaled[worst_key]
+        fixed[worst_key] = lo if worst_val < lo else hi
+        del free[worst_key]
+    return fixed
+
+
+def apply_roi_weights_override(
+    tuning: MediaPipeTuning,
+    override: Optional[dict[str, float]],
+) -> MediaPipeTuning:
+    """套用（或不套用）ROI base_weights 覆寫，回傳供 rPPG ROI 抽取使用的 tuning。
+
+    ``override`` 為 None 時原樣回傳 ``tuning``（同一物件，不複製、不建立新
+    dataclass 實例），確保呼叫端在無覆寫時的程式路徑與輸出逐位元不變。僅在
+    ``override`` 非 None 時才建立 ``rppg_roi.base_weights`` 已替換的淺拷貝，
+    其餘 tuning 欄位（含 ``face_landmarker``、``quality`` 等）保持原值。
+    """
+    if override is None:
+        return tuning
+    return replace(tuning, rppg_roi=replace(tuning.rppg_roi, base_weights=dict(override)))
+
+
+def resolve_effective_rppg_tuning(
+    tuning: MediaPipeTuning,
+    explicit_override: Optional[dict[str, float]],
+    calibration_loader: Optional[Callable[[], object]],
+) -> MediaPipeTuning:
+    """P6b-2：worker 啟動時解析一次「供 rPPG ROI 抽取使用」的 tuning。
+
+    優先序：``explicit_override`` 非 None 時直接採用（供測試／呼叫端明確指定）；
+    否則若提供 ``calibration_loader``，呼叫一次取得目前 active 校準版本並解析其
+    ``params.rppg_params``。loader 例外、無版本、無 ``rppg_params``、或驗證未通過
+    （見 :func:`resolve_roi_weights_override`）皆視為「無覆寫」。
+
+    只呼叫 ``calibration_loader`` 一次，供 worker ``run()`` 在進入逐幀迴圈前呼叫，
+    不做逐幀重新解析／熱切換（P6b-3 範疇）。無覆寫時回傳原始 ``tuning`` 物件
+    （不複製），確保呼叫端沿用既有 ``self._tuning`` 的程式路徑與輸出逐位元不變。
+    """
+    override = explicit_override
+    if override is None and calibration_loader is not None:
+        try:
+            version = calibration_loader()
+        except Exception:
+            log.warning("rPPG 校準版本載入失敗，略過 ROI 權重覆寫解析", exc_info=True)
+            version = None
+        params = getattr(version, "params", None) if version is not None else None
+        rppg_params = getattr(params, "rppg_params", None) if params is not None else None
+        override = resolve_roi_weights_override(rppg_params)
+    return apply_roi_weights_override(tuning, override)
+
 
 FOREHEAD_IDX = 10
 CHIN_IDX = 152
@@ -1367,6 +1538,7 @@ class RppgWorker(QObject):
         frame_queue: "queue.Queue[tuple[float, np.ndarray]]",
         target_fps: float = 30.0,
         buffer_sec: float = 12.0,
+        calibration_loader: Optional[Callable[[], object]] = None,
     ) -> None:
         super().__init__()
         self._queue = frame_queue
@@ -1374,9 +1546,24 @@ class RppgWorker(QObject):
         self._buffer_sec = buffer_sec
         self._stop = False
         self._tuning = load_mediapipe_tuning()
+        # P6b-2：BPM 校準版本的載入器（沿用 CombinedWorker 既有介面），僅在 run()
+        # 啟動時讀取一次以解析 rppg_params 的 ROI 權重覆寫，不做逐幀 BPM 校準
+        # （RppgWorker 單獨路徑的 BPM 校準仍由呼叫端在 metrics_ready 收到後套用，
+        # 本參數不改變此既有流程）。
+        self._calibration_loader = calibration_loader
+        self._roi_weights_override: Optional[dict[str, float]] = None
 
     def request_stop(self) -> None:
         self._stop = True
+
+    def set_roi_base_weights_override(self, weights: Optional[dict[str, float]]) -> None:
+        """P6b-2：顯式設定 ROI base_weights 覆寫（None＝不覆寫，逐位元回退現行 tuning）。
+
+        僅供 ``run()`` 開始前呼叫；套用只發生於 run() 啟動時的一次性讀取，不支援
+        執行中熱切換（熱切換屬 P6b-3 線上協調層範疇）。若在 run() 已開始後才呼叫，
+        對本次 run() 不生效。
+        """
+        self._roi_weights_override = weights
 
     @Slot()
     def run(self) -> None:
@@ -1429,6 +1616,12 @@ class RppgWorker(QObject):
         last_preview_emit = 0.0
         preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
 
+        # P6b-2：啟動時解析一次 ROI base_weights 覆寫（無覆寫時 rppg_tuning 與
+        # self._tuning 為同一物件，逐幀路徑不變）。
+        rppg_tuning = resolve_effective_rppg_tuning(
+            self._tuning, self._roi_weights_override, self._calibration_loader
+        )
+
         self.status_changed.emit("MediaPipe 初始化完成，等待幀資料…")
 
         with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
@@ -1475,7 +1668,7 @@ class RppgWorker(QObject):
                             transform_matrix, lm, bgr.shape[1], bgr.shape[0]
                         )
                         sample, roi_weights, roi_valid_count, per_roi_means = collect_rppg_roi_sample_with_means(
-                            bgr, lm, transform_matrix, roi_tracker, self._tuning
+                            bgr, lm, transform_matrix, roi_tracker, rppg_tuning
                         )
                         draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
                         if sample is not None:
