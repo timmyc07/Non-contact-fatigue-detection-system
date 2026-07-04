@@ -50,6 +50,7 @@ from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
 from rppg.hr_belt_ble import HrBeltConfig, hr_is_stale, load_hr_belt_config
+from rppg.watch_physio import compute_watch_physio
 from rppg.rppg_worker import RppgWorker, ROI_BASE_WEIGHTS, resolve_roi_weights_override
 from rppg.adaptive_calibration import CONF_LOW, OnlineBpmCalibrator, RppgParamCoordinator
 from rppg.calibration import (
@@ -626,6 +627,63 @@ class MainWindow(QMainWindow):
         self._chk_belt_calib.toggled.connect(self._on_belt_calib_toggled)
 
         body_layout.addWidget(gb_ctl)
+
+        # --- 心跳帶（傳輸數值 + 衍生 HRV 專屬區塊） ---
+        gb_belt = QGroupBox("心跳帶")
+        belt_l = QVBoxLayout(gb_belt)
+
+        def _belt_stat_row(label_text: str) -> QLabel:
+            row = QHBoxLayout()
+            lbl = QLabel(label_text)
+            lbl.setObjectName("hintLabel")
+            lbl.setMinimumWidth(90)
+            val = QLabel("—")
+            val.setStyleSheet("font-size: 15px; font-weight: 600; color: #e6edf3;")
+            row.addWidget(lbl)
+            row.addWidget(val, 1, Qt.AlignmentFlag.AlignRight)
+            belt_l.addLayout(row)
+            return val
+
+        belt_sub_realtime = QLabel("即時")
+        belt_sub_realtime.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e;")
+        belt_l.addWidget(belt_sub_realtime)
+        self._lbl_belt_bpm = _belt_stat_row("BPM：")
+        self._lbl_belt_rr = _belt_stat_row("RR 樣本數：")
+        self._lbl_belt_contact = _belt_stat_row("感測器接觸：")
+        self._lbl_belt_battery = _belt_stat_row("電量：")
+        self._lbl_belt_rssi = _belt_stat_row("RSSI：")
+        self._lbl_belt_stale = _belt_stat_row("停滯警告：")
+
+        belt_sub_conn = QLabel("連線")
+        belt_sub_conn.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e; margin-top: 6px;")
+        belt_l.addWidget(belt_sub_conn)
+        self._lbl_belt_device = _belt_stat_row("裝置名稱：")
+        self._lbl_belt_address = _belt_stat_row("裝置位址：")
+        self._lbl_belt_location = _belt_stat_row("配戴位置：")
+        self._lbl_belt_connected_since = _belt_stat_row("連線時長：")
+        self._lbl_belt_notifications = _belt_stat_row("封包數：")
+        self._lbl_belt_last_error = _belt_stat_row("最後錯誤：")
+
+        belt_sub_hrv = QLabel("HRV（僅供顯示，不進疲勞融合）")
+        belt_sub_hrv.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e; margin-top: 6px;")
+        belt_l.addWidget(belt_sub_hrv)
+        self._lbl_belt_hrv_rmssd = _belt_stat_row("RMSSD：")
+        self._lbl_belt_hrv_sdnn = _belt_stat_row("SDNN：")
+        self._lbl_belt_hrv_lfhf = _belt_stat_row("LF/HF：")
+        self._lbl_belt_hrv_conf = _belt_stat_row("HRV 信心：")
+        self._lbl_belt_hrv_warmup = _belt_stat_row("暖機進度：")
+
+        belt_sub_calib = QLabel("rPPG 校準")
+        belt_sub_calib.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e; margin-top: 6px;")
+        belt_l.addWidget(belt_sub_calib)
+        self._lbl_belt_calib_offset = _belt_stat_row("Offset：")
+        self._lbl_belt_calib_raw_resid = _belt_stat_row("原始殘差：")
+        self._lbl_belt_calib_corr_resid = _belt_stat_row("校正後殘差：")
+        self._lbl_belt_calib_confidence = _belt_stat_row("信心：")
+        self._lbl_belt_calib_status = _belt_stat_row("狀態：")
+        self._lbl_belt_calib_pairs = _belt_stat_row("配對數：")
+
+        body_layout.addWidget(gb_belt)
 
         # --- 影片回測 ---
         gb_replay = QGroupBox("影片回測")
@@ -2183,6 +2241,7 @@ class MainWindow(QMainWindow):
             self._belt_runtime.stop_belt()
         self._append_log("■ 心跳帶真值校準停止。")
         self._lbl_belt_status.setText("未啟用")
+        self._reset_belt_panel()
 
     def _persist_belt_calibration(self) -> None:
         """把本次收斂的 offset 存成新的自適應校準版本（信心足夠時）。"""
@@ -2335,6 +2394,7 @@ class MainWindow(QMainWindow):
 
     def _update_belt_status_label(self) -> None:
         """輪詢心跳帶連線與校準狀態並更新狀態列（QTimer 每秒觸發）。"""
+        self._update_belt_panel()
         st = self._belt_runtime.belt_status()
         cal = self._belt_calibrator
         if st is None:
@@ -2374,6 +2434,98 @@ class MainWindow(QMainWindow):
             else:
                 parts.append(f"收斂中 {cs.pairs_used} 配對")
         self._lbl_belt_status.setText("｜".join(parts))
+
+    def _reset_belt_panel(self) -> None:
+        """把心跳帶專屬區塊所有欄位重置為「—」（未啟用／停止時呼叫）。"""
+        for lbl in (
+            self._lbl_belt_bpm, self._lbl_belt_rr, self._lbl_belt_contact,
+            self._lbl_belt_battery, self._lbl_belt_rssi, self._lbl_belt_stale,
+            self._lbl_belt_device, self._lbl_belt_address, self._lbl_belt_location,
+            self._lbl_belt_connected_since, self._lbl_belt_notifications, self._lbl_belt_last_error,
+            self._lbl_belt_hrv_rmssd, self._lbl_belt_hrv_sdnn, self._lbl_belt_hrv_lfhf,
+            self._lbl_belt_hrv_conf, self._lbl_belt_hrv_warmup,
+            self._lbl_belt_calib_offset, self._lbl_belt_calib_raw_resid, self._lbl_belt_calib_corr_resid,
+            self._lbl_belt_calib_confidence, self._lbl_belt_calib_status, self._lbl_belt_calib_pairs,
+        ):
+            lbl.setText("—")
+
+    def _update_belt_panel(self) -> None:
+        """更新「心跳帶」專屬區塊的所有數值（即時／連線／HRV／rPPG 校準）。
+
+        唯讀輪詢既有狀態物件，不改動任何校準/worker/BLE 邏輯與數值行為；
+        HRV 僅供顯示，絕不寫回任何會被疲勞融合分數讀取的欄位。
+        """
+        st = self._belt_runtime.belt_status()
+        cal = self._belt_calibrator
+        if st is None:
+            self._reset_belt_panel()
+            return
+
+        # 即時
+        self._lbl_belt_bpm.setText(f"{st.bpm} BPM" if st.bpm > 0 else "—")
+        self._lbl_belt_rr.setText(str(st.rr_count) if st.rr_count > 0 else "—")
+        if st.sensor_contact_supported:
+            self._lbl_belt_contact.setText("良好" if st.sensor_contact_detected else "⚠ 接觸不良")
+        else:
+            self._lbl_belt_contact.setText("不支援回報")
+        self._lbl_belt_battery.setText(f"{st.battery_level}%" if st.battery_level is not None else "—")
+        self._lbl_belt_rssi.setText(f"{st.rssi:.0f} dBm" if st.rssi else "—")
+        if st.state == "connected" and hr_is_stale(st):
+            age = time.time() - (st.last_sample_at or 0.0)
+            self._lbl_belt_stale.setText(f"⚠ {age:.0f} 秒無心率")
+        elif st.state == "connected":
+            self._lbl_belt_stale.setText("正常")
+        else:
+            self._lbl_belt_stale.setText("—")
+
+        # 連線
+        self._lbl_belt_device.setText(st.device_name or "—")
+        self._lbl_belt_address.setText(st.device_address or "—")
+        self._lbl_belt_location.setText(st.sensor_location or "—")
+        if st.connected_since is not None:
+            self._lbl_belt_connected_since.setText(f"{time.time() - st.connected_since:.0f} 秒")
+        else:
+            self._lbl_belt_connected_since.setText("—")
+        self._lbl_belt_notifications.setText(str(st.notifications) if st.notifications else "—")
+        self._lbl_belt_last_error.setText(st.last_error or "—")
+
+        # HRV（rppg.watch_physio.compute_watch_physio，唯讀顯示、不進疲勞融合分數）
+        try:
+            samples = self._belt_runtime.hub.snapshot()
+            physio = compute_watch_physio(samples)
+        except Exception:
+            physio = None
+        if physio is not None and physio.sample_count >= 2:
+            self._lbl_belt_hrv_rmssd.setText(f"{physio.rmssd:.1f} ms" if physio.rmssd > 0 else "暖機中")
+            self._lbl_belt_hrv_sdnn.setText(f"{physio.sdnn:.1f} ms" if physio.sdnn > 0 else "暖機中")
+            self._lbl_belt_hrv_lfhf.setText(f"{physio.lf_hf:.2f}" if physio.lf_hf > 0 else "暖機中")
+            self._lbl_belt_hrv_conf.setText(physio.hrv_confidence)
+            self._lbl_belt_hrv_warmup.setText(f"{physio.warmup_progress * 100:.0f}%")
+        else:
+            for lbl in (self._lbl_belt_hrv_rmssd, self._lbl_belt_hrv_sdnn, self._lbl_belt_hrv_lfhf, self._lbl_belt_hrv_conf):
+                lbl.setText("暖機中")
+            self._lbl_belt_hrv_warmup.setText(f"{physio.warmup_progress * 100:.0f}%" if physio is not None else "0%")
+
+        # rPPG 校準（沿用現有 OnlineBpmCalibrator，不新建校準器）
+        if cal is not None:
+            cs = cal.state()
+            self._lbl_belt_calib_offset.setText(f"{cs.offset_bpm:+.1f} BPM")
+            self._lbl_belt_calib_raw_resid.setText(f"{cs.raw_residual_bpm:.1f} BPM")
+            self._lbl_belt_calib_corr_resid.setText(f"{cs.corrected_residual_bpm:.1f} BPM")
+            self._lbl_belt_calib_confidence.setText(cs.confidence)
+            if cs.diverged:
+                self._lbl_belt_calib_status.setText("⚠ 偏差大，校正中")
+            elif cs.converged:
+                self._lbl_belt_calib_status.setText("已收斂")
+            else:
+                self._lbl_belt_calib_status.setText("收斂中")
+            self._lbl_belt_calib_pairs.setText(f"{cs.pairs_used} / {cs.total_observations}")
+        else:
+            for lbl in (
+                self._lbl_belt_calib_offset, self._lbl_belt_calib_raw_resid, self._lbl_belt_calib_corr_resid,
+                self._lbl_belt_calib_confidence, self._lbl_belt_calib_status, self._lbl_belt_calib_pairs,
+            ):
+                lbl.setText("—")
 
     def _analysis_needed(self) -> tuple[bool, bool]:
         """Return (want_rppg, want_fatigue) from checkbox state."""
