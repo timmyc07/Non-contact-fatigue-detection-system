@@ -70,8 +70,11 @@ fused = 0.85×(0.7×scorer_behavior + 0.3×engine_fatigue_level) + 0.15×rppg。
 - **UTA 資料集無法驗證此修復**：UTA drowsy 不含「頭端正持續閉眼」場景，故 UTA/golden 指標零變化。
   這修的是即時瞬時場景（使用者實測痛點），價值靠上表合成驗算 + **使用者實機驗證**（戴機閉眼10秒
   應顯示高度）。UTA 平均指標與即時瞬時體驗是兩回事（見 docs/2026-07-04-uta-accuracy-baseline.md）。
-- 誤報取捨（使用者已接受）：長時間正常下視/閉眼休息會判疲勞。安全監控寧可誤報；
-  `CLOSURE_ONSET_SEC=1.0` 擋眨眼與正常短閉眼。
+- ~~誤報取捨（使用者已接受）：長時間正常下視/閉眼休息會判疲勞~~ **此取捨已於 2026-07-05
+  被下視偵測器推翻**：實機驗證發現「往下看幾秒即誤判中度」不可接受，已加 down-gaze detector
+  暫停下視情境的 EAR 衍生累積（見 docs/2026-07-05-downgaze-detector.md 與
+  tests/test_downgaze_gate.py）。閉眼休息（EAR 跌破 floor）仍會判疲勞，此半句取捨仍成立；
+  `CLOSURE_ONSET_SEC=1.0` 擋眨眼與正常短閉眼不變。
 - 顯示接線未做：`eye_closure_sec` 目前只進分數計算，未接 overlay/dashboard 顯示（若要顯示秒數需另接）。
 - 既有邊界（非本次引入、不修）：`_fat_enter_t == 0.0` 的 truthy 判斷理論上會使該幀 fat_dur 卡 0，
   但實務不可達（校準需 ~5s，t_now 早已 >0）、失敗方向安全（低報）。

@@ -336,6 +336,15 @@ class FatigueParams:
     closure_full_sec:  float = CLOSURE_FULL_SEC
     w_engine_closure:  float = 0.35
 
+    # V2 — Down-gaze detector ("下視偵測器", 2026-07-04)：眼睛睜開但視線往下看/頭微低
+    # 帶動眼皮下垂時，EAR 會跌破閉眼門檻造成 closure 強通道誤判疲勞（實機發現）。
+    # 成立時以 pitch gate 相同語意暫停 EAR 衍生累積（blink_ok/fatigue_ok=False）。
+    downgaze_gy_th:      float = 0.12   # gaze_y 往下門檻（gaze_y 定義見 GazeTrackingModule.step，影像 y 向下增，往下看=正）
+    downgaze_ear_floor:  float = 0.45   # ×base_ear_th；低於此＝真閉眼→偵測器不成立（防漏報核心）
+    downgaze_ear_hi:     float = 1.10   # ×base_ear_th；高於此＝EAR 正常→不啟動
+    downgaze_enter_sec:  float = 0.30   # 進入去抖
+    downgaze_exit_sec:   float = 0.30   # 退出去抖
+
 
 # ── Output metrics dataclass ─────────────────────────────────────────────────
 
@@ -418,7 +427,10 @@ class FatigueMetrics:
 
     # Debug / display
     has_iris:     bool  = False
-    calib_progress: float = 0.0   # 0-1
+    calib_progress: float = 0.0
+    # 下視偵測器（2026-07-04）：True 時 EAR 衍生疲勞累積（blink/PERCLOS/closure）暫停，
+    # 與 pitch gate 同語意。未觸發（含所有既有測試場景）恆為 False → 逐位元不影響現況。
+    down_gaze_active: bool = False
 
 
 # ── EyeCognitiveModule ───────────────────────────────────────────────────────
@@ -1226,6 +1238,10 @@ class FatigueEngine:
         self._frame = 0
         self._no_face_since: Optional[float] = None
         self._no_face_reset_done = False
+        # 下視偵測器（2026-07-04）：latch 狀態 + 進入/退出去抖計時器。
+        self._downgaze_since: Optional[float] = None
+        self._downgaze_lost_since: Optional[float] = None
+        self._downgaze_active = False
         self._load_persisted_calibration()
         self._seed_from_profile()
 
@@ -1236,6 +1252,9 @@ class FatigueEngine:
         self._frame = 0
         self._no_face_since = None
         self._no_face_reset_done = False
+        self._downgaze_since = None
+        self._downgaze_lost_since = None
+        self._downgaze_active = False
         self._load_persisted_calibration()
         self._seed_from_profile()
 
@@ -1293,6 +1312,12 @@ class FatigueEngine:
         # 否則每次掉幀都重跑 5 秒校準、期間偵測與警報全黑（2026-07-03 審核 P0-1）。
         # t_now 應與 step() 使用同一時間基準（worker 的 perf_counter 或 replay 的影格時間）。
         now = time.monotonic() if t_now is None else t_now
+        # 下視去抖計時器：掉臉期間 step() 不執行、條件無觀測，空窗流逝的時間不得計入
+        # enter/exit 去抖（否則臉回來瞬間即 latch/解除，0.3 秒防抖被繞過——2026-07-05
+        # 三重審查軸A Critical）。一掉臉即清（不等寬限期）、臉回來後重新起算；
+        # _downgaze_active 本身沿用寬限期語意，超過 no_face_reset_sec 才由下方全重置清 False。
+        self._downgaze_since = None
+        self._downgaze_lost_since = None
         if self._no_face_since is None:
             self._no_face_since = now
             self._no_face_reset_done = False
@@ -1305,6 +1330,7 @@ class FatigueEngine:
             self.head._pitch_down_start = None
             self.head._yawn_open_start  = None
             self.head.mouth_open_ratio   = 0.0
+            self._downgaze_active = False
             self._no_face_reset_done = True
         return FatigueMetrics(
             face_detected=False,
@@ -1391,6 +1417,53 @@ class FatigueEngine:
             and self.eye.nose_speed <= p.nose_speed_limit_fatigue
         )
 
+        # ── Down-gaze detector (2026-07-04)：眼睛睜開但視線往下看/頭微低帶動眼皮下垂，
+        # EAR 會跌破閉眼門檻造成 closure 強通道誤判疲勞（實機發現）。用「前一幀」的
+        # gaze/eye 屬性判定 —— self.gaze.step()/self.eye.step() 本幀尚未執行（下方
+        # ── Module steps 才呼叫），與 fatigue_q/pitch gate 沿用同一批前一幀屬性一致。
+        # 校準期（base_ear_th 未定案）一律不成立：eye.calibrated 為前一幀值，
+        # 開機前 5 秒恆 False，故不會誤 latch on。
+        # 有效帶註記：0.45×~1.0×base 段結構上允許，但既有 blink/fatigue 狀態機在
+        # EAR<1.0×base 即判閉眼並凍結 gaze（GazeTrackingModule 早退），該段成立與否
+        # 依賴凍結前的 gaze_y 舊值；「初次進入」偵測帶實務上發生在 1.0×~1.10×base 窄帶。
+        # has_iris 語意澄清（審查軸A）：它只代表 landmark 陣列含虹膜點（len>=478，
+        # Tasks API 偵測到臉即恆真），不代表「虹膜真的可見」——排除真閉眼靠的是
+        # EAR floor 下限，不是 has_iris；此條件僅防禦陣列截斷/首幀屬性未建立。
+        downgaze_cond = (
+            self.eye.calibrated
+            and getattr(self.eye, "has_iris", False)
+            and self.gaze.gaze_y > p.downgaze_gy_th
+            and (
+                self.eye.base_ear_th * p.downgaze_ear_floor
+                < self.eye.ear_smooth
+                < self.eye.base_ear_th * p.downgaze_ear_hi
+            )
+            and self.eye.blend_eye_blink < p.blend_blink_gate
+        )
+        # 去抖為本檔首見「進入＋退出雙向」設計（既有 squint/pitch gate 皆為單向、
+        # 條件消失即刻重置）：EAR/gaze 在偵測帶邊緣抖動時，單向去抖會頻繁 latch
+        # on/off 使 EAR 累積時斷時續，故退出也需連續 downgaze_exit_sec 不成立才解除
+        # （刻意設計差異，非風格不一致）。
+        if downgaze_cond:
+            self._downgaze_lost_since = None
+            if self._downgaze_since is None:
+                self._downgaze_since = t_now
+            if (
+                not self._downgaze_active
+                and (t_now - self._downgaze_since) >= p.downgaze_enter_sec
+            ):
+                self._downgaze_active = True
+        else:
+            self._downgaze_since = None
+            if self._downgaze_active:
+                if self._downgaze_lost_since is None:
+                    self._downgaze_lost_since = t_now
+                if (t_now - self._downgaze_lost_since) >= p.downgaze_exit_sec:
+                    self._downgaze_active = False
+                    self._downgaze_lost_since = None
+            else:
+                self._downgaze_lost_since = None
+
         # ── Pitch gate (suppress blink/fatigue when looking strongly up/down) ─
         pitch_rel = self.head.head_pitch - self.head._pitch_offset
         if pitch_rel > p.pitch_eye_gate_deg:
@@ -1406,6 +1479,12 @@ class FatigueEngine:
             # EAR 路徑在此區間停用（分母用可量測時間，不會因此壓低 PERCLOS）。
             # 需 pose 新鮮：過期的下垂姿態不得同時封鎖 EAR 與微睡兩條路徑形成盲區
             # （2026-07-03 審核 G-M1/G-M2＋三重審查軸A M1）
+            blink_ok   = False
+            fatigue_ok = False
+        elif self._downgaze_active:
+            # 下視（視線往下看造成眼皮下垂）與 pitch gate 完全同語意：暫停 EAR 衍生
+            # 累積（blink/PERCLOS/closure）。與上兩支 pitch 分支互斥（elif 短路），
+            # pitch gate 優先於下視偵測器。
             blink_ok   = False
             fatigue_ok = False
 
@@ -1480,6 +1559,7 @@ class FatigueEngine:
             or (
                 self.eye.lid_balance > p.lid_balance_gate_th
                 and self.eye.ear_smooth < self.eye.base_ear_th * 1.25
+                and not self._downgaze_active
             )
         )
 
@@ -1589,4 +1669,5 @@ class FatigueEngine:
             # Meta
             has_iris        = has_iris,
             calib_progress  = self.eye.calib_progress,
+            down_gaze_active = self._downgaze_active,
         )

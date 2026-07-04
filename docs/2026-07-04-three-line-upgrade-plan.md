@@ -181,3 +181,41 @@ docs/2026-07-04-uta-accuracy-baseline.md。memory fatigue-accuracy-perclos 有�
 紅線：碰 rppg/、fatigue_engine、fatigue_scorer 數值行為＝重量級（完整pytest+golden+三審+
 數值聲明+先問我）。派工守 ~/.claude/rules/（指揮官不下場、驗證不自驗、同任務最多2輪）。
 ```
+
+## 進度更新 — session 3（2026-07-05）
+
+**實機驗證結果（使用者回報）：** 閉眼 10 秒判斷準確 ✅；但發現新誤判——視線往螢幕下方看
+（頭微低或純視線下移帶動眼皮下垂）幾秒內被誤判中度以上疲勞。
+
+**已完成：下視偵測器（重量級完整流程）**——`docs/2026-07-05-downgaze-detector.md`。
+- 根因：pitch gate ±10° 硬開關且不讀視線；gaze_y 有算沒接線；低 EAR 推高 5 條路徑。
+- 修法：gaze_y+EAR 帶+雙向去抖的 down-gaze detector，成立時同 pitch gate 語意暫停 EAR 衍生
+  累積；未觸發逐位元回退。engine 單檔改動，scorer/rppg/worker 零改動。
+- 驗證：438 passed（新增 14 測試含深帶正反例、負向對照）；golden PASS 零漂移免重建；
+  三重審查一致可合入零 blocker。
+- **注意**：本修復（視線下移→EAR 假性偵測）與 session 2 選項 (b) 的「頭低 10-15° pitch 死區」
+  （pitch gate 與 EAR 路徑同時失效的漏報盲區）是**兩個不同機制**，(b) 仍未做。
+
+**已證實的計畫外既有 bug（使用者已授權修復,下一件事）：** blendshape 命名不匹配——
+`_blendshape_map` 只 `.lower()`,MediaPipe 回傳 camelCase(`eyeBlinkLeft`,模型檔二進位已驗證),
+`_bs()` 查 snake_case(`eye_blink_left`)→ 實機 `blend_*` 四組訊號恆 0,輔助通道全沉睡。
+修復條件（使用者裁決）：**量化證明有實質幫助才落地**（UTA accuracy + golden 前後比對，
+變好才 commit、變差回報）。互動風險：修活後 `blend_eye_blink` guard 可能在下視時 >gate
+誤擋下視偵測器 latch，需一併驗證（見 downgaze-detector.md 誠實限制 3）。
+
+### 下個 session 接續 prompt（實機驗證下視偵測器後貼這段）
+```
+接續「非接觸式疲勞偵測系統」。先讀 docs/2026-07-04-three-line-upgrade-plan.md「進度更新
+session 3」與 docs/2026-07-05-downgaze-detector.md。UTA 資料集在 C:\Users\USER\Downloads\UTA_test。
+
+已完成：下視偵測器（往下看誤判修復,commit 見 git log）。待辦依序：
+(1) blendshape 命名 bug 修復（已授權,條件=UTA accuracy+golden 量化變好才落地）；
+(2) 頭低 10-15° pitch 死區（漏報盲區,與下視偵測器不同機制）；
+(3) rPPG 半頻/諧波抑制（docs/rppg-improvement-plan.md）。
+
+我實機驗證下視偵測器的結果（照 downgaze-detector.md 實機驗證清單 5 項）：
+【填:往下看是否仍誤判/閉眼10秒是否仍準/其他觀感】
+
+紅線：碰 rppg/、fatigue_engine、fatigue_scorer 數值行為＝重量級（完整pytest+golden+三審+
+數值聲明+先問我）。派工守 ~/.claude/rules/（指揮官不下場、驗證不自驗、同任務最多2輪）。
+```
