@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from types import SimpleNamespace
 
@@ -347,6 +348,37 @@ def test_load_config_out_of_range_timeout_falls_back_to_default(tmp_path):
     cfg = load_hr_belt_config(path)
     assert cfg.scan_timeout_sec == 6.0
     assert cfg.reconnect_delay_sec == 3.0
+
+
+# ── P6b-3b：rppg_param_tuning_enabled 開關載入 ──────────────────────────────
+
+def test_load_config_missing_file_defaults_param_tuning_off(tmp_path):
+    cfg = load_hr_belt_config(tmp_path / "nope.json")
+    assert cfg.rppg_param_tuning_enabled is False
+
+
+def test_load_config_no_field_defaults_param_tuning_off(tmp_path):
+    path = tmp_path / "hr_belt.json"
+    path.write_text('{"address": "AA:BB:CC:DD:EE:FF"}', encoding="utf-8")
+    cfg = load_hr_belt_config(path)
+    assert cfg.rppg_param_tuning_enabled is False
+
+
+def test_load_config_param_tuning_true_accepted(tmp_path):
+    path = tmp_path / "hr_belt.json"
+    path.write_text('{"rppg_param_tuning_enabled": true}', encoding="utf-8")
+    cfg = load_hr_belt_config(path)
+    assert cfg.rppg_param_tuning_enabled is True
+
+
+@pytest.mark.parametrize("bad_value", ["yes", 1, 0, 1.0, None, [], {}])
+def test_load_config_param_tuning_non_bool_falls_back(tmp_path, bad_value):
+    path = tmp_path / "hr_belt.json"
+    path.write_text(
+        json.dumps({"rppg_param_tuning_enabled": bad_value}), encoding="utf-8"
+    )
+    cfg = load_hr_belt_config(path)
+    assert cfg.rppg_param_tuning_enabled is False
 
 
 # ── 心率資料停滯（stale）判斷 ────────────────────────────────────────────────

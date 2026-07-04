@@ -78,6 +78,10 @@ class HrBeltConfig:
     address: str = ""
     scan_timeout_sec: float = 6.0
     reconnect_delay_sec: float = 3.0
+    # P6b-3b：rPPG ROI 權重線上協調層開關（預設 False＝關閉）。開啟後
+    # OnlineBpmCalibrator 收斂且殘差仍偏大時，才會嘗試產生候選 ROI 權重並以
+    # 心跳帶真值 A/B（見 RppgParamCoordinator）。關閉時整條協調層完全不動作。
+    rppg_param_tuning_enabled: bool = False
 
 
 def _validated_float(value: Any, default: float, lo: float, hi: float, label: str) -> float:
@@ -92,11 +96,20 @@ def _validated_float(value: Any, default: float, lo: float, hi: float, label: st
     return num
 
 
+def _validated_bool(value: Any, default: bool, label: str) -> bool:
+    """驗證設定布林值；非 bool 型別時退回預設值（不丟例外）。"""
+    if not isinstance(value, bool):
+        logger.warning("hr_belt 設定 %s=%r 非布林值，改用預設 %r", label, value, default)
+        return default
+    return value
+
+
 def load_hr_belt_config(path: Path | str | None = None) -> HrBeltConfig:
     """讀取心跳帶設定檔；檔案不存在或內容不合法時退回預設值（不丟例外）。
 
     支援欄位：``name_prefix``（str）、``address``（str，指定 MAC/UUID 時
-    跳過名稱比對）、``scan_timeout_sec``（1–60）、``reconnect_delay_sec``（0.5–60）。
+    跳過名稱比對）、``scan_timeout_sec``（1–60）、``reconnect_delay_sec``（0.5–60）、
+    ``rppg_param_tuning_enabled``（bool，P6b-3b，缺項或非 bool 一律回退 False）。
     """
     cfg_path = DEFAULT_CONFIG_PATH if path is None else Path(path)
     defaults = HrBeltConfig()
@@ -130,6 +143,10 @@ def load_hr_belt_config(path: Path | str | None = None) -> HrBeltConfig:
         reconnect_delay_sec=_validated_float(
             data.get("reconnect_delay_sec", defaults.reconnect_delay_sec),
             defaults.reconnect_delay_sec, 0.5, 60.0, "reconnect_delay_sec",
+        ),
+        rppg_param_tuning_enabled=_validated_bool(
+            data.get("rppg_param_tuning_enabled", defaults.rppg_param_tuning_enabled),
+            defaults.rppg_param_tuning_enabled, "rppg_param_tuning_enabled",
         ),
     )
 

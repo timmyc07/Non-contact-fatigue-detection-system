@@ -51,7 +51,9 @@ from rppg.rppg_worker import (
     RoiGeometryTracker, collect_rppg_roi_sample_with_means,
     ensure_face_model, _MODELS_DIR,
     resolve_effective_rppg_tuning,
+    ROI_SPECS, ROI_BASE_WEIGHTS,
 )
+from rppg.adaptive_calibration import recompute_raw_bpm_from_roi_windows
 from rppg.calibration import apply_calibration_to_metrics
 
 
@@ -92,6 +94,14 @@ class CombinedWorker(QObject):
     status_changed:        Signal = Signal(str)
     failed:                Signal = Signal(str)
     finished:              Signal = Signal()
+    # P6b-3b：低頻（~1Hz）current vs candidate ROI 權重原始 BPM 重算結果，供 GUI
+    # 協調層（RppgParamCoordinator）做 A/B。(t_now, cur_raw_bpm, cand_raw_bpm)；
+    # 任一值無法算出時以 NaN 表示。僅在 set_candidate_roi_weights() 設有候選時
+    # 才會發射，見 _maybe_emit_candidate_bpm。
+    candidate_bpm_ready:   Signal = Signal(float, float, float)
+
+    # P6b-3b：candidate vs current BPM 低頻重算節奏（秒），與逐幀迴圈脫鉤。
+    _CANDIDATE_RECOMPUTE_INTERVAL_SEC = 1.0
 
     def __init__(
         self,
@@ -125,6 +135,10 @@ class CombinedWorker(QObject):
         self._has_pending_profile = False
         # P6b-2：ROI base_weights 覆寫（None＝不覆寫，逐位元回退現行 tuning）。
         self._roi_weights_override: Optional[dict[str, float]] = None
+        # P6b-3b：候選 ROI 權重（None＝無候選，低頻重算分支整段 early-return，
+        # 逐幀路徑與現況逐位元不變）。pending-flag 熱設定，run() 迴圈輪詢讀取。
+        self._candidate_roi_weights: Optional[dict[str, float]] = None
+        self._last_candidate_recompute_t: float = 0.0
 
     def request_stop(self) -> None:
         self._stop = True
@@ -134,6 +148,49 @@ class CombinedWorker(QObject):
         套用只發生於 run() 啟動時的一次性讀取，不支援執行中熱切換
         （熱切換屬 P6b-3 線上協調層範疇）。"""
         self._roi_weights_override = weights
+
+    def set_candidate_roi_weights(self, weights: Optional[dict[str, float]]) -> None:
+        """P6b-3b：pending-flag 式熱設定候選 ROI 權重（None＝清除候選，暫停低頻
+        重算與 candidate_bpm_ready 發射）。GUI 主執行緒呼叫；worker 執行緒於下一次
+        低頻檢查週期（至多 ``_CANDIDATE_RECOMPUTE_INTERVAL_SEC`` 秒）讀取生效。
+        執行緒安全假設同 ``set_roi_base_weights_override``：單一參照賦值，CPython
+        GIL 下具原子性，讀寫不需額外鎖。
+        """
+        self._candidate_roi_weights = weights
+
+    def _maybe_emit_candidate_bpm(
+        self,
+        rppg_engine: Optional["RppgEngine"],
+        rppg_tuning,
+        t_now: float,
+    ) -> None:
+        """P6b-3b：OFF（``rppg_engine is None`` 或無候選）時立即返回，不做任何
+        額外運算／引擎存取／訊號發射，確保逐幀路徑與現況逐位元不變。ON 時低頻
+        （約 1Hz）以 ``rppg_engine.get_roi_window`` 快照 + ``recompute_raw_bpm_
+        from_roi_windows`` 對現行與候選 ROI 權重各重算一次 raw BPM，並發出
+        ``candidate_bpm_ready`` 供 GUI 協調層做 A/B。
+        """
+        if rppg_engine is None:
+            return
+        candidate = self._candidate_roi_weights
+        if candidate is None:
+            return
+        if t_now - self._last_candidate_recompute_t < self._CANDIDATE_RECOMPUTE_INTERVAL_SEC:
+            return
+        self._last_candidate_recompute_t = t_now
+
+        roi_windows = {
+            name: rppg_engine.get_roi_window(name, self._buffer_sec, t_now)
+            for name, _ in ROI_SPECS
+        }
+        current_weights = dict(rppg_tuning.rppg_roi.base_weights or ROI_BASE_WEIGHTS)
+        cur_bpm = recompute_raw_bpm_from_roi_windows(roi_windows, current_weights)
+        cand_bpm = recompute_raw_bpm_from_roi_windows(roi_windows, candidate)
+        self.candidate_bpm_ready.emit(
+            float(t_now),
+            float(cur_bpm) if cur_bpm is not None else float("nan"),
+            float(cand_bpm) if cand_bpm is not None else float("nan"),
+        )
 
     def set_personal_profile(self, profile: Optional[PersonalProfile]) -> None:
         """執行緒安全熱換個人基線（仿 request_stop：主執行緒設旗標，run 迴圈輪詢套用）。"""
@@ -200,6 +257,12 @@ class CombinedWorker(QObject):
         rppg_tuning = resolve_effective_rppg_tuning(
             self._tuning, self._roi_weights_override, self._calibration_loader
         )
+        # P6b-3b（審查 B 修正）：weighted_mix 由「本次 run 是否實際套用了 ROI 權重
+        # 覆寫」推導，而非 self._roi_weights_override（production 覆寫走
+        # calibration_loader → rppg_params，不會設該欄位）。無覆寫時
+        # resolve_effective_rppg_tuning 原樣回傳 self._tuning → roi_override_active
+        # 為 False → 逐位元回退等權平均。
+        roi_override_active = rppg_tuning is not self._tuning
 
         parts = []
         if self._enable_rppg:
@@ -267,7 +330,8 @@ class CombinedWorker(QObject):
                         if rppg_engine is not None:
                             assert roi_tracker is not None
                             sample, roi_weights, roi_valid_count, per_roi_means = collect_rppg_roi_sample_with_means(
-                                bgr, lm, transform_matrix, roi_tracker, rppg_tuning
+                                bgr, lm, transform_matrix, roi_tracker, rppg_tuning,
+                                weighted_mix=roi_override_active,
                             )
                             draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
                             if sample is not None:
@@ -275,6 +339,8 @@ class CombinedWorker(QObject):
                             # P6b-1 新增：per-ROI 旁路緩衝，不影響上面既有 push() 的輸入/行為。
                             if per_roi_means:
                                 rppg_engine.push_roi_means(ts, per_roi_means)
+                            # P6b-3b：OFF（無候選）時 early-return，不影響本行以下既有流程。
+                            self._maybe_emit_candidate_bpm(rppg_engine, rppg_tuning, ts)
                             r_metrics = rppg_engine.compute(
                                 ts,
                                 bgr,

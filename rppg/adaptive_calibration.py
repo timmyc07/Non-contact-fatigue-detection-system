@@ -17,11 +17,12 @@
 
 from __future__ import annotations
 
+import math
 import statistics
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -513,13 +514,307 @@ def recompute_raw_bpm_from_roi_windows(
     return bpm
 
 
+# ── P6b-3b：rPPG 參數線上協調層（belt 殘差 → 候選 ROI 權重 → A/B → adopt）──────
+
+# 協調層狀態機的四個相位常數。GATED 與 IDLE 語意相同（皆代表「本輪未觸發，可
+# 重新檢查」），拆開純為讓 GUI/測試能區分「從未檢查過」與「檢查過但未觸發」。
+COORD_IDLE = "idle"
+COORD_GATED = "gated"
+COORD_EVALUATING = "evaluating"
+COORD_ADOPT = "adopt"
+COORD_ROLLBACK = "rollback"
+COORD_COOLDOWN = "cooldown"
+
+
+@dataclass(frozen=True)
+class RppgParamCoordinatorState:
+    """:class:`RppgParamCoordinator` 狀態快照（GUI 輪詢/記錄用，immutable）。"""
+
+    phase: str = COORD_IDLE
+    candidate_roi_weights: Optional[dict[str, float]] = None
+    verdict: Optional[RppgParamAbVerdict] = None
+    adopted_roi_weights: Optional[dict[str, float]] = None
+    cooldown_until: float = 0.0
+    updated_at: float = field(default_factory=time.time)
+
+
+def propose_roi_weight_candidate(
+    current_weights: Mapping[str, float],
+    per_roi_residual_hint: Mapping[str, float],
+    *,
+    step: float = 0.05,
+) -> dict[str, float]:
+    """P6b-3b：純函式、確定性——由目前 ROI 權重與（可選的）單 ROI 對心跳帶殘差
+    提示，產生下一輪候選 ROI 權重。
+
+    演算法：把 ``current_weights`` 正規化為比例後，挑一個 ROI 加固定 ``step``、
+    其餘 ROI 依原比例等比縮減以維持總和為 1，最後投影進
+    ``rppg.rppg_worker._project_fractions_onto_bounds`` 的護欄範圍
+    （``ROI_WEIGHT_OVERRIDE_MIN_FRACTION``/``MAX_FRACTION``，目前 [0.05, 0.70]）。
+
+    加重目標挑選規則（依 ``per_roi_residual_hint`` 是否提供有效資料分兩種情況）：
+    - **有提示**（至少一個 ROI 有有限數值的殘差提示）：挑殘差**最小**（對心跳帶
+      表現最好）的 ROI 加重，符合使用者裁決的「往表現好的 ROI 加小步長」語意。
+    - **無提示**（``per_roi_residual_hint`` 為空，或所有值皆非有限數值）：挑目前
+      **權重最小**的 ROI 加重（探索性 fallback，見下方「已知限制」）。
+
+    引數
+    ----
+    current_weights
+        目前生效的 ROI 權重（鍵需與 ``rppg.rppg_worker.ROI_SPECS`` 的 4 個 ROI
+        名稱一致；缺鍵視為 0，多餘鍵忽略）。不需預先正規化。
+    per_roi_residual_hint
+        ``{roi_name: 該 ROI 對心跳帶的殘差絕對值}``（越小越好）。允許空字典或
+        缺鍵——見上方「無提示」規則。
+
+    回傳
+    ----
+    正規化（總和 1.0）且落在護欄範圍內的 4-ROI 權重 dict，鍵與
+    ``rppg.rppg_worker.ROI_SPECS`` 完全一致。
+
+    已知限制（**待使用者裁決**，見任務回報）：目前 GUI 尚未接上任何「單 ROI 對
+    心跳帶真值」的即時探測管線——``candidate_bpm_ready`` 訊號僅回傳「現行 vs
+    候選」兩個整體 BPM，不含逐 ROI 分解——因此 live 呼叫端目前恆定傳入空
+    ``per_roi_residual_hint``，一律落入「無提示」fallback（權重最小者優先探索）。
+    這保證協調層仍會依心跳帶真值做 adopt/rollback（護欄仍在），但候選**方向**的
+    選擇目前是啟發式而非證據驅動；若要做到「以真實逐 ROI 殘差排序」，需額外
+    seam（例如逐 ROI 呼叫 ``recompute_raw_bpm_from_roi_windows`` 並各自對心跳帶
+    算殘差），超出本次 P6b-3b 明確要求的 worker 訊號介面，留待後續 P6b-3c 決定
+    是否值得為此增加成本。
+    """
+    # 惰性匯入：避免把 rppg_worker（拉入 PySide6/cv2/mediapipe）掛進本模組
+    # import-time 依賴，維持 adaptive_calibration 純運算、輕量、可攜。
+    from rppg.rppg_worker import (
+        ROI_SPECS,
+        ROI_WEIGHT_OVERRIDE_MAX_FRACTION,
+        ROI_WEIGHT_OVERRIDE_MIN_FRACTION,
+        _project_fractions_onto_bounds,
+    )
+
+    names = [name for name, _ in ROI_SPECS]
+
+    base_raw = {name: max(float(current_weights.get(name, 0.0)), 0.0) for name in names}
+    total = sum(base_raw.values())
+    if total <= 0.0:
+        # 全零/缺失退化輸入：均分作為安全回退（不丟例外）。
+        base = {name: 1.0 / len(names) for name in names}
+    else:
+        base = {name: v / total for name, v in base_raw.items()}
+
+    valid_hints = {
+        name: float(per_roi_residual_hint[name])
+        for name in names
+        if name in per_roi_residual_hint
+        and per_roi_residual_hint[name] is not None
+        and math.isfinite(float(per_roi_residual_hint[name]))
+    }
+    if valid_hints:
+        # 有證據：挑殘差最小（表現最好）者加重；同值以名稱排序打破平手，確保確定性。
+        boost_name = min(valid_hints, key=lambda n: (valid_hints[n], n))
+    else:
+        # 無證據 fallback：挑目前權重最小者做探索性加重；同值以名稱排序打破平手。
+        boost_name = min(names, key=lambda n: (base[n], n))
+
+    step = float(step)
+    boosted = dict(base)
+    boosted[boost_name] = base[boost_name] + step
+    remaining_names = [n for n in names if n != boost_name]
+    remaining_total_before = sum(base[n] for n in remaining_names)
+    if remaining_total_before > 0.0:
+        shrink_factor = max(0.0, 1.0 - boosted[boost_name]) / remaining_total_before
+        for n in remaining_names:
+            boosted[n] = base[n] * shrink_factor
+    # else：全部權重原就集中在 boost_name（理論上不會發生，因護欄上限 < 1），
+    # 其餘 ROI 維持 0，交由下方投影處理。
+
+    boosted_total = sum(boosted.values()) or 1.0
+    boosted = {n: v / boosted_total for n, v in boosted.items()}
+
+    return _project_fractions_onto_bounds(
+        boosted, ROI_WEIGHT_OVERRIDE_MIN_FRACTION, ROI_WEIGHT_OVERRIDE_MAX_FRACTION
+    )
+
+
+class RppgParamCoordinator:
+    """P6b-3b：串起「belt 殘差 → 候選 ROI 權重 → A/B → adopt/rollback」的線上
+    協調層。純運算：無 Qt / 無執行緒 / 無 I/O，不寫檔、不觸碰 rPPG 引擎、不呼叫
+    ``CalibrationVersionStore``——那些是 GUI 呼叫端收到 adopt 判決後才執行的動作。
+
+    狀態機（單向流轉，每次呼叫最多前進一步）::
+
+        idle/gated ──(觸發判準成立)──▶ evaluating
+        evaluating ──(observe_ab 判 adopt)───▶ adopt
+        evaluating ──(observe_ab 判 rollback)─▶ rollback
+        adopt/rollback ──(下次 tick)──▶ cooldown
+        cooldown ──(冷卻期滿的下次 tick)──▶ idle（同次 tick 內可再檢查觸發判準）
+
+    觸發 gate（使用者裁決 1，2026-07-04）：**只看 offset 是否已穩定**——
+    ``OnlineBpmCalibrator.state().confidence != CONF_LOW`` 即可進入 evaluating；
+    **殘差大小不再是觸發前置**。理由：`RppgParamAbEvaluator` 已提供「候選對心跳帶
+    真值明確更好且連續 N 次才 adopt、變差回退」的護欄，那才是唯一安全篩子——
+    一旦 offset 估計穩定就允許產候選、交由 A/B 裁決，配合冷卻期防抖即可。
+
+    為何用 ``confidence != CONF_LOW`` 而非 ``converged``：``converged`` 定義本身要求
+    ``abs(corrected_residual_bpm) <= converge_residual_bpm``（預設 3.0），會**排除**
+    「offset 估計已穩定但仍有系統性殘差」的情境——而那正是 ROI 權重最可能有問題、
+    最該嘗試調整的時候。``confidence``（基於配對數與離散度，見
+    :meth:`OnlineBpmCalibrator._confidence`）表達「offset 估計是否可信/穩定」而**不**
+    耦合殘差大小，故 ``!= CONF_LOW`` 是貼合原始動機的「offset 已穩定」訊號。
+    （前一版依規格用 ``converged==True 且 corrected 殘差 >= 4.0``，兩條件數學互斥、
+    ON 路徑恆為死碼；本版依使用者裁決 1 移除殘差前置與 ``trigger_residual_bpm``。）
+
+    冷卻期（預設 120 秒，設計取捨）：adopt 或 rollback 之後強制冷卻，
+    避免連續產生候選造成參數震盪；冷卻期內即使 offset 穩定也不會觸發新一輪。
+    A/B pending 期間（evaluating）本身也不重複產候選（tick 在 evaluating 直接
+    return），故不會狂產候選。
+
+    GUI 典型用法（每 ~1 秒一次）::
+
+        candidate = coord.tick(now, cal.state(), current_roi_weights)
+        if candidate is not None:
+            worker.set_candidate_roi_weights(candidate)   # 下發候選
+
+        # worker candidate_bpm_ready 訊號到達時：
+        verdict = coord.observe_ab(t_now, belt_bpm, cur_raw_bpm, cand_raw_bpm)
+        if verdict is not None and verdict.verdict == "adopt":
+            ...  # 存成新校準版本、更新 current_roi_weights
+    """
+
+    def __init__(
+        self,
+        *,
+        evaluator: Optional[RppgParamAbEvaluator] = None,
+        step_size: float = 0.05,
+        cooldown_sec: float = 120.0,
+    ) -> None:
+        self.evaluator = evaluator if evaluator is not None else RppgParamAbEvaluator()
+        self.step_size = float(step_size)
+        self.cooldown_sec = float(cooldown_sec)
+        self._phase = COORD_IDLE
+        self._candidate: Optional[dict[str, float]] = None
+        self._last_verdict: Optional[RppgParamAbVerdict] = None
+        self._adopted: Optional[dict[str, float]] = None
+        self._cooldown_until = 0.0
+        self._updated_at = time.time()
+
+    @property
+    def phase(self) -> str:
+        return self._phase
+
+    @property
+    def candidate_roi_weights(self) -> Optional[dict[str, float]]:
+        return dict(self._candidate) if self._candidate is not None else None
+
+    def state(self) -> RppgParamCoordinatorState:
+        return RppgParamCoordinatorState(
+            phase=self._phase,
+            candidate_roi_weights=dict(self._candidate) if self._candidate is not None else None,
+            verdict=self._last_verdict,
+            adopted_roi_weights=dict(self._adopted) if self._adopted is not None else None,
+            cooldown_until=self._cooldown_until,
+            updated_at=self._updated_at,
+        )
+
+    def tick(
+        self,
+        t_now: float,
+        calib_state: AdaptiveCalibState,
+        current_roi_weights: Mapping[str, float],
+        per_roi_residual_hint: Optional[Mapping[str, float]] = None,
+    ) -> Optional[dict[str, float]]:
+        """推進狀態機一步；只在 idle/gated 且未在評估/冷卻中時可能產生新候選。
+
+        回傳非 None 表示本次呼叫新產生了候選（呼叫端應下發給 worker）；回傳
+        None 表示本次未產生新候選（仍在 evaluating 等待 A/B 觀測、仍在冷卻中、
+        或本輪觸發判準不成立）。
+        """
+        self._updated_at = t_now
+
+        if self._phase in (COORD_ADOPT, COORD_ROLLBACK):
+            # 上一輪判決已由 observe_ab 定案，這裡才真正進入冷卻，讓呼叫端至少有
+            # 一次機會讀到 adopt/rollback 這個終態（例如透過 state()）。
+            self._enter_cooldown(t_now)
+            return None
+
+        if self._phase == COORD_COOLDOWN:
+            if t_now < self._cooldown_until:
+                return None
+            self._phase = COORD_IDLE  # 冷卻期滿，落回 idle 後繼續本次 tick 的觸發檢查
+
+        if self._phase == COORD_EVALUATING:
+            # 已在評估中，等待 observe_ab 的觀測與判決，tick 本身不重新觸發。
+            return None
+
+        # phase ∈ {idle, gated}：每次 tick 重新檢查觸發 gate（使用者裁決 1）。
+        # 只看 offset 是否已穩定（confidence != CONF_LOW），殘差大小不再是前置；
+        # 候選好壞交由後續 A/B（RppgParamAbEvaluator）護欄裁決。
+        if calib_state.confidence == CONF_LOW:
+            self._phase = COORD_GATED
+            return None
+
+        candidate = propose_roi_weight_candidate(
+            current_roi_weights, per_roi_residual_hint or {}, step=self.step_size
+        )
+        self._candidate = candidate
+        self._phase = COORD_EVALUATING
+        return dict(candidate)
+
+    def observe_ab(
+        self,
+        t_now: float,
+        belt_bpm: float,
+        rppg_current_bpm: float,
+        rppg_candidate_bpm: float,
+    ) -> Optional[RppgParamAbVerdict]:
+        """轉發一筆三方配對給內部 :class:`RppgParamAbEvaluator` 並依判決推進狀態機。
+
+        只在 ``evaluating`` 階段生效；非評估階段呼叫視為 no-op（回傳 None），
+        避免冷卻期或 idle 階段殘留的觀測污染下一輪評估。
+        """
+        self._updated_at = t_now
+        if self._phase != COORD_EVALUATING:
+            return None
+        self.evaluator.observe(t_now, belt_bpm, rppg_current_bpm, rppg_candidate_bpm)
+        verdict = self.evaluator.evaluate()
+        self._last_verdict = verdict
+        if verdict.verdict == "adopt":
+            self._adopted = dict(self._candidate) if self._candidate is not None else None
+            self._phase = COORD_ADOPT
+        elif verdict.verdict == "rollback":
+            self._phase = COORD_ROLLBACK
+        return verdict
+
+    def _enter_cooldown(self, t_now: float) -> None:
+        self._cooldown_until = t_now + self.cooldown_sec
+        self._phase = COORD_COOLDOWN
+        self._candidate = None
+        self.evaluator.reset()
+
+    def reset(self) -> None:
+        self._phase = COORD_IDLE
+        self._candidate = None
+        self._last_verdict = None
+        self._adopted = None
+        self._cooldown_until = 0.0
+        self.evaluator.reset()
+
+
 __all__ = [
     "ADAPTIVE_QUALITY_GATES",
     "AdaptiveCalibState",
     "OnlineBpmCalibrator",
     "RppgParamAbEvaluator",
     "RppgParamAbVerdict",
+    "RppgParamCoordinator",
+    "RppgParamCoordinatorState",
+    "propose_roi_weight_candidate",
     "recompute_raw_bpm_from_roi_windows",
+    "COORD_IDLE",
+    "COORD_GATED",
+    "COORD_EVALUATING",
+    "COORD_ADOPT",
+    "COORD_ROLLBACK",
+    "COORD_COOLDOWN",
     "CONF_HIGH",
     "CONF_MED",
     "CONF_LOW",

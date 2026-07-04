@@ -86,7 +86,33 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
 
 心率參考的純運算層：`rppg/calibration_watch.py`（`WatchHrHub` / `WatchSample`）+ `rppg/watch_physio.py` / `watch_adapter.py` / `watch_hrv.py`（由 hub 樣本計算 HRV/指標）。這些是心跳帶樣本與「未來 HRV 比對」的共用資料結構（HRV 接口），非疲勞融合輸入。手錶 HTTP 模式（`WatchHrHttpServer`、`gui/watch_runtime.py`、手動校準對話框）已移除。
 
-心跳帶（belt）為 rPPG 的**背景真值校準來源**（非疲勞融合權重）：`rppg/hr_belt_ble.py`（BLE Heart Rate Service `0x180D` / `0x2A37` 協定解析 + `HrBeltBleClient` 背景執行緒，bleak 為 `start()` 時才匯入的選配依賴）。GUI 控制列「心跳帶真值校準（背景）」勾選框啟停（`gui/belt_runtime.py` `BeltRuntime` 管理 hub + belt client）：勾選且 rPPG 運行時，`rppg/adaptive_calibration.py` 的 `OnlineBpmCalibrator`（純運算）以心跳帶 BPM 為真值、比對 rPPG **原始** BPM 的中位殘差，低增益 EMA 慢速微調 offset，透過 `_load_rppg_calibration_version` 回傳的即時版本疊加進既有 rPPG `calibration_loader` 鏈路（bias 模型 `scale*bpm+offset`，只動 offset）。**心跳帶數值絕不進疲勞融合分數**；比對用原始 BPM 故無自我回饋。收斂到足夠信心後（停止時）存成新的 `CalibrationVersionStore` 版本並設為使用中，跨 session 持續改善。系統只有兩種配置：行為+rPPG 判斷疲勞、行為+rPPG+心跳帶校正優化 rPPG（無手錶模式）。**P6a 基礎層（2026-07-04）**：現況校正只動 BPM offset、不碰解析參數；已建立「有護欄自適應」基礎層——`CalibrationParams.rppg_params`（向後相容，預設 None → rPPG 逐位元不變）可持久化學到的 ROI 權重/頻帶，`RppgParamAbEvaluator`（`rppg/adaptive_calibration.py`，純運算）以心跳帶真值對現行 vs 候選參數 BPM 做中位殘差 A/B、「明確更好且連續 N 次才採用、變差回退」。**live 自適應迴圈尚未開啟**：P6b-1 per-ROI 緩衝 seam 已完成（2026-07-04，`collect_rppg_roi_sample_with_means` + `RppgEngine.push_roi_means`/`get_roi_window` 旁路緩衝，additive、既有輸出逐位元不變）；P6b-2 套用層已完成（2026-07-04，`rppg/rppg_worker.py` 的 `resolve_roi_weights_override`/`apply_roi_weights_override`/`resolve_effective_rppg_tuning`：`RppgWorker`/`CombinedWorker` 在 `run()` 啟動時一次性解析 active 校準版本的 `rppg_params.roi_weights`，驗證通過就覆寫 ROI base_weights，`rppg_params=None` 或驗證失敗一律逐位元回退；不做執行中熱切換）；P6b-3a 數值層已完成（2026-07-04）：`collect_rppg_roi_sample_with_means(..., weighted_mix=True)` 新增「有效權重加權混合」分支（override 存在時才由呼叫端傳 True，讓候選 ROI 權重真正影響混合 RGB→BPM；等權語意下候選權重對混合訊號無槓桿），`weighted_mix=False`（預設，所有既有呼叫端含 live worker run() 迴圈）逐位元回退等權平均、`rppg/adaptive_calibration.py` 新增 `recompute_raw_bpm_from_roi_windows()`（純函式，靜態權重、取 ROI 共同時間戳交集不插值、重用 `pos_pulse`/`butter_bandpass`/`welch_peak_hz`，作為 current vs candidate 的公平 A/B 比較器）；**尚未把 weighted_mix 接進 live worker run() 迴圈**（避免只接 `RppgWorker` 不接 `CombinedWorker` 破壞三模式一致，屬 P6b-3b GUI/worker 接線）；候選產生（belt 殘差 → 候選權重）、`RppgParamAbEvaluator` 接上 adopt/rollback 決策、離線驗證（需心跳帶硬體）仍屬 P6b 待辦。裝置設定走 `config/hr_belt.json`（機器特定、不入版控，`load_hr_belt_config()` 容錯載入）；連線中超過 `HR_STALE_AFTER_SEC` 無有效心率由 `hr_is_stale()` 判定並在 GUI/dashboard 顯示警告；免 GUI 診斷用 `python -m scripts.hr_belt_monitor`。實機 GATT 對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。
+心跳帶（belt）為 rPPG 的**背景真值校準來源**（非疲勞融合權重）：`rppg/hr_belt_ble.py`（BLE Heart Rate Service `0x180D` / `0x2A37` 協定解析 + `HrBeltBleClient` 背景執行緒，bleak 為 `start()` 時才匯入的選配依賴）。GUI 控制列「心跳帶真值校準（背景）」勾選框啟停（`gui/belt_runtime.py` `BeltRuntime` 管理 hub + belt client）：勾選且 rPPG 運行時，`rppg/adaptive_calibration.py` 的 `OnlineBpmCalibrator`（純運算）以心跳帶 BPM 為真值、比對 rPPG **原始** BPM 的中位殘差，低增益 EMA 慢速微調 offset，透過 `_load_rppg_calibration_version` 回傳的即時版本疊加進既有 rPPG `calibration_loader` 鏈路（bias 模型 `scale*bpm+offset`，只動 offset）。**心跳帶數值絕不進疲勞融合分數**；比對用原始 BPM 故無自我回饋。收斂到足夠信心後（停止時）存成新的 `CalibrationVersionStore` 版本並設為使用中，跨 session 持續改善。系統只有兩種配置：行為+rPPG 判斷疲勞、行為+rPPG+心跳帶校正優化 rPPG（無手錶模式）。**P6a 基礎層（2026-07-04）**：現況校正只動 BPM offset、不碰解析參數；已建立「有護欄自適應」基礎層——`CalibrationParams.rppg_params`（向後相容，預設 None → rPPG 逐位元不變）可持久化學到的 ROI 權重/頻帶，`RppgParamAbEvaluator`（`rppg/adaptive_calibration.py`，純運算）以心跳帶真值對現行 vs 候選參數 BPM 做中位殘差 A/B、「明確更好且連續 N 次才採用、變差回退」。**live 自適應迴圈尚未開啟**：P6b-1 per-ROI 緩衝 seam 已完成（2026-07-04，`collect_rppg_roi_sample_with_means` + `RppgEngine.push_roi_means`/`get_roi_window` 旁路緩衝，additive、既有輸出逐位元不變）；P6b-2 套用層已完成（2026-07-04，`rppg/rppg_worker.py` 的 `resolve_roi_weights_override`/`apply_roi_weights_override`/`resolve_effective_rppg_tuning`：`RppgWorker`/`CombinedWorker` 在 `run()` 啟動時一次性解析 active 校準版本的 `rppg_params.roi_weights`，驗證通過就覆寫 ROI base_weights，`rppg_params=None` 或驗證失敗一律逐位元回退；不做執行中熱切換）；P6b-3a 數值層已完成（2026-07-04）：`collect_rppg_roi_sample_with_means(..., weighted_mix=True)` 新增「有效權重加權混合」分支（override 存在時才由呼叫端傳 True，讓候選 ROI 權重真正影響混合 RGB→BPM；等權語意下候選權重對混合訊號無槓桿），`weighted_mix=False`（預設，所有既有呼叫端含 live worker run() 迴圈）逐位元回退等權平均、`rppg/adaptive_calibration.py` 新增 `recompute_raw_bpm_from_roi_windows()`（純函式，靜態權重、取 ROI 共同時間戳交集不插值、重用 `pos_pulse`/`butter_bandpass`/`welch_peak_hz`，作為 current vs candidate 的公平 A/B 比較器）；**P6b-3b 線上協調層已完成（2026-07-04，預設 OFF）**：`config/hr_belt.json` 新增
+`rppg_param_tuning_enabled`（bool，缺項/非 bool 回退 False）開關；`rppg/adaptive_calibration.py`
+新增 `RppgParamCoordinator`（純運算狀態機 idle→gated→evaluating→adopt/rollback→cooldown）
+與純函式 `propose_roi_weight_candidate()`（單 ROI 殘差提示排序 + 固定步長 + protect
+護欄）；`RppgWorker`/`CombinedWorker` 皆新增 `set_candidate_roi_weights()` pending-flag 與
+低頻（~1Hz）`_maybe_emit_candidate_bpm()`（`candidate_bpm_ready(t_now, cur_raw_bpm,
+cand_raw_bpm)` 訊號；無候選時 early-return，逐幀路徑逐位元不變；`weighted_mix` 由
+`roi_override_active = rppg_tuning is not self._tuning` 推導，即「本次 run 是否實際套用了
+ROI 權重覆寫」，涵蓋 production 走 `calibration_loader → rppg_params` 的覆寫路徑）；
+`gui/main_window.py` 的 `_tick_belt_calibration` 開關為 False（預設）時整條協調層不動作，
+開啟時驅動協調層、adopt 時 `save_new_version(offset_bpm=..., rppg_params={"roi_weights":
+...})`（與 offset 同版本存檔、設 active，下次啟動生效）。**觸發 gate（使用者裁決 1，
+2026-07-04）**：進入 evaluating 只看 offset 是否已穩定——`OnlineBpmCalibrator.state()
+.confidence != CONF_LOW`，**殘差大小不再是觸發前置**；候選好壞交由 `RppgParamAbEvaluator`
+「明確更好且連續 N 次才 adopt、變差回退」護欄裁決（唯一安全篩子），配合冷卻期（預設
+120s）與 evaluating 期間不重複產候選防抖。用 `confidence` 而非 `converged`，是因
+`converged` 定義要求殘差 ≤3.0、會排除「offset 穩定但仍有系統性殘差」這個最該調 ROI
+權重的情境；`trigger_residual_bpm` 常數已移除。**停止存檔 carry-forward（使用者裁決 2）**：
+`_persist_belt_calibration()` 存 offset-only 版本時帶入現行 active 版本既有的 `rppg_params`
+（若有），避免同 session 先 adopt ROI 權重、後停止校準時被 offset-only 版本覆蓋遺失；
+active 無 `rppg_params`（OFF 路徑常態）時 carried=None、行為與現況一致。**仍存的已知限制**：
+尚無逐 ROI 對心跳帶真值的即時殘差來源，live 呼叫端固定傳空 `per_roi_residual_hint`，
+候選方向退化為「挑目前權重最小者探索」的啟發式（adopt/rollback 仍由心跳帶真值 A/B
+決定，護欄未繞過）；live 迴圈端到端與離線驗證（需心跳帶硬體）仍屬 P6b 待辦。裝置設定走 `config/hr_belt.json`（機器特定、不入版控，`load_hr_belt_config()`
+容錯載入）；連線中超過 `HR_STALE_AFTER_SEC` 無有效心率由 `hr_is_stale()` 判定並在
+GUI/dashboard 顯示警告；免 GUI 診斷用 `python -m scripts.hr_belt_monitor`。實機 GATT
+對照見 `docs/heart_rate_belt_bluetooth_gatt_profile.md`。
 
 ## 設定與校準檔（config/）
 

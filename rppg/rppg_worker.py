@@ -39,6 +39,7 @@ from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 
 from gui.frame_queue import get_latest
 from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
+from rppg.adaptive_calibration import recompute_raw_bpm_from_roi_windows
 from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rppg
 
 _HAS_MP = True
@@ -1568,6 +1569,15 @@ class RppgWorker(QObject):
     status_changed  = Signal(str)
     failed          = Signal(str)
     finished        = Signal()
+    # P6b-3b：低頻（~1Hz）current vs candidate ROI 權重原始 BPM 重算結果，供 GUI
+    # 協調層（RppgParamCoordinator）做 A/B。(t_now, cur_raw_bpm, cand_raw_bpm)；
+    # 任一值無法算出時以 NaN 表示（float 訊號無法傳遞 None）。僅在
+    # set_candidate_roi_weights() 設有候選時才會發射，見 _maybe_emit_candidate_bpm。
+    candidate_bpm_ready = Signal(float, float, float)
+
+    # P6b-3b：candidate vs current BPM 低頻重算節奏（秒）。刻意與逐幀迴圈脫鉤，
+    # 避免每幀都跑一次 Welch PSD 造成不必要的 CPU 負擔。
+    _CANDIDATE_RECOMPUTE_INTERVAL_SEC = 1.0
 
     def __init__(
         self,
@@ -1588,6 +1598,12 @@ class RppgWorker(QObject):
         # 本參數不改變此既有流程）。
         self._calibration_loader = calibration_loader
         self._roi_weights_override: Optional[dict[str, float]] = None
+        # P6b-3b：候選 ROI 權重（None＝無候選，低頻重算分支整段 early-return，
+        # 逐幀路徑與現況逐位元不變）。pending-flag 熱設定，run() 迴圈輪詢讀取。
+        self._candidate_roi_weights: Optional[dict[str, float]] = None
+        # 初值 0.0 屬刻意：候選剛設定後，只要當前 t_now 大於節奏門檻即立即觸發第一次
+        # 重算（提早讓 GUI 拿到 A/B 首筆），非遺漏的初始化。
+        self._last_candidate_recompute_t: float = 0.0
 
     def request_stop(self) -> None:
         self._stop = True
@@ -1600,6 +1616,49 @@ class RppgWorker(QObject):
         對本次 run() 不生效。
         """
         self._roi_weights_override = weights
+
+    def set_candidate_roi_weights(self, weights: Optional[dict[str, float]]) -> None:
+        """P6b-3b：pending-flag 式熱設定候選 ROI 權重（None＝清除候選，暫停低頻
+        重算與 candidate_bpm_ready 發射）。GUI 主執行緒呼叫；worker 執行緒於下一次
+        低頻檢查週期（至多 ``_CANDIDATE_RECOMPUTE_INTERVAL_SEC`` 秒）讀取生效。
+
+        執行緒安全假設：與 ``set_roi_base_weights_override``/``set_personal_profile``
+        同樣的單一參照賦值模式，CPython GIL 下具原子性，讀寫不需額外鎖；
+        worker 讀到舊值最多一個週期，不影響正確性（下一輪會讀到新值）。
+        """
+        self._candidate_roi_weights = weights
+
+    def _maybe_emit_candidate_bpm(
+        self,
+        engine: "RppgEngine",
+        rppg_tuning: MediaPipeTuning,
+        t_now: float,
+    ) -> None:
+        """P6b-3b：OFF（``self._candidate_roi_weights is None``）時立即返回，不做
+        任何額外運算／引擎存取／訊號發射，確保逐幀路徑與現況逐位元不變。ON 時
+        低頻（約 1Hz）以 ``engine.get_roi_window`` 快照 + ``recompute_raw_bpm_
+        from_roi_windows`` 對現行與候選 ROI 權重各重算一次 raw BPM，並發出
+        ``candidate_bpm_ready`` 供 GUI 協調層做 A/B。
+        """
+        candidate = self._candidate_roi_weights
+        if candidate is None:
+            return
+        if t_now - self._last_candidate_recompute_t < self._CANDIDATE_RECOMPUTE_INTERVAL_SEC:
+            return
+        self._last_candidate_recompute_t = t_now
+
+        roi_windows = {
+            name: engine.get_roi_window(name, self._buffer_sec, t_now)
+            for name, _ in ROI_SPECS
+        }
+        current_weights = dict(rppg_tuning.rppg_roi.base_weights or ROI_BASE_WEIGHTS)
+        cur_bpm = recompute_raw_bpm_from_roi_windows(roi_windows, current_weights)
+        cand_bpm = recompute_raw_bpm_from_roi_windows(roi_windows, candidate)
+        self.candidate_bpm_ready.emit(
+            float(t_now),
+            float(cur_bpm) if cur_bpm is not None else float("nan"),
+            float(cand_bpm) if cand_bpm is not None else float("nan"),
+        )
 
     @Slot()
     def run(self) -> None:
@@ -1657,6 +1716,13 @@ class RppgWorker(QObject):
         rppg_tuning = resolve_effective_rppg_tuning(
             self._tuning, self._roi_weights_override, self._calibration_loader
         )
+        # P6b-3b（審查 B 修正）：weighted_mix 必須由「本次 run 是否實際套用了 ROI
+        # 權重覆寫」推導，而非 self._roi_weights_override（後者僅供測試/顯式呼叫，
+        # production 的覆寫走 calibration_loader → rppg_params，不會設該欄位）。
+        # resolve_effective_rppg_tuning 在無覆寫時原樣回傳 self._tuning（同一物件），
+        # 有覆寫時回傳新 dataclass；以身分比較判定，OFF 時 roi_override_active 為
+        # False → 逐位元回退等權平均，ON（adopt 後重載）時才啟用加權混合槓桿。
+        roi_override_active = rppg_tuning is not self._tuning
 
         self.status_changed.emit("MediaPipe 初始化完成，等待幀資料…")
 
@@ -1704,7 +1770,8 @@ class RppgWorker(QObject):
                             transform_matrix, lm, bgr.shape[1], bgr.shape[0]
                         )
                         sample, roi_weights, roi_valid_count, per_roi_means = collect_rppg_roi_sample_with_means(
-                            bgr, lm, transform_matrix, roi_tracker, rppg_tuning
+                            bgr, lm, transform_matrix, roi_tracker, rppg_tuning,
+                            weighted_mix=roi_override_active,
                         )
                         draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
                         if sample is not None:
@@ -1712,6 +1779,8 @@ class RppgWorker(QObject):
                         # P6b-1 新增：per-ROI 旁路緩衝，不影響上面既有 push() 的輸入/行為。
                         if per_roi_means:
                             engine.push_roi_means(ts, per_roi_means)
+                        # P6b-3b：OFF（無候選）時 early-return，不影響本行以下既有流程。
+                        self._maybe_emit_candidate_bpm(engine, rppg_tuning, ts)
 
                         metrics = engine.compute(
                             ts,

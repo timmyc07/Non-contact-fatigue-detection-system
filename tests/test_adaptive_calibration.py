@@ -9,13 +9,29 @@ import pytest
 
 from gui.mediapipe_tuning import load_mediapipe_tuning
 from rppg.adaptive_calibration import (
+    CONF_HIGH,
     CONF_LOW,
+    COORD_ADOPT,
+    COORD_COOLDOWN,
+    COORD_EVALUATING,
+    COORD_GATED,
+    COORD_IDLE,
+    COORD_ROLLBACK,
+    AdaptiveCalibState,
     OnlineBpmCalibrator,
     RppgParamAbEvaluator,
+    RppgParamCoordinator,
+    propose_roi_weight_candidate,
     recompute_raw_bpm_from_roi_windows,
 )
 from rppg.calibration import apply_bpm_calibration
-from rppg.rppg_worker import ROI_SPECS, RppgEngine, RoiGeometryTracker
+from rppg.rppg_worker import (
+    ROI_SPECS,
+    ROI_WEIGHT_OVERRIDE_MAX_FRACTION,
+    ROI_WEIGHT_OVERRIDE_MIN_FRACTION,
+    RppgEngine,
+    RoiGeometryTracker,
+)
 
 
 def _good_rppg(bpm: float, *, raw_bpm: float | None = None) -> dict:
@@ -442,3 +458,246 @@ def test_recompute_no_active_weight_returns_none() -> None:
     ) is None
     assert recompute_raw_bpm_from_roi_windows({"forehead": (t, r, g, b)}, {}) is None
     assert recompute_raw_bpm_from_roi_windows({}, {}) is None
+
+
+# ── P6b-3b：propose_roi_weight_candidate（候選產生純函式）────────────────────
+
+_ROI_NAMES = [name for name, _ in ROI_SPECS]
+
+
+def _equal_weights() -> dict[str, float]:
+    return {name: 1.0 / len(_ROI_NAMES) for name in _ROI_NAMES}
+
+
+def test_propose_candidate_sums_to_one_and_within_bounds():
+    candidate = propose_roi_weight_candidate(_equal_weights(), {})
+    assert candidate.keys() == set(_ROI_NAMES)
+    assert sum(candidate.values()) == pytest.approx(1.0, abs=1e-9)
+    for v in candidate.values():
+        assert ROI_WEIGHT_OVERRIDE_MIN_FRACTION - 1e-9 <= v <= ROI_WEIGHT_OVERRIDE_MAX_FRACTION + 1e-9
+
+
+def test_propose_candidate_is_deterministic():
+    weights = {"forehead": 0.34, "L_cheek": 0.25, "R_cheek": 0.25, "glabella": 0.16}
+    hint = {"forehead": 3.0, "L_cheek": 1.0, "R_cheek": 5.0, "glabella": 2.0}
+    a = propose_roi_weight_candidate(weights, hint)
+    b = propose_roi_weight_candidate(weights, hint)
+    assert a == b
+
+
+def test_propose_candidate_boosts_lowest_residual_hint_roi():
+    """有提示時：挑對心跳帶殘差最小（表現最好）的 ROI 加重。"""
+    weights = _equal_weights()
+    hint = {"forehead": 0.5, "L_cheek": 5.0, "R_cheek": 5.0, "glabella": 5.0}
+    candidate = propose_roi_weight_candidate(weights, hint, step=0.05)
+    assert candidate["forehead"] > weights["forehead"]
+    # 其餘 ROI 應被等比縮減（不高於原權重）。
+    for name in ("L_cheek", "R_cheek", "glabella"):
+        assert candidate[name] <= weights[name] + 1e-9
+
+
+def test_propose_candidate_no_hint_boosts_smallest_current_weight():
+    """無提示（空字典）fallback：挑目前權重最小者做探索性加重。"""
+    weights = {"forehead": 0.4, "L_cheek": 0.3, "R_cheek": 0.2, "glabella": 0.1}
+    candidate = propose_roi_weight_candidate(weights, {}, step=0.05)
+    assert candidate["glabella"] > weights["glabella"]
+    for name in ("forehead", "L_cheek", "R_cheek"):
+        assert candidate[name] <= weights[name] + 1e-9
+
+
+def test_propose_candidate_ignores_non_finite_hints():
+    """非有限提示值（NaN/Inf）視為無效，不參與挑選；若全部無效則走無提示 fallback。"""
+    weights = {"forehead": 0.4, "L_cheek": 0.3, "R_cheek": 0.2, "glabella": 0.1}
+    hint = {
+        "forehead": float("nan"),
+        "L_cheek": float("inf"),
+        "R_cheek": float("nan"),
+        "glabella": float("inf"),
+    }
+    candidate = propose_roi_weight_candidate(weights, hint, step=0.05)
+    # 全部提示皆非有限值 → 等同無提示 → fallback 挑權重最小者（glabella）。
+    assert candidate["glabella"] > weights["glabella"]
+
+
+def test_propose_candidate_zero_total_weights_falls_back_to_uniform():
+    """current_weights 總和非正（例如全 0）時安全回退為均分，不丟例外。"""
+    candidate = propose_roi_weight_candidate({name: 0.0 for name in _ROI_NAMES}, {})
+    assert sum(candidate.values()) == pytest.approx(1.0, abs=1e-9)
+    for v in candidate.values():
+        assert v > 0.0
+
+
+# ── P6b-3b：RppgParamCoordinator（belt 殘差 → 候選 → A/B → adopt/rollback）───
+
+def _calib_state(*, confidence: str = CONF_HIGH, corrected_residual_bpm: float = 5.0) -> AdaptiveCalibState:
+    """使用者裁決 1 後：觸發 gate 只看 confidence（offset 是否穩定），殘差不再是
+    前置——corrected_residual_bpm 保留欄位僅為讓合成狀態貼近真實，不影響 gate。"""
+    return AdaptiveCalibState(confidence=confidence, corrected_residual_bpm=corrected_residual_bpm)
+
+
+def test_coordinator_starts_idle():
+    coord = RppgParamCoordinator()
+    assert coord.phase == COORD_IDLE
+    assert coord.candidate_roi_weights is None
+
+
+def test_coordinator_gated_when_offset_not_stable():
+    """offset 未穩定（confidence == CONF_LOW）→ gated，不產候選。"""
+    coord = RppgParamCoordinator()
+    candidate = coord.tick(0.0, _calib_state(confidence=CONF_LOW), _equal_weights())
+    assert candidate is None
+    assert coord.phase == COORD_GATED
+
+
+def test_coordinator_evaluates_once_offset_stable_regardless_of_residual():
+    """使用者裁決 1 新語意：offset 穩定（confidence != CONF_LOW）即進 evaluating，
+    即使殘差很小（原本會被『殘差不夠大→gated』擋掉的情形，現在應照樣產候選，
+    由後續 A/B 護欄裁決好壞）。"""
+    coord = RppgParamCoordinator()
+    candidate = coord.tick(
+        0.0, _calib_state(confidence=CONF_HIGH, corrected_residual_bpm=0.5), _equal_weights()
+    )
+    assert candidate is not None
+    assert coord.phase == COORD_EVALUATING
+
+
+def test_coordinator_triggers_evaluating_when_offset_stable():
+    coord = RppgParamCoordinator(step_size=0.05)
+    candidate = coord.tick(0.0, _calib_state(confidence=CONF_HIGH), _equal_weights())
+    assert candidate is not None
+    assert sum(candidate.values()) == pytest.approx(1.0, abs=1e-9)
+    assert coord.phase == COORD_EVALUATING
+    assert coord.candidate_roi_weights == candidate
+
+
+def test_coordinator_does_not_retrigger_while_evaluating():
+    coord = RppgParamCoordinator()
+    first = coord.tick(0.0, _calib_state(confidence=CONF_HIGH), _equal_weights())
+    assert first is not None
+    again = coord.tick(1.0, _calib_state(confidence=CONF_HIGH), _equal_weights())
+    assert again is None
+    assert coord.phase == COORD_EVALUATING
+    assert coord.candidate_roi_weights == first
+
+
+def test_coordinator_observe_ab_noop_when_not_evaluating():
+    coord = RppgParamCoordinator()
+    verdict = coord.observe_ab(0.0, 70.0, 72.0, 71.0)
+    assert verdict is None
+    assert coord.phase == COORD_IDLE
+
+
+def _drive_to_evaluating(coord: RppgParamCoordinator) -> dict:
+    candidate = coord.tick(0.0, _calib_state(confidence=CONF_HIGH), _equal_weights())
+    assert candidate is not None
+    assert coord.phase == COORD_EVALUATING
+    return candidate
+
+
+def test_coordinator_adopt_transition_and_records_adopted_weights():
+    coord = RppgParamCoordinator()
+    candidate = _drive_to_evaluating(coord)
+
+    verdict = None
+    for i in range(8):
+        # belt=70：現行殘差 10（80-70），候選殘差 1（71-70）— 候選明顯較佳。
+        verdict = coord.observe_ab(float(i), 70.0, 80.0, 71.0)
+    assert verdict is not None
+    assert verdict.verdict == "adopt"
+    assert coord.phase == COORD_ADOPT
+    assert coord.state().adopted_roi_weights == candidate
+
+
+def test_coordinator_rollback_transition():
+    coord = RppgParamCoordinator()
+    _drive_to_evaluating(coord)
+
+    verdict = None
+    for i in range(8):
+        # belt=70：現行殘差 1（71-70），候選殘差 10（80-70）— 候選明顯較差。
+        verdict = coord.observe_ab(float(i), 70.0, 71.0, 80.0)
+    assert verdict is not None
+    assert verdict.verdict == "rollback"
+    assert coord.phase == COORD_ROLLBACK
+
+
+def test_coordinator_enters_cooldown_after_adopt_on_next_tick():
+    coord = RppgParamCoordinator(cooldown_sec=120.0)
+    _drive_to_evaluating(coord)
+    for i in range(8):
+        coord.observe_ab(float(i), 70.0, 80.0, 71.0)
+    assert coord.phase == COORD_ADOPT
+
+    candidate = coord.tick(100.0, _calib_state(confidence=CONF_HIGH), _equal_weights())
+    assert candidate is None
+    assert coord.phase == COORD_COOLDOWN
+    assert coord.candidate_roi_weights is None
+
+
+def test_coordinator_stays_in_cooldown_until_elapsed_then_can_retrigger():
+    coord = RppgParamCoordinator(cooldown_sec=120.0)
+    _drive_to_evaluating(coord)
+    for i in range(8):
+        coord.observe_ab(float(i), 70.0, 80.0, 71.0)
+    coord.tick(100.0, _calib_state(confidence=CONF_HIGH), _equal_weights())
+    assert coord.phase == COORD_COOLDOWN
+    cooldown_until = coord.state().cooldown_until
+
+    # 冷卻未滿：仍維持 cooldown，不觸發。
+    still_cooling = coord.tick(
+        cooldown_until - 1.0, _calib_state(confidence=CONF_HIGH), _equal_weights()
+    )
+    assert still_cooling is None
+    assert coord.phase == COORD_COOLDOWN
+
+    # 冷卻期滿：同一次 tick 內落回 idle 並可重新觸發。
+    candidate = coord.tick(
+        cooldown_until + 1.0, _calib_state(confidence=CONF_HIGH), _equal_weights()
+    )
+    assert candidate is not None
+    assert coord.phase == COORD_EVALUATING
+
+
+def test_coordinator_reset_clears_all_state():
+    coord = RppgParamCoordinator()
+    _drive_to_evaluating(coord)
+    for i in range(8):
+        coord.observe_ab(float(i), 70.0, 80.0, 71.0)
+    assert coord.phase == COORD_ADOPT
+
+    coord.reset()
+    st = coord.state()
+    assert st.phase == COORD_IDLE
+    assert st.candidate_roi_weights is None
+    assert st.adopted_roi_weights is None
+    assert st.verdict is None
+    assert st.cooldown_until == 0.0
+
+
+def test_coordinator_observe_ab_noop_in_adopt_state_before_cooldown():
+    """審查 A 補測：adopt 判決後、下一次 tick 進 cooldown 前的中間態，若呼叫端多送
+    一筆 observe_ab，必須安全 no-op（phase != evaluating），不改變已定案的 adopt。"""
+    coord = RppgParamCoordinator()
+    _drive_to_evaluating(coord)
+    for i in range(8):
+        coord.observe_ab(float(i), 70.0, 80.0, 71.0)
+    assert coord.phase == COORD_ADOPT
+    adopted_before = coord.state().adopted_roi_weights
+
+    extra = coord.observe_ab(99.0, 70.0, 71.0, 80.0)  # 額外一筆（且方向相反）
+    assert extra is None                              # 中間態 no-op
+    assert coord.phase == COORD_ADOPT                 # 仍維持 adopt 終態
+    assert coord.state().adopted_roi_weights == adopted_before
+
+
+def test_coordinator_observe_ab_noop_in_rollback_state_before_cooldown():
+    """同上，補測 rollback 中間態。"""
+    coord = RppgParamCoordinator()
+    _drive_to_evaluating(coord)
+    for i in range(8):
+        coord.observe_ab(float(i), 70.0, 71.0, 80.0)
+    assert coord.phase == COORD_ROLLBACK
+
+    extra = coord.observe_ab(99.0, 70.0, 80.0, 71.0)
+    assert extra is None
+    assert coord.phase == COORD_ROLLBACK

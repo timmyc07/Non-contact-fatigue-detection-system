@@ -48,9 +48,9 @@ from gui.belt_runtime import BeltRuntime
 from gui.personal_profile import PersonalBaselineCollector, PersonalProfileStore
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
-from rppg.hr_belt_ble import hr_is_stale, load_hr_belt_config
-from rppg.rppg_worker import RppgWorker
-from rppg.adaptive_calibration import CONF_LOW, OnlineBpmCalibrator
+from rppg.hr_belt_ble import HrBeltConfig, hr_is_stale, load_hr_belt_config
+from rppg.rppg_worker import RppgWorker, ROI_BASE_WEIGHTS, resolve_roi_weights_override
+from rppg.adaptive_calibration import CONF_LOW, OnlineBpmCalibrator, RppgParamCoordinator
 from rppg.calibration import (
     CalibrationVersionStore,
     apply_calibration_to_metrics,
@@ -304,6 +304,13 @@ class MainWindow(QMainWindow):
         # 記錄最後餵給校正器的 rPPG metrics 物件，避免 rPPG 凍結時把同一筆
         # 樣本每秒重複計入而扭曲殘差（每次 rPPG 更新都是新物件，凍結則同物件）。
         self._last_calib_fed_metrics: object | None = None
+        # P6b-3b：rPPG ROI 權重線上協調層（預設 OFF，見 HrBeltConfig.
+        # rppg_param_tuning_enabled）。協調層本身與其產生的候選皆只在心跳帶校準
+        # 啟動且設定檔開關為 True 時才建立；為 None 時 GUI tick / worker 候選重算
+        # 全部 early-return，逐位元回退現況。
+        self._belt_cfg: HrBeltConfig | None = None
+        self._rppg_param_coordinator: RppgParamCoordinator | None = None
+        self._rppg_param_current_weights: dict[str, float] = dict(ROI_BASE_WEIGHTS)
         self._belt_ui_timer = QTimer(self)
         self._belt_ui_timer.setInterval(1000)
         self._belt_ui_timer.timeout.connect(self._tick_belt_calibration)
@@ -2063,6 +2070,7 @@ class MainWindow(QMainWindow):
 
     def _start_belt_calibration(self) -> None:
         belt_cfg = load_hr_belt_config()
+        self._belt_cfg = belt_cfg
         if not self._belt_runtime.belt_running:
             self._belt_runtime.hub.clear()
             err = self._belt_runtime.start_belt(belt_cfg)
@@ -2091,12 +2099,40 @@ class MainWindow(QMainWindow):
         self._belt_calibrator = OnlineBpmCalibrator(initial_offset=seed)
         self._belt_ui_timer.start()
         self._append_log(f"▶ 心跳帶真值校準啟動（背景參考，起始 offset {seed:+.1f} BPM）")
+        # P6b-3b：協調層開關（預設 False）。開啟時才建立協調層並記錄目前生效
+        # 的 ROI 權重作為 A/B 的「現行」基準；關閉時協調層維持 None，
+        # _tick_rppg_param_coordinator / worker 候選重算全部 early-return。
+        if belt_cfg.rppg_param_tuning_enabled:
+            self._rppg_param_coordinator = RppgParamCoordinator()
+            self._rppg_param_current_weights = self._resolve_current_roi_weights()
+            self._append_log("▶ rPPG 參數線上協調層已啟用（P6b-3b，實驗性）")
+        else:
+            self._rppg_param_coordinator = None
         self._update_belt_status_label()
+
+    def _resolve_current_roi_weights(self) -> dict[str, float]:
+        """P6b-3b：取得目前生效的 ROI base_weights，作為協調層 A/B 的「現行」基準。
+
+        優先讀取目前 active 校準版本的 ``rppg_params.roi_weights``（P6b-2 覆寫，
+        經 :func:`resolve_roi_weights_override` 驗證/clamp/正規化）；無覆寫或載入
+        失敗一律回退預設 :data:`ROI_BASE_WEIGHTS`（不丟例外）。
+        """
+        try:
+            version = self._rppg_calibration_store.get_active_version()
+            override = resolve_roi_weights_override(getattr(version.params, "rppg_params", None))
+        except Exception:
+            override = None
+        return dict(override) if override is not None else dict(ROI_BASE_WEIGHTS)
 
     def _stop_belt_calibration(self) -> None:
         self._belt_ui_timer.stop()
         self._persist_belt_calibration()
         self._belt_calibrator = None
+        # P6b-3b：協調層與任何已下發的候選一併清除，避免停止後 worker 仍持續
+        # 低頻重算一個不再被追蹤的候選（功能上無害——_on_candidate_bpm_ready
+        # 會因 self._rppg_param_coordinator is None 而 no-op——但屬多餘 CPU 成本）。
+        self._rppg_param_coordinator = None
+        self._clear_candidate_roi_weights()
         if self._belt_runtime.belt_running:
             self._belt_runtime.stop_belt()
         self._append_log("■ 心跳帶真值校準停止。")
@@ -2111,13 +2147,25 @@ class MainWindow(QMainWindow):
         if st.confidence == CONF_LOW or st.accepted_observations < 12:
             self._append_log("○ 心跳帶校準樣本不足或信心低，未存成校準版本。")
             return
+        # 使用者裁決 2：carry-forward 現行 active 版本已 adopt 的 rppg_params，避免
+        # 同 session 內先 adopt ROI 權重、後停止校準時被本 offset-only 新版本覆蓋遺失。
+        # 只在現行 active 版本確實帶 rppg_params 時帶入；沒有就維持只存 offset
+        # （OFF 路徑的 active 版本永遠無 rppg_params，故 carried=None、逐位元不變）。
+        carried_rppg_params = None
+        try:
+            active = self._rppg_calibration_store.get_active_version()
+            carried_rppg_params = getattr(active.params, "rppg_params", None)
+        except Exception:
+            carried_rppg_params = None
         try:
             version = self._rppg_calibration_store.save_new_version(
                 name=f"自適應校準 {time.strftime('%m-%d %H:%M')}",
                 offset_bpm=float(st.offset_bpm),
+                rppg_params=carried_rppg_params,
                 note=(
                     f"心跳帶真值線上自適應；剩餘殘差 {st.corrected_residual_bpm:+.1f} BPM，"
                     f"信心 {st.confidence}，配對 {st.pairs_used}"
+                    + ("；保留已採用的 ROI 權重" if carried_rppg_params else "")
                 ),
                 session={
                     "source": "hr_belt_adaptive",
@@ -2150,7 +2198,94 @@ class MainWindow(QMainWindow):
                 fresh = not hr_is_stale(st)
                 cal.observe(time.time(), float(st.bpm), contact_ok, fresh, metrics_to_feed_dict(r))
                 self._last_calib_fed_metrics = r
+        self._tick_rppg_param_coordinator(cal)
         self._update_belt_status_label()
+
+    # ── P6b-3b：rPPG 參數線上協調層（GUI 薄接線）───────────────────────────────
+
+    def _tick_rppg_param_coordinator(self, cal: OnlineBpmCalibrator | None) -> None:
+        """OFF（協調層未建立，即 rppg_param_tuning_enabled=False 或未啟動心跳帶
+        校準）時立即返回，不動作——維持與現況逐位元相同。ON 時每秒推進一次協調層
+        狀態機；產生新候選時下發給 worker。
+
+        已知限制（**待使用者裁決**）：目前未提供逐 ROI 對心跳帶真值的殘差提示
+        （``per_roi_residual_hint``），一律傳空字典——見
+        :func:`rppg.adaptive_calibration.propose_roi_weight_candidate` 文件字串
+        「已知限制」段落。候選**方向**為啟發式（挑目前權重最小者探索），但
+        adopt/rollback 仍由心跳帶真值 A/B 決定，護欄未被繞過。
+        """
+        coord = self._rppg_param_coordinator
+        if coord is None or cal is None:
+            return
+        candidate = coord.tick(time.time(), cal.state(), self._rppg_param_current_weights)
+        if candidate is not None:
+            self._dispatch_candidate_roi_weights(candidate)
+            self._append_log(f"○ rPPG 參數候選已下發，等待心跳帶真值 A/B：{candidate}")
+
+    def _dispatch_candidate_roi_weights(self, weights: dict[str, float] | None) -> None:
+        """把候選 ROI 權重（或 None＝清除）下發給目前運行中的 worker。"""
+        if self._combined_worker is not None:
+            self._combined_worker.set_candidate_roi_weights(weights)
+        if self._rppg_worker is not None:
+            self._rppg_worker.set_candidate_roi_weights(weights)
+
+    def _clear_candidate_roi_weights(self) -> None:
+        self._dispatch_candidate_roi_weights(None)
+
+    def _on_candidate_bpm_ready(self, t_now: float, cur_bpm: float, cand_bpm: float) -> None:
+        """接收 worker 低頻重算的 current/candidate raw BPM，餵協調層做 A/B。
+
+        協調層為 None（OFF）時直接返回；心跳帶未連線或 BPM 無效時也不觀測
+        （A/B 的真值必須是有效心跳帶讀數）。NaN（重算資料不足）以 ``!= self``
+        判斷並跳過本筆，不計入配對。
+        """
+        coord = self._rppg_param_coordinator
+        if coord is None:
+            return
+        st = self._belt_runtime.belt_status()
+        if st is None or st.state != "connected" or st.bpm <= 0:
+            return
+        if cur_bpm != cur_bpm or cand_bpm != cand_bpm:  # NaN 檢查（NaN != NaN）
+            return
+        verdict = coord.observe_ab(t_now, float(st.bpm), float(cur_bpm), float(cand_bpm))
+        if verdict is None:
+            return
+        if verdict.verdict == "adopt":
+            self._adopt_rppg_param_candidate()
+        elif verdict.verdict == "rollback":
+            self._append_log(
+                f"○ rPPG 參數候選未通過心跳帶真值 A/B，已回退（現行殘差 "
+                f"{verdict.current_residual_bpm:.1f}，候選殘差 {verdict.candidate_residual_bpm:.1f}）"
+            )
+            self._clear_candidate_roi_weights()
+
+    def _adopt_rppg_param_candidate(self) -> None:
+        """A/B 判 adopt：把候選 ROI 權重與目前 offset 一併存成新校準版本
+        （自動設為 active，下次啟動生效），並更新協調層下一輪的「現行」基準。
+        """
+        coord = self._rppg_param_coordinator
+        if coord is None:
+            return
+        weights = coord.state().adopted_roi_weights
+        if not weights:
+            self._clear_candidate_roi_weights()
+            return
+        cal = self._belt_calibrator
+        offset = float(cal.state().offset_bpm) if cal is not None else 0.0
+        try:
+            version = self._rppg_calibration_store.save_new_version(
+                name=f"rPPG 參數自適應 {time.strftime('%m-%d %H:%M')}",
+                offset_bpm=offset,
+                rppg_params={"roi_weights": dict(weights)},
+                note="rPPG ROI 權重線上自適應（P6b-3b）：心跳帶真值 A/B 證實優於現行參數。",
+            )
+            self._rppg_param_current_weights = dict(weights)
+            self._append_log(
+                f"✓ rPPG 參數候選已採用，存為校準版本 {version.id}（下次啟動生效，已設為使用中）"
+            )
+        except Exception as exc:
+            self._append_log(f"⚠ 儲存 rPPG 參數候選失敗：{exc}")
+        self._clear_candidate_roi_weights()
 
     def _update_belt_status_label(self) -> None:
         """輪詢心跳帶連線與校準狀態並更新狀態列（QTimer 每秒觸發）。"""
@@ -2264,6 +2399,7 @@ class MainWindow(QMainWindow):
         worker.face_detected.connect(self._on_face_detected)
         worker.status_changed.connect(self._on_combined_status)
         worker.failed.connect(self._on_combined_failed)
+        worker.candidate_bpm_ready.connect(self._on_candidate_bpm_ready)
         worker.finished.connect(thread.quit)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(worker.deleteLater)
@@ -2336,6 +2472,7 @@ class MainWindow(QMainWindow):
         worker.face_detected.connect(self._on_face_detected)
         worker.status_changed.connect(self._on_rppg_status)
         worker.failed.connect(self._on_rppg_failed)
+        worker.candidate_bpm_ready.connect(self._on_candidate_bpm_ready)
         worker.finished.connect(thread.quit)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(worker.deleteLater)
