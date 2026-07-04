@@ -19,6 +19,55 @@ if TYPE_CHECKING:
     from gui.fatigue_scorer import FusedFatigueScore
 
 
+# ── 深色監控風視覺 token ─────────────────────────────────────────────────────
+# 純視覺常數，供本檔案內所有 inline setStyleSheet / QColor 集中取用；
+# 不影響任何資料流、訊號連線或數值計算。
+#
+# 背景層次：最底 / 卡片 / 輸入元件
+_BG_BASE      = "#0d1117"
+_BG_PANEL     = "#1c2128"
+_BG_INPUT     = "#21262d"
+# 邊框：一般 / 強調
+_BORDER       = "#30363d"
+_BORDER_ACCENT = "#444c56"
+# 文字：主 / 次 / 弱
+_TXT_PRIMARY   = "#e6edf3"
+_TXT_SECONDARY = "#8b949e"
+_TXT_WEAK      = "#6e7681"
+# 主色（藍）
+_ACCENT       = "#388bfd"
+_ACCENT_HOVER = "#58a6ff"
+# 心率／訊號類強調色（非疲勞等級語意，沿用暖色系以與疲勞狀態色區隔）
+_HEARTBEAT    = "#ff6b6b"
+_WARN         = "#ffa94d"
+
+# 疲勞狀態色（對齊 gui/fatigue_scorer.py `_LEVELS` 的 5 段語意，深色底可讀版）
+_LEVEL_ALERT    = "#3fb950"  # 清醒
+_LEVEL_MILD     = "#b5c92e"  # 輕度疲勞
+_LEVEL_MODERATE = "#f0883e"  # 中度疲勞
+_LEVEL_HIGH     = "#f85149"  # 高度疲勞
+_LEVEL_CRITICAL = "#da3633"  # 極度危險
+
+# 字級階層
+_FS_MAJOR       = 26  # 主要數值（BPM、疲勞總分等一眼看到的大字）24-28px / 700
+_FS_SECONDARY   = 17  # 次要數值 16-18px / 600
+_FS_GROUP_TITLE = 13  # 區塊/分組標題 13px / 600
+_FS_LABEL       = 12  # 欄位標籤 12px / 500
+_FS_VALUE       = 15  # 一般數值 15px / 600
+_FS_DENSE       = 12  # 高密度單行指標（微表情/注視/頭部列）沿用略放大的緊湊字級
+
+# 卡片分組樣式（rPPG / 行為 / 融合 皆共用同一視覺語彙）
+_PANEL_STYLE = (
+    f"background-color: {_BG_PANEL}; border-radius: 10px; border: 1px solid {_BORDER};"
+)
+_GROUP_TITLE_STYLE = (
+    f"color: {_TXT_PRIMARY}; font-size: {_FS_GROUP_TITLE}px; font-weight: 600; border: none;"
+)
+_SUBGROUP_LABEL_STYLE = (
+    f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px; font-weight: 600; min-width: 52px;"
+)
+
+
 # ── Waveform mini-widget ─────────────────────────────────────────────────────
 
 class _WaveformWidget(QWidget):
@@ -29,7 +78,7 @@ class _WaveformWidget(QWidget):
         self.setMinimumHeight(48)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._data: list[float] = []
-        self._color = QColor("#40c057")
+        self._color = QColor(_ACCENT_HOVER)
 
     def set_data(self, data: list[float]) -> None:
         self._data = list(data)
@@ -39,10 +88,10 @@ class _WaveformWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        painter.fillRect(0, 0, w, h, QColor("#0d1117"))
+        painter.fillRect(0, 0, w, h, QColor(_BG_BASE))
 
         if len(self._data) < 2:
-            painter.setPen(QColor("#495057"))
+            painter.setPen(QColor(_TXT_WEAK))
             painter.drawText(
                 QRect(0, 0, w, h),
                 Qt.AlignmentFlag.AlignCenter,
@@ -86,7 +135,7 @@ class _ScoreBar(QWidget):
         self.setFixedHeight(14)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._value: float = 0.0
-        self._color = QColor("#40c057")
+        self._color = QColor(_ACCENT_HOVER)
 
     def set_value(self, v: float, color: QColor | None = None) -> None:
         self._value = max(0.0, min(1.0, v))
@@ -101,7 +150,7 @@ class _ScoreBar(QWidget):
 
         # Track
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#1e2228"))
+        painter.setBrush(QColor(_BG_INPUT))
         painter.drawRoundedRect(0, 0, w, h, 3, 3)
 
         # Fill
@@ -112,7 +161,7 @@ class _ScoreBar(QWidget):
 
         # Percentage text
         pct_txt = f"{self._value * 100:.0f}%"
-        painter.setPen(QColor("#dee2e6"))
+        painter.setPen(QColor(_TXT_PRIMARY))
         painter.setFont(QFont("Segoe UI", 8))
         painter.drawText(
             QRect(0, 0, w, h),
@@ -131,7 +180,7 @@ class _GaugeWidget(QWidget):
         super().__init__(parent)
         self.setFixedSize(110, 110)
         self._value: float = 0.0
-        self._color = QColor("#40c057")
+        self._color = QColor(_LEVEL_ALERT)
         self._label = "清醒"
 
     def set_value(self, v: float, color: QColor, label: str) -> None:
@@ -147,7 +196,7 @@ class _GaugeWidget(QWidget):
         cx, cy, r = w // 2, h // 2, min(w, h) // 2 - 8
 
         # Background ring
-        pen = QPen(QColor("#1e2228"), 10)
+        pen = QPen(QColor(_BG_INPUT), 10)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.drawArc(cx - r, cy - r, r * 2, r * 2, 225 * 16, -270 * 16)
@@ -170,7 +219,7 @@ class _GaugeWidget(QWidget):
             f"{self._value * 100:.0f}",
         )
         # Unit
-        painter.setPen(QColor("#868e96"))
+        painter.setPen(QColor(_TXT_SECONDARY))
         painter.setFont(QFont("Segoe UI", 8))
         painter.drawText(
             QRect(0, cy + 6, w, 16),
@@ -212,16 +261,18 @@ class PreviewOverlayWindow(QWidget):
         # ── Header ──────────────────────────────────────────────────────────
         header = QFrame()
         header.setStyleSheet(
-            "background-color: rgba(20,22,26,230);"
+            f"background-color: rgba(13,17,23,235);"
             "border-radius: 8px 8px 0 0;"
-            "border: 1px solid #2f3640; border-bottom: none;"
+            f"border: 1px solid {_BORDER}; border-bottom: none;"
         )
         hl = QHBoxLayout(header)
         hl.setContentsMargins(10, 6, 10, 6)
         self._lbl_fps = QLabel("FPS：—")
-        self._lbl_fps.setStyleSheet("color: #74c0fc; font-weight: 600; font-size: 14px;")
+        self._lbl_fps.setStyleSheet(
+            f"color: {_ACCENT_HOVER}; font-weight: 600; font-size: {_FS_VALUE}px;"
+        )
         self._lbl_title = QLabel("RGB 預覽")
-        self._lbl_title.setStyleSheet("color: #adb5bd; font-size: 12px;")
+        self._lbl_title.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px;")
         hl.addWidget(self._lbl_fps)
         hl.addStretch(1)
         hl.addWidget(self._lbl_title)
@@ -229,7 +280,9 @@ class PreviewOverlayWindow(QWidget):
 
         # ── Body ────────────────────────────────────────────────────────────
         body = QFrame()
-        body.setStyleSheet("background-color: #0d0f12; border: 1px solid #2f3640; border-top: none;")
+        body.setStyleSheet(
+            f"background-color: {_BG_BASE}; border: 1px solid {_BORDER}; border-top: none;"
+        )
         bl = QVBoxLayout(body)
         bl.setContentsMargins(10, 10, 10, 10)
         bl.setSpacing(8)
@@ -239,31 +292,34 @@ class PreviewOverlayWindow(QWidget):
         self._lbl_video.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_video.setFixedHeight(240)
         self._lbl_video.setStyleSheet(
-            "background-color: #14181d; border-radius: 6px; color: #495057;"
+            f"background-color: {_BG_BASE}; border-radius: 6px; color: {_TXT_WEAK};"
         )
         self._lbl_video.setText("等待影像…")
         bl.addWidget(self._lbl_video)
 
         # ── rPPG metrics panel (hidden until enabled) ────────────────────────
         self._rppg_panel = QFrame()
-        self._rppg_panel.setStyleSheet(
-            "background-color: #111418; border-radius: 6px; border: 1px solid #2a2f3a;"
-        )
+        self._rppg_panel.setStyleSheet(_PANEL_STYLE)
         self._rppg_panel.hide()
         rp = QVBoxLayout(self._rppg_panel)
-        rp.setContentsMargins(12, 10, 12, 10)
+        rp.setContentsMargins(14, 12, 14, 12)
         rp.setSpacing(6)
+
+        # Group title
+        lbl_rppg_group = QLabel("❤  rPPG 生理訊號")
+        lbl_rppg_group.setStyleSheet(_GROUP_TITLE_STYLE)
+        rp.addWidget(lbl_rppg_group)
 
         # Row 1: BPM (large) + face status
         bpm_row = QHBoxLayout()
-        lbl_bpm_cap = QLabel("❤  心率")
-        lbl_bpm_cap.setStyleSheet("color: #868e96; font-size: 11px;")
+        lbl_bpm_cap = QLabel("心率")
+        lbl_bpm_cap.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px; font-weight: 500;")
         self._lbl_bpm = QLabel("— BPM")
         self._lbl_bpm.setStyleSheet(
-            "color: #ff6b6b; font-size: 22px; font-weight: bold;"
+            f"color: {_HEARTBEAT}; font-size: {_FS_MAJOR}px; font-weight: 700;"
         )
         self._lbl_face_status = QLabel("未偵測到臉部")
-        self._lbl_face_status.setStyleSheet("color: #868e96; font-size: 11px;")
+        self._lbl_face_status.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px;")
         bpm_row.addWidget(lbl_bpm_cap)
         bpm_row.addWidget(self._lbl_bpm)
         bpm_row.addStretch(1)
@@ -273,22 +329,29 @@ class PreviewOverlayWindow(QWidget):
         # Warmup progress bar
         warm_row = QHBoxLayout()
         lbl_warm = QLabel("暖機")
-        lbl_warm.setStyleSheet("color: #868e96; font-size: 11px; min-width: 32px;")
+        lbl_warm.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px; min-width: 32px;")
         self._bar_warmup = QProgressBar()
         self._bar_warmup.setRange(0, 100)
         self._bar_warmup.setValue(0)
         self._bar_warmup.setTextVisible(False)
         self._bar_warmup.setFixedHeight(6)
         self._bar_warmup.setStyleSheet(
-            "QProgressBar{background:#1e2228; border-radius:3px;}"
-            "QProgressBar::chunk{background:#4dabf7; border-radius:3px;}"
+            f"QProgressBar{{background:{_BG_INPUT}; border-radius:3px;}}"
+            f"QProgressBar::chunk{{background:{_ACCENT_HOVER}; border-radius:3px;}}"
         )
         self._lbl_warmup_pct = QLabel("0%")
-        self._lbl_warmup_pct.setStyleSheet("color: #4dabf7; font-size: 11px; min-width: 30px;")
+        self._lbl_warmup_pct.setStyleSheet(f"color: {_ACCENT_HOVER}; font-size: {_FS_LABEL}px; min-width: 30px;")
         warm_row.addWidget(lbl_warm)
         warm_row.addWidget(self._bar_warmup, 1)
         warm_row.addWidget(self._lbl_warmup_pct)
         rp.addLayout(warm_row)
+
+        # ── HRV 子分組標題 ────────────────────────────────────────────────
+        lbl_hrv_group = QLabel("HRV 心率變異")
+        lbl_hrv_group.setStyleSheet(
+            f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px; font-weight: 600; margin-top: 4px;"
+        )
+        rp.addWidget(lbl_hrv_group)
 
         # Row 2: HRV metrics
         hrv_row = QHBoxLayout()
@@ -315,12 +378,12 @@ class PreviewOverlayWindow(QWidget):
         rp.addLayout(stress_row)
 
         self._lbl_rppg_diag = QLabel("Pose: —  ROI: —")
-        self._lbl_rppg_diag.setStyleSheet("color: #6c757d; font-size: 10px;")
+        self._lbl_rppg_diag.setStyleSheet(f"color: {_TXT_WEAK}; font-size: 10px;")
         rp.addWidget(self._lbl_rppg_diag)
 
         # Waveform
         lbl_wf_cap = QLabel("帶通脈搏波形（POS）")
-        lbl_wf_cap.setStyleSheet("color: #495057; font-size: 10px; margin-top: 2px;")
+        lbl_wf_cap.setStyleSheet(f"color: {_TXT_WEAK}; font-size: {_FS_LABEL}px; margin-top: 2px;")
         rp.addWidget(lbl_wf_cap)
         self._waveform = _WaveformWidget()
         rp.addWidget(self._waveform)
@@ -329,21 +392,19 @@ class PreviewOverlayWindow(QWidget):
 
         # ── Fatigue / Behaviour Alertness panel (hidden until enabled) ────────
         self._fatigue_panel = QFrame()
-        self._fatigue_panel.setStyleSheet(
-            "background-color: #111418; border-radius: 6px; border: 1px solid #2a3040;"
-        )
+        self._fatigue_panel.setStyleSheet(_PANEL_STYLE)
         self._fatigue_panel.hide()
         fp = QVBoxLayout(self._fatigue_panel)
-        fp.setContentsMargins(12, 10, 12, 10)
+        fp.setContentsMargins(14, 12, 14, 12)
         fp.setSpacing(6)
 
         # Title row: status badge + calibration bar
         fat_title_row = QHBoxLayout()
         lbl_fat_icon = QLabel("🔍 行為警覺")
-        lbl_fat_icon.setStyleSheet("color: #74c0fc; font-size: 11px; font-weight: 600;")
+        lbl_fat_icon.setStyleSheet(_GROUP_TITLE_STYLE)
         self._lbl_fat_status = QLabel("—")
         self._lbl_fat_status.setStyleSheet(
-            "color: #adb5bd; font-size: 13px; font-weight: bold;"
+            f"color: {_TXT_SECONDARY}; font-size: {_FS_SECONDARY}px; font-weight: 700;"
         )
         fat_title_row.addWidget(lbl_fat_icon)
         fat_title_row.addStretch(1)
@@ -353,15 +414,15 @@ class PreviewOverlayWindow(QWidget):
         # Calibration bar
         fat_calib_row = QHBoxLayout()
         lbl_fat_calib = QLabel("校準")
-        lbl_fat_calib.setStyleSheet("color: #868e96; font-size: 10px; min-width: 30px;")
+        lbl_fat_calib.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px; min-width: 30px;")
         self._bar_fat_calib = QProgressBar()
         self._bar_fat_calib.setRange(0, 100)
         self._bar_fat_calib.setValue(0)
         self._bar_fat_calib.setTextVisible(False)
         self._bar_fat_calib.setFixedHeight(5)
         self._bar_fat_calib.setStyleSheet(
-            "QProgressBar{background:#1e2228;border-radius:2px;}"
-            "QProgressBar::chunk{background:#63e6be;border-radius:2px;}"
+            f"QProgressBar{{background:{_BG_INPUT};border-radius:2px;}}"
+            f"QProgressBar::chunk{{background:{_LEVEL_ALERT};border-radius:2px;}}"
         )
         fat_calib_row.addWidget(lbl_fat_calib)
         fat_calib_row.addWidget(self._bar_fat_calib, 1)
@@ -384,21 +445,19 @@ class PreviewOverlayWindow(QWidget):
         micro_row = QHBoxLayout()
         micro_row.setSpacing(16)
         lbl_micro_cap = QLabel("微表情 ›")
-        lbl_micro_cap.setStyleSheet(
-            "color: #868e96; font-size: 10px; min-width: 52px;"
-        )
+        lbl_micro_cap.setStyleSheet(_SUBGROUP_LABEL_STYLE)
         self._lbl_squint = QLabel("瞇眼: —")
-        self._lbl_squint.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_squint.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_frown  = QLabel("皺眉: —")
-        self._lbl_frown.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_frown.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_iris   = QLabel("虹膜比: —")
-        self._lbl_iris.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_iris.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_nose   = QLabel("鼻動: —")
-        self._lbl_nose.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_nose.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_mouth  = QLabel("嘴開: —")
-        self._lbl_mouth.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_mouth.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_lidbal = QLabel("眼瞼差: —")
-        self._lbl_lidbal.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_lidbal.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         micro_row.addWidget(lbl_micro_cap)
         micro_row.addWidget(self._lbl_squint)
         micro_row.addWidget(self._lbl_frown)
@@ -413,15 +472,13 @@ class PreviewOverlayWindow(QWidget):
         gaze_row = QHBoxLayout()
         gaze_row.setSpacing(16)
         lbl_gaze_cap = QLabel("注視 ›")
-        lbl_gaze_cap.setStyleSheet(
-            "color: #868e96; font-size: 10px; min-width: 52px;"
-        )
+        lbl_gaze_cap.setStyleSheet(_SUBGROUP_LABEL_STYLE)
         self._lbl_gaze_stab = QLabel("穩定度: —")
-        self._lbl_gaze_stab.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_gaze_stab.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_fixation  = QLabel("凝視: —")
-        self._lbl_fixation.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_fixation.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_saccade   = QLabel("掃視: —/分")
-        self._lbl_saccade.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_saccade.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         gaze_row.addWidget(lbl_gaze_cap)
         gaze_row.addWidget(self._lbl_gaze_stab)
         gaze_row.addWidget(self._lbl_fixation)
@@ -433,17 +490,15 @@ class PreviewOverlayWindow(QWidget):
         head_row = QHBoxLayout()
         head_row.setSpacing(16)
         lbl_head_cap = QLabel("頭部 ›")
-        lbl_head_cap.setStyleSheet(
-            "color: #868e96; font-size: 10px; min-width: 52px;"
-        )
+        lbl_head_cap.setStyleSheet(_SUBGROUP_LABEL_STYLE)
         self._lbl_pitch      = QLabel("Pitch: —")
-        self._lbl_pitch.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_pitch.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_yaw_roll   = QLabel("Yaw/Roll: —")
-        self._lbl_yaw_roll.setStyleSheet("color: #868e96; font-size: 11px;")
+        self._lbl_yaw_roll.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_DENSE}px;")
         self._lbl_microsleep = QLabel("微睡眠: 0")
-        self._lbl_microsleep.setStyleSheet("color: #dee2e6; font-size: 11px;")
+        self._lbl_microsleep.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         self._lbl_yawn       = QLabel("哈欠: 0")
-        self._lbl_yawn.setStyleSheet("color: #868e96; font-size: 11px;")
+        self._lbl_yawn.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_DENSE}px;")
         head_row.addWidget(lbl_head_cap)
         head_row.addWidget(self._lbl_pitch)
         head_row.addWidget(self._lbl_yaw_roll)
@@ -456,13 +511,10 @@ class PreviewOverlayWindow(QWidget):
 
         # ── Fused Fatigue Score panel (shown when BOTH rPPG + fatigue active) ─
         self._fused_panel = QFrame()
-        self._fused_panel.setStyleSheet(
-            "background-color: #0e1117; border-radius: 6px;"
-            "border: 1px solid #3d2f10;"
-        )
+        self._fused_panel.setStyleSheet(_PANEL_STYLE)
         self._fused_panel.hide()
         fp2 = QHBoxLayout(self._fused_panel)
-        fp2.setContentsMargins(12, 10, 12, 10)
+        fp2.setContentsMargins(14, 12, 14, 12)
         fp2.setSpacing(16)
 
         # Left: ring gauge
@@ -476,22 +528,29 @@ class PreviewOverlayWindow(QWidget):
         # Title + trend row
         fused_title_row = QHBoxLayout()
         lbl_fused_title = QLabel("綜合疲勞度")
-        lbl_fused_title.setStyleSheet(
-            "color: #ffa94d; font-size: 12px; font-weight: 600; border: none;"
-        )
+        lbl_fused_title.setStyleSheet(_GROUP_TITLE_STYLE)
         self._lbl_fused_trend = QLabel("→ 穩定")
-        self._lbl_fused_trend.setStyleSheet("color: #868e96; font-size: 11px; border: none;")
+        self._lbl_fused_trend.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px; border: none;")
         fused_title_row.addWidget(lbl_fused_title)
         fused_title_row.addStretch(1)
         fused_title_row.addWidget(self._lbl_fused_trend)
         right_col.addLayout(fused_title_row)
+
+        # 當前疲勞等級 — 最醒目的一行：大字 + 該等級狀態色底
+        self._lbl_fused_level = QLabel("—")
+        self._lbl_fused_level.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_fused_level.setStyleSheet(
+            f"color: {_TXT_PRIMARY}; background-color: {_BG_INPUT};"
+            f"font-size: {_FS_SECONDARY}px; font-weight: 700; border-radius: 6px; padding: 4px 10px;"
+        )
+        right_col.addWidget(self._lbl_fused_level)
 
         # rPPG sub-bar
         rppg_bar_row = QHBoxLayout()
         rppg_bar_row.setSpacing(8)
         lbl_rppg_bar = QLabel("❤  rPPG")
         lbl_rppg_bar.setStyleSheet(
-            "color: #ff6b6b; font-size: 10px; min-width: 100px; border: none;"
+            f"color: {_HEARTBEAT}; font-size: {_FS_LABEL}px; min-width: 100px; border: none;"
         )
         self._lbl_rppg_bar = lbl_rppg_bar
         self._bar_rppg_sub = _ScoreBar()
@@ -504,7 +563,7 @@ class PreviewOverlayWindow(QWidget):
         beh_bar_row.setSpacing(8)
         lbl_beh_bar = QLabel("👁  行為 × 60%")
         lbl_beh_bar.setStyleSheet(
-            "color: #74c0fc; font-size: 10px; min-width: 100px; border: none;"
+            f"color: {_ACCENT_HOVER}; font-size: {_FS_LABEL}px; min-width: 100px; border: none;"
         )
         self._bar_beh_sub = _ScoreBar()
         beh_bar_row.addWidget(lbl_beh_bar)
@@ -514,7 +573,7 @@ class PreviewOverlayWindow(QWidget):
         # Component detail row
         self._lbl_fused_detail = QLabel("等待資料…")
         self._lbl_fused_detail.setStyleSheet(
-            "color: #6c757d; font-size: 10px; border: none;"
+            f"color: {_TXT_WEAK}; font-size: {_FS_LABEL}px; border: none;"
         )
         self._lbl_fused_detail.setWordWrap(True)
         right_col.addWidget(self._lbl_fused_detail)
@@ -534,16 +593,18 @@ class PreviewOverlayWindow(QWidget):
 
     @staticmethod
     def _metric_label(caption: str, initial: str) -> QLabel:
-        lbl = QLabel(f"<span style='color:#868e96;font-size:10px;'>{caption}</span><br>"
-                     f"<span style='color:#dee2e6;font-size:12px;font-weight:600;'>{initial}</span>")
+        lbl = QLabel(
+            f"<span style='color:{_TXT_SECONDARY};font-size:{_FS_LABEL}px;font-weight:500;'>{caption}</span><br>"
+            f"<span style='color:{_TXT_PRIMARY};font-size:{_FS_VALUE}px;font-weight:600;'>{initial}</span>"
+        )
         lbl.setTextFormat(Qt.TextFormat.RichText)
         return lbl
 
     @staticmethod
     def _set_metric(lbl: QLabel, caption: str, value: str) -> None:
         lbl.setText(
-            f"<span style='color:#868e96;font-size:10px;'>{caption}</span><br>"
-            f"<span style='color:#dee2e6;font-size:12px;font-weight:600;'>{value}</span>"
+            f"<span style='color:{_TXT_SECONDARY};font-size:{_FS_LABEL}px;font-weight:500;'>{caption}</span><br>"
+            f"<span style='color:{_TXT_PRIMARY};font-size:{_FS_VALUE}px;font-weight:600;'>{value}</span>"
         )
 
     # ── Public API ───────────────────────────────────────────────────────────
@@ -557,18 +618,22 @@ class PreviewOverlayWindow(QWidget):
     _H_VIDEO    = 240
     _H_HEADER   = 36
     _H_BODY_PAD = 28   # 10 top + 10 bottom + 8 spacing below video
-    _H_RPPG     = 182  # BPM + warmup + HRV + stress + waveform
+    _H_RPPG     = 206  # group title + BPM + warmup + HRV title + HRV + stress + waveform
     _H_FATIGUE  = 175  # title + calib + EAR + micro + gaze + head
-    _H_FUSED    = 130  # gauge row
+    _H_FUSED    = 148  # gauge row + prominent level label
 
     def _resize_to_content(self) -> None:
+        # 面板實際高度以 layout sizeHint 為準（內容增減時自動貼合，不會裁切底部
+        # 波形/數值）；硬編碼常數僅作為 sizeHint 尚未就緒（widget 未 realize 回傳
+        # 過小值）時的下限保底。取兩者較大者，寧可略高也不裁切。
         h = self._H_HEADER + self._H_BODY_PAD + self._H_VIDEO
-        if self._rppg_panel.isVisible():
-            h += self._H_RPPG + 8
-        if self._fatigue_panel.isVisible():
-            h += self._H_FATIGUE + 8
-        if self._fused_panel.isVisible():
-            h += self._H_FUSED + 8
+        for panel, fallback in (
+            (self._rppg_panel, self._H_RPPG),
+            (self._fatigue_panel, self._H_FATIGUE),
+            (self._fused_panel, self._H_FUSED),
+        ):
+            if panel.isVisible():
+                h += max(fallback, panel.sizeHint().height()) + 8
         self.resize(self.width(), h)
 
     def refresh_layout(self) -> None:
@@ -587,22 +652,22 @@ class PreviewOverlayWindow(QWidget):
         # Face detection status
         if metrics.face_detected:
             self._lbl_face_status.setText("臉部偵測中 ✓")
-            self._lbl_face_status.setStyleSheet("color: #40c057; font-size: 11px;")
+            self._lbl_face_status.setStyleSheet(f"color: {_LEVEL_ALERT}; font-size: {_FS_LABEL}px;")
         else:
             self._lbl_face_status.setText("未偵測到臉部")
-            self._lbl_face_status.setStyleSheet("color: #868e96; font-size: 11px;")
+            self._lbl_face_status.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_LABEL}px;")
 
         # BPM
         disp_bpm = metrics.bpm_calibrated if metrics.bpm_calibrated > 0 else metrics.bpm
         if disp_bpm > 0:
-            bpm_color = "#ff6b6b" if disp_bpm > 100 else "#40c057" if disp_bpm > 50 else "#4dabf7"
+            bpm_color = _HEARTBEAT if disp_bpm > 100 else _LEVEL_ALERT if disp_bpm > 50 else _ACCENT_HOVER
             self._lbl_bpm.setText(f"{disp_bpm:.0f} BPM")
             self._lbl_bpm.setStyleSheet(
-                f"color: {bpm_color}; font-size: 22px; font-weight: bold;"
+                f"color: {bpm_color}; font-size: {_FS_MAJOR}px; font-weight: 700;"
             )
         else:
             self._lbl_bpm.setText("— BPM")
-            self._lbl_bpm.setStyleSheet("color: #868e96; font-size: 22px; font-weight: bold;")
+            self._lbl_bpm.setStyleSheet(f"color: {_TXT_SECONDARY}; font-size: {_FS_MAJOR}px; font-weight: 700;")
 
         # Warmup progress
         pct = int(metrics.warmup_progress * 100)
@@ -633,14 +698,14 @@ class PreviewOverlayWindow(QWidget):
         )
 
         # HRV confidence
-        conf_color = {"HIGH": "#40c057", "MEDIUM": "#ffd43b", "LOW": "#ff6b6b"}.get(
-            metrics.hrv_confidence, "#868e96"
+        conf_color = {"HIGH": _LEVEL_ALERT, "MEDIUM": _WARN, "LOW": _HEARTBEAT}.get(
+            metrics.hrv_confidence, _TXT_SECONDARY
         )
         self._lbl_hrv_conf.setText(
-            f"<span style='color:#868e96;font-size:10px;'>HRV 信心</span><br>"
-            f"<span style='color:{conf_color};font-size:12px;font-weight:600;'>"
+            f"<span style='color:{_TXT_SECONDARY};font-size:{_FS_LABEL}px;'>HRV 信心</span><br>"
+            f"<span style='color:{conf_color};font-size:{_FS_VALUE}px;font-weight:600;'>"
             f"{metrics.hrv_confidence}</span>"
-            f"<span style='color:#868e96;font-size:9px;'>"
+            f"<span style='color:{_TXT_SECONDARY};font-size:10px;'>"
             f"  art {metrics.ibi_artifact_ratio:.0%}</span>"
         )
 
@@ -661,6 +726,13 @@ class PreviewOverlayWindow(QWidget):
 
         self._gauge.set_value(score.score, gauge_col, score.level)
 
+        # 當前疲勞等級：大字 + 該等級狀態色底，讓使用者一眼看清目前處於哪一段
+        self._lbl_fused_level.setText(score.level)
+        self._lbl_fused_level.setStyleSheet(
+            f"color: #ffffff; background-color: {gauge_col.name()};"
+            f"font-size: {_FS_SECONDARY}px; font-weight: 700; border-radius: 6px; padding: 4px 10px;"
+        )
+
         self._lbl_rppg_bar.setText(f"❤  rPPG × {int(round(score.rppg_weight_eff * 100))}%")
         rppg_col = QColor(
             int(255 * score.rppg_sub),
@@ -669,7 +741,7 @@ class PreviewOverlayWindow(QWidget):
         )
         self._bar_rppg_sub.set_value(
             score.rppg_sub,
-            rppg_col if score.rppg_available else QColor("#495057"),
+            rppg_col if score.rppg_available else QColor(_BORDER_ACCENT),
         )
 
         # Behaviour sub-bar colour
@@ -680,20 +752,20 @@ class PreviewOverlayWindow(QWidget):
         )
         self._bar_beh_sub.set_value(
             score.behavior_sub,
-            beh_col if score.behavior_available else QColor("#495057"),
+            beh_col if score.behavior_available else QColor(_BORDER_ACCENT),
         )
 
         # Trend label
         td = score.trend * 100   # convert to percentage points
         if td > 2:
-            trend_col, trend_txt = "#ff6b6b", f"↑ +{td:.1f}pt/30s"
+            trend_col, trend_txt = _HEARTBEAT, f"↑ +{td:.1f}pt/30s"
         elif td < -2:
-            trend_col, trend_txt = "#40c057", f"↓ {td:.1f}pt/30s"
+            trend_col, trend_txt = _LEVEL_ALERT, f"↓ {td:.1f}pt/30s"
         else:
-            trend_col, trend_txt = "#868e96", "→ 穩定"
+            trend_col, trend_txt = _TXT_SECONDARY, "→ 穩定"
         self._lbl_fused_trend.setText(trend_txt)
         self._lbl_fused_trend.setStyleSheet(
-            f"color: {trend_col}; font-size: 11px; border: none;"
+            f"color: {trend_col}; font-size: {_FS_LABEL}px; border: none;"
         )
 
         # Component detail — show 2 highest contributing behaviour factors
@@ -724,19 +796,19 @@ class PreviewOverlayWindow(QWidget):
 
     def update_fatigue_metrics(self, metrics: "FatigueMetrics") -> None:
         """Refresh all fatigue metric labels from a FatigueMetrics instance."""
-        # Status badge colour
+        # Status badge colour — 沿用疲勞狀態色（對齊 fatigue_scorer._LEVELS 5 段語意）
         _col = {
-            "OK":          "#40c057",
-            "CALIBRATING": "#ffd43b",
-            "ALERT":       "#74c0fc",
-            "TIRED":       "#ffa94d",
-            "LOW_VIGILANCE": "#ffa94d",
-            "DROWSY":      "#ff6b6b",
-            "CRITICAL":     "#e03131",
-            "MICROSLEEP":  "#e03131",
-            "NO_FACE":     "#868e96",
+            "OK":          _LEVEL_ALERT,
+            "CALIBRATING": _WARN,
+            "ALERT":       _ACCENT_HOVER,
+            "TIRED":       _LEVEL_MODERATE,
+            "LOW_VIGILANCE": _LEVEL_MODERATE,
+            "DROWSY":      _LEVEL_HIGH,
+            "CRITICAL":     _LEVEL_CRITICAL,
+            "MICROSLEEP":  _LEVEL_CRITICAL,
+            "NO_FACE":     _TXT_SECONDARY,
         }
-        status_col = _col.get(metrics.status, "#adb5bd")
+        status_col = _col.get(metrics.status, _TXT_PRIMARY)
         status_zh = {
             "OK": "正常", "CALIBRATING": "校準中",
             "ALERT": "早期警示", "TIRED": "疲勞",
@@ -746,7 +818,7 @@ class PreviewOverlayWindow(QWidget):
         }.get(metrics.status, metrics.status)
         self._lbl_fat_status.setText(status_zh)
         self._lbl_fat_status.setStyleSheet(
-            f"color: {status_col}; font-size: 13px; font-weight: bold;"
+            f"color: {status_col}; font-size: {_FS_SECONDARY}px; font-weight: 700;"
         )
 
         # Calibration bar
@@ -765,90 +837,90 @@ class PreviewOverlayWindow(QWidget):
 
         # Micro-expressions
         if metrics.is_squinting:
-            sq_col = "#ffa94d"
+            sq_col = _WARN
             sq_txt = f"瞇眼: {metrics.squint_duration:.0f}s ⚠"
         else:
-            sq_col = "#495057"
+            sq_col = _TXT_WEAK
             sq_txt = "瞇眼: 無"
         self._lbl_squint.setText(sq_txt)
-        self._lbl_squint.setStyleSheet(f"color: {sq_col}; font-size: 11px;")
+        self._lbl_squint.setStyleSheet(f"color: {sq_col}; font-size: {_FS_DENSE}px;")
 
         if metrics.is_frowning:
-            fr_col = "#ffa94d"
+            fr_col = _WARN
             fr_txt = f"皺眉: ⚠ ({metrics.brow_dist_norm:.2f})"
         else:
-            fr_col = "#495057"
+            fr_col = _TXT_WEAK
             fr_txt = "皺眉: 無"
         self._lbl_frown.setText(fr_txt)
-        self._lbl_frown.setStyleSheet(f"color: {fr_col}; font-size: 11px;")
+        self._lbl_frown.setStyleSheet(f"color: {fr_col}; font-size: {_FS_DENSE}px;")
 
         if metrics.has_iris:
             trend_sym = "▲" if metrics.iris_ratio_trend > 0.001 else ("▼" if metrics.iris_ratio_trend < -0.001 else "─")
             self._lbl_iris.setText(f"虹膜比: {metrics.iris_ratio:.2f} {trend_sym}")
-            self._lbl_iris.setStyleSheet("color: #dee2e6; font-size: 11px;")
+            self._lbl_iris.setStyleSheet(f"color: {_TXT_PRIMARY}; font-size: {_FS_DENSE}px;")
         else:
             self._lbl_iris.setText("虹膜比: —")
-            self._lbl_iris.setStyleSheet("color: #495057; font-size: 11px;")
+            self._lbl_iris.setStyleSheet(f"color: {_TXT_WEAK}; font-size: {_FS_DENSE}px;")
 
         if metrics.face_detected:
-            nose_col = "#40c057" if metrics.nose_speed < 120.0 else "#ff6b6b"
+            nose_col = _LEVEL_ALERT if metrics.nose_speed < 120.0 else _HEARTBEAT
             self._lbl_nose.setText(f"鼻動: {metrics.nose_speed:.0f}")
-            self._lbl_nose.setStyleSheet(f"color: {nose_col}; font-size: 11px;")
+            self._lbl_nose.setStyleSheet(f"color: {nose_col}; font-size: {_FS_DENSE}px;")
 
-            mouth_col = "#ffa94d" if metrics.mouth_open_ratio > 0.30 else "#dee2e6"
+            mouth_col = _WARN if metrics.mouth_open_ratio > 0.30 else _TXT_PRIMARY
             self._lbl_mouth.setText(f"嘴開: {metrics.mouth_open_ratio:.2f}")
-            self._lbl_mouth.setStyleSheet(f"color: {mouth_col}; font-size: 11px;")
+            self._lbl_mouth.setStyleSheet(f"color: {mouth_col}; font-size: {_FS_DENSE}px;")
 
-            lid_col = "#ffa94d" if metrics.lid_balance > 0.35 else "#dee2e6"
+            lid_col = _WARN if metrics.lid_balance > 0.35 else _TXT_PRIMARY
             self._lbl_lidbal.setText(f"眼瞼差: {metrics.lid_balance:.2f}")
-            self._lbl_lidbal.setStyleSheet(f"color: {lid_col}; font-size: 11px;")
+            self._lbl_lidbal.setStyleSheet(f"color: {lid_col}; font-size: {_FS_DENSE}px;")
         else:
             self._lbl_nose.setText("鼻動: —")
-            self._lbl_nose.setStyleSheet("color: #495057; font-size: 11px;")
+            self._lbl_nose.setStyleSheet(f"color: {_TXT_WEAK}; font-size: {_FS_DENSE}px;")
             self._lbl_mouth.setText("嘴開: —")
-            self._lbl_mouth.setStyleSheet("color: #495057; font-size: 11px;")
+            self._lbl_mouth.setStyleSheet(f"color: {_TXT_WEAK}; font-size: {_FS_DENSE}px;")
             self._lbl_lidbal.setText("眼瞼差: —")
-            self._lbl_lidbal.setStyleSheet("color: #495057; font-size: 11px;")
+            self._lbl_lidbal.setStyleSheet(f"color: {_TXT_WEAK}; font-size: {_FS_DENSE}px;")
 
         # Gaze dynamics
         stab = metrics.gaze_stability_index
-        stab_col = "#40c057" if stab > 0.7 else "#ffd43b" if stab > 0.4 else "#ff6b6b"
+        stab_col = _LEVEL_ALERT if stab > 0.7 else _WARN if stab > 0.4 else _HEARTBEAT
         self._lbl_gaze_stab.setText(f"穩定度: {stab:.2f}")
-        self._lbl_gaze_stab.setStyleSheet(f"color: {stab_col}; font-size: 11px;")
+        self._lbl_gaze_stab.setStyleSheet(f"color: {stab_col}; font-size: {_FS_DENSE}px;")
 
         fix_dur = metrics.fixation_duration
         if metrics.gaze_mental_fatigue:
-            fix_col = "#ff6b6b"
+            fix_col = _HEARTBEAT
             fix_txt = f"凝視: {fix_dur:.0f}s ⚠"
         elif fix_dur > 5.0:
-            fix_col = "#ffd43b"
+            fix_col = _WARN
             fix_txt = f"凝視: {fix_dur:.0f}s"
         else:
-            fix_col = "#dee2e6"
+            fix_col = _TXT_PRIMARY
             fix_txt = f"凝視: {fix_dur:.1f}s"
         self._lbl_fixation.setText(fix_txt)
-        self._lbl_fixation.setStyleSheet(f"color: {fix_col}; font-size: 11px;")
+        self._lbl_fixation.setStyleSheet(f"color: {fix_col}; font-size: {_FS_DENSE}px;")
 
         sac_freq = metrics.saccade_freq_pm
-        sac_col  = "#ffd43b" if sac_freq < 2.0 and metrics.face_detected else "#dee2e6"
+        sac_col  = _WARN if sac_freq < 2.0 and metrics.face_detected else _TXT_PRIMARY
         self._lbl_saccade.setText(f"掃視: {sac_freq:.0f}/分")
-        self._lbl_saccade.setStyleSheet(f"color: {sac_col}; font-size: 11px;")
+        self._lbl_saccade.setStyleSheet(f"color: {sac_col}; font-size: {_FS_DENSE}px;")
 
         # Head pose
         pitch = metrics.head_pitch
-        pitch_col = "#ff6b6b" if pitch < -12.0 else "#dee2e6"
+        pitch_col = _HEARTBEAT if pitch < -12.0 else _TXT_PRIMARY
         self._lbl_pitch.setText(f"Pitch: {pitch:+.0f}°")
-        self._lbl_pitch.setStyleSheet(f"color: {pitch_col}; font-size: 11px;")
+        self._lbl_pitch.setStyleSheet(f"color: {pitch_col}; font-size: {_FS_DENSE}px;")
 
         self._lbl_yaw_roll.setText(f"Y:{metrics.head_yaw:+.0f}° R:{metrics.head_roll:+.0f}°")
 
-        ms_col = "#ff6b6b" if metrics.microsleep_count > 0 else "#dee2e6"
+        ms_col = _HEARTBEAT if metrics.microsleep_count > 0 else _TXT_PRIMARY
         self._lbl_microsleep.setText(f"微睡眠: {metrics.microsleep_count}")
-        self._lbl_microsleep.setStyleSheet(f"color: {ms_col}; font-size: 11px;")
+        self._lbl_microsleep.setStyleSheet(f"color: {ms_col}; font-size: {_FS_DENSE}px;")
 
-        yawn_col = "#ffa94d" if metrics.yawn_count > 0 else "#868e96"
+        yawn_col = _WARN if metrics.yawn_count > 0 else _TXT_SECONDARY
         self._lbl_yawn.setText(f"哈欠: {metrics.yawn_count}")
-        self._lbl_yawn.setStyleSheet(f"color: {yawn_col}; font-size: 11px;")
+        self._lbl_yawn.setStyleSheet(f"color: {yawn_col}; font-size: {_FS_DENSE}px;")
 
     def apply_lock_state(self, locked: bool) -> None:
         self._locked = locked
@@ -863,13 +935,13 @@ class PreviewOverlayWindow(QWidget):
             self._lbl_video.clear()
             self._lbl_video.setText("預覽已關閉")
             self._lbl_video.setStyleSheet(
-                "background-color: #14181d; border-radius: 6px; color: #868e96; font-size: 13px;"
+                f"background-color: {_BG_BASE}; border-radius: 6px; color: {_TXT_SECONDARY}; font-size: {_FS_VALUE}px;"
             )
         else:
             self._lbl_video.clear()
             self._lbl_video.setText("等待影像…")
             self._lbl_video.setStyleSheet(
-                "background-color: #14181d; border-radius: 6px; color: #495057;"
+                f"background-color: {_BG_BASE}; border-radius: 6px; color: {_TXT_WEAK};"
             )
 
     def set_metrics_visible(self, visible: bool) -> None:
@@ -886,7 +958,7 @@ class PreviewOverlayWindow(QWidget):
             Qt.TransformationMode.SmoothTransformation,
         )
         self._lbl_video.setPixmap(scaled)
-        self._lbl_video.setStyleSheet("background-color: #14181d; border-radius: 6px;")
+        self._lbl_video.setStyleSheet(f"background-color: {_BG_BASE}; border-radius: 6px;")
 
     def update_fps(self, fps: float) -> None:
         self._lbl_fps.setText(f"FPS：{fps:4.1f}")
