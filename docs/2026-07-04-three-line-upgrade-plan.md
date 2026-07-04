@@ -196,22 +196,22 @@ docs/2026-07-04-uta-accuracy-baseline.md。memory fatigue-accuracy-perclos 有�
 - **注意**：本修復（視線下移→EAR 假性偵測）與 session 2 選項 (b) 的「頭低 10-15° pitch 死區」
   （pitch gate 與 EAR 路徑同時失效的漏報盲區）是**兩個不同機制**，(b) 仍未做。
 
-**已證實的計畫外既有 bug（使用者已授權修復,下一件事）：** blendshape 命名不匹配——
-`_blendshape_map` 只 `.lower()`,MediaPipe 回傳 camelCase(`eyeBlinkLeft`,模型檔二進位已驗證),
-`_bs()` 查 snake_case(`eye_blink_left`)→ 實機 `blend_*` 四組訊號恆 0,輔助通道全沉睡。
-修復條件（使用者裁決）：**量化證明有實質幫助才落地**（UTA accuracy + golden 前後比對，
-變好才 commit、變差回報）。互動風險：修活後 `blend_eye_blink` guard 可能在下視時 >gate
-誤擋下視偵測器 latch，需一併驗證（見 downgaze-detector.md 誠實限制 3）。
+**計畫外既有 bug——blendshape 命名不匹配：已證實、已實作修復、但被 A/B 量化否決未落地**
+（詳見 `docs/2026-07-05-blendshape-fix-ab-result.md`）：修復後 fused AUC 0.750→0.722、
+清醒影片非清醒幀比例 0.286→0.839（誤報爆炸）——下游 blend 門檻全是在訊號恆 0 狀態下
+校準的,裸修鍵名反而變差。主樹已 revert 零殘留。未來重啟須「逐通道啟用+門檻重校+
+逐通道 A/B」,見該文件「若未來要重啟」節。
 
 ### 下個 session 接續 prompt（實機驗證下視偵測器後貼這段）
 ```
 接續「非接觸式疲勞偵測系統」。先讀 docs/2026-07-04-three-line-upgrade-plan.md「進度更新
 session 3」與 docs/2026-07-05-downgaze-detector.md。UTA 資料集在 C:\Users\USER\Downloads\UTA_test。
 
-已完成：下視偵測器（往下看誤判修復,commit 見 git log）。待辦依序：
-(1) blendshape 命名 bug 修復（已授權,條件=UTA accuracy+golden 量化變好才落地）；
-(2) 頭低 10-15° pitch 死區（漏報盲區,與下視偵測器不同機制）；
-(3) rPPG 半頻/諧波抑制（docs/rppg-improvement-plan.md）。
+已完成：下視偵測器（往下看誤判修復）；blendshape 命名 bug 修復已被 A/B 否決 revert
+（docs/2026-07-05-blendshape-fix-ab-result.md,重啟須逐通道+門檻重校）。待辦依序：
+(1) 頭低 10-15° pitch 死區（漏報盲區,與下視偵測器不同機制）；
+(2) rPPG 半頻/諧波抑制（docs/rppg-improvement-plan.md）；
+(3) 尺度塌陷主修（uta-accuracy-baseline.md 階段3候選:perclos_high_th 下修等,需裁決）。
 
 我實機驗證下視偵測器的結果（照 downgaze-detector.md 實機驗證清單 5 項）：
 【填:往下看是否仍誤判/閉眼10秒是否仍準/其他觀感】
