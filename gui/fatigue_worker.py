@@ -68,17 +68,65 @@ _FACE_OVAL = [
     172,  58, 132,  93, 234, 127, 162,  21,  54, 103,  67, 109,
 ]
 
+# 疲勞狀態色對齊 gui/fatigue_scorer.py 的 _LEVELS BGR 漸層
+# （清醒綠 → 輕度青綠 → 中度橙 → 高度紅橙 → 極度危險紅），僅顏色數值對齊，
+# CALIBRATING/NO_FACE 非疲勞等級，維持原本的中性提示色。
 _STATUS_COLOR = {
-    "OK":          (0,   200,   0),
-    "CALIBRATING": (180, 180,   0),
-    "ALERT":       (0,   165, 255),
-    "LOW_VIGILANCE": (0, 165, 255),
-    "TIRED":       (0,   165, 255),
-    "DROWSY":      (0,    80, 255),
-    "CRITICAL":    (0,     0, 255),
-    "MICROSLEEP":  (0,     0, 255),
-    "NO_FACE":     (120, 120, 120),
+    "OK":            (0, 200,   0),   # 對齊「清醒」
+    "CALIBRATING":   (180, 180,   0),
+    "ALERT":         (0, 200, 160),   # 對齊「輕度疲勞」
+    "LOW_VIGILANCE": (0, 200, 160),   # 對齊「輕度疲勞」
+    "TIRED":         (0, 140, 255),   # 對齊「中度疲勞」
+    "DROWSY":        (0,  60, 255),   # 對齊「高度疲勞」
+    "CRITICAL":      (0,   0, 200),   # 對齊「極度危險」
+    "MICROSLEEP":    (0,   0, 200),   # 對齊「極度危險」
+    "NO_FACE":       (120, 120, 120),
 }
+
+
+# ── Overlay 樣式常數（僅影響畫法：字級/粗細/顏色/底板透明度，不影響任何數值或判斷邏輯）──
+
+# 小型隨標記文字（鼻動速度、EAR、眼瞼開合、皺眉、嘴部比例等，貼在關鍵點旁）
+_LM_LABEL_FONT_SCALE      = 0.40   # 原 0.34–0.38
+_LM_SUBLABEL_FONT_SCALE   = 0.34   # 次要小字（如眼瞼 L/R 數值），原 0.30
+_LM_LABEL_THICKNESS       = 1
+_LM_LABEL_OUTLINE_THICK   = 3      # 黑色描邊粗細，提升在任意背景下的對比
+
+# 哈欠提示（比一般隨標記文字更醒目）
+_YAWN_LABEL_FONT_SCALE    = 0.46   # 原 0.40
+
+# 底部 HUD 狀態列
+_HUD_BAR_HEIGHT           = 30     # 原 22
+_HUD_BAR_BG_COLOR         = (0, 0, 0)
+_HUD_BAR_BG_ALPHA         = 0.65   # 原 0.60
+_HUD_FONT_SCALE           = 0.58   # 原 0.38
+_HUD_TEXT_THICKNESS       = 2
+_HUD_OUTLINE_THICK        = 4
+
+# 右上角頭部姿態角度讀數
+_POSE_FONT_SCALE          = 0.50   # 原 0.38
+_POSE_TEXT_THICKNESS      = 2
+_POSE_OUTLINE_THICK       = 4
+_POSE_BG_ALPHA            = 0.60   # 原 0.55
+_POSE_BG_PAD              = 6
+
+# 左上警示徽章
+_BADGE_FONT_SCALE         = 0.50   # 原 0.40
+_BADGE_TEXT_THICKNESS     = 2
+_BADGE_OUTLINE_THICK      = 4
+_BADGE_BG_ALPHA           = 0.65   # 原 0.60
+_BADGE_BG_PAD_X           = 10
+_BADGE_BG_PAD_Y           = 8
+_BADGE_GAP                = 6      # 原 4（徽章間距，避免視覺黏在一起）
+
+# 左側 PERCLOS 熱度條
+_PERCLOS_BAR_WIDTH        = 14     # 原硬編碼 5px，太細難以辨識
+_PERCLOS_BAR_BORDER_COLOR = (230, 230, 230)
+_PERCLOS_BAR_LABEL_SCALE  = 0.40   # 原 0.32
+
+# 微睡眠/嗜睡/危險全屏閃爍：略降 alpha，避免蓋掉 HUD/徽章等其他資訊
+_FLASH_ALPHA_DROWSY       = 0.18   # 原 0.22
+_FLASH_ALPHA_CRITICAL     = 0.30   # 原 0.35
 
 
 def _lm_px(lm, w: int, h: int, idx: int) -> tuple[int, int]:
@@ -128,6 +176,25 @@ def _draw_head_pose_axes(
                         tipLength=0.25, line_type=cv2.LINE_AA)
 
 
+def _put_outlined_text(
+    img: np.ndarray,
+    text: str,
+    org: tuple[int, int],
+    font: int,
+    scale: float,
+    color: tuple,
+    thickness: int = 1,
+    outline_thickness: int = 3,
+    outline_color: tuple = (0, 0, 0),
+) -> None:
+    """Draw text with a black outline pass first for contrast on any background.
+
+    Pure drawing helper — does not touch the text content, only how it renders.
+    """
+    cv2.putText(img, text, org, font, scale, outline_color, outline_thickness, cv2.LINE_AA)
+    cv2.putText(img, text, org, font, scale, color, thickness, cv2.LINE_AA)
+
+
 def draw_fatigue_annotations(
     frame: np.ndarray,
     lm: list,
@@ -153,11 +220,11 @@ def draw_fatigue_annotations(
     nose_col = (0, 200, 255) if metrics.nose_speed < 120 else (0, 120, 255)
     cv2.line(out, nose_bridge, nose_tip, nose_col, 1, lineType=cv2.LINE_AA)
     cv2.circle(out, nose_tip, 2, nose_col, -1, lineType=cv2.LINE_AA)
-    cv2.putText(
+    _put_outlined_text(
         out,
         f"鼻動:{metrics.nose_speed:.0f}",
         (nose_tip[0] + 4, nose_tip[1] - 4),
-        font, 0.34, nose_col, 1, cv2.LINE_AA,
+        font, _LM_LABEL_FONT_SCALE, nose_col, _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK,
     )
 
     # ── 2. Brow arcs + inner-brow furrowing indicator ─────────────────────────
@@ -174,7 +241,8 @@ def draw_fatigue_annotations(
     cv2.line(out, lb, rb, brow_line_col, 1, lineType=cv2.LINE_AA)
     if metrics.is_frowning:
         mid = ((lb[0] + rb[0]) // 2, (lb[1] + rb[1]) // 2 - 6)
-        cv2.putText(out, "皺眉", mid, font, 0.38, (0, 60, 255), 1, cv2.LINE_AA)
+        _put_outlined_text(out, "皺眉", mid, font, _LM_LABEL_FONT_SCALE, (0, 60, 255),
+                            _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
 
     # ── 3. Eye contours (colour-coded) ────────────────────────────────────────
     # Normal=green, squinting=yellow, PERCLOS alarm=red
@@ -193,16 +261,20 @@ def draw_fatigue_annotations(
     # EAR label beside each eye
     l_outer = _lm_px(lm, w, h, 263)
     r_outer = _lm_px(lm, w, h, 33)
-    cv2.putText(out, f"{metrics.ear_smooth:.2f}",
-                (l_outer[0] + 4, l_outer[1] - 4),
-                font, 0.35, eye_col, 1, cv2.LINE_AA)
-    cv2.putText(out, f"{metrics.ear_smooth:.2f}",
-                (r_outer[0] - 30, r_outer[1] - 4),
-                font, 0.35, eye_col, 1, cv2.LINE_AA)
-    cv2.putText(out, f"L:{metrics.lid_open_left:.2f}", (l_outer[0] + 4, l_outer[1] + 10),
-                font, 0.30, (120, 220, 120), 1, cv2.LINE_AA)
-    cv2.putText(out, f"R:{metrics.lid_open_right:.2f}", (r_outer[0] - 30, r_outer[1] + 10),
-                font, 0.30, (120, 220, 120), 1, cv2.LINE_AA)
+    _put_outlined_text(out, f"{metrics.ear_smooth:.2f}",
+                        (l_outer[0] + 4, l_outer[1] - 4),
+                        font, _LM_LABEL_FONT_SCALE, eye_col,
+                        _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
+    _put_outlined_text(out, f"{metrics.ear_smooth:.2f}",
+                        (r_outer[0] - 30, r_outer[1] - 4),
+                        font, _LM_LABEL_FONT_SCALE, eye_col,
+                        _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
+    _put_outlined_text(out, f"L:{metrics.lid_open_left:.2f}", (l_outer[0] + 4, l_outer[1] + 10),
+                        font, _LM_SUBLABEL_FONT_SCALE, (120, 220, 120),
+                        _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
+    _put_outlined_text(out, f"R:{metrics.lid_open_right:.2f}", (r_outer[0] - 30, r_outer[1] + 10),
+                        font, _LM_SUBLABEL_FONT_SCALE, (120, 220, 120),
+                        _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
 
     # ── 4. Iris circles + crosshair ───────────────────────────────────────────
     if metrics.has_iris:
@@ -250,27 +322,30 @@ def draw_fatigue_annotations(
         mouth_col = (0, 50, 255) if metrics.yawn_count > 0 or metrics.mar > 0.55 else (80, 80, 200)
         cv2.polylines(out, [mouth_pts], isClosed=True,
                       color=mouth_col, thickness=1, lineType=cv2.LINE_AA)
-        cv2.putText(out, f"口:{metrics.mouth_open_ratio:.2f}", (mouth_pts[0][0] - 8, mouth_pts[0][1] - 8),
-                    font, 0.34, mouth_col, 1, cv2.LINE_AA)
+        _put_outlined_text(out, f"口:{metrics.mouth_open_ratio:.2f}",
+                            (mouth_pts[0][0] - 8, mouth_pts[0][1] - 8),
+                            font, _LM_LABEL_FONT_SCALE, mouth_col,
+                            _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
         if metrics.mar > 0.55:
             mc = _lm_px(lm, w, h, 13)
-            cv2.putText(out, "哈欠", (mc[0] - 12, mc[1] - 6),
-                        font, 0.40, (0, 50, 255), 1, cv2.LINE_AA)
+            _put_outlined_text(out, "哈欠", (mc[0] - 12, mc[1] - 6),
+                                font, _YAWN_LABEL_FONT_SCALE, (0, 50, 255),
+                                _LM_LABEL_THICKNESS + 1, _LM_LABEL_OUTLINE_THICK)
 
     # ── 8. Microsleep / drowsy flash overlay ──────────────────────────────────
     if metrics.status in ("MICROSLEEP", "DROWSY", "CRITICAL"):
         overlay = out.copy()
-        alpha   = 0.22 if metrics.status == "DROWSY" else 0.35
+        alpha   = _FLASH_ALPHA_DROWSY if metrics.status == "DROWSY" else _FLASH_ALPHA_CRITICAL
         col     = (0, 30, 180) if metrics.status in ("MICROSLEEP", "CRITICAL") else (0, 0, 160)
         cv2.rectangle(overlay, (0, 0), (w, h), col, -1)
         cv2.addWeighted(overlay, alpha, out, 1 - alpha, 0, out)
 
     # ── 9. Bottom HUD ─────────────────────────────────────────────────────────
     # Status + key metrics on a semi-transparent dark bar
-    hud_h   = 22
+    hud_h   = _HUD_BAR_HEIGHT
     overlay = out.copy()
-    cv2.rectangle(overlay, (0, h - hud_h), (w, h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.60, out, 0.40, 0, out)
+    cv2.rectangle(overlay, (0, h - hud_h), (w, h), _HUD_BAR_BG_COLOR, -1)
+    cv2.addWeighted(overlay, _HUD_BAR_BG_ALPHA, out, 1 - _HUD_BAR_BG_ALPHA, 0, out)
 
     hud_txt = (
         f"{metrics.status}"
@@ -278,7 +353,8 @@ def draw_fatigue_annotations(
         f"  PERCLOS:{metrics.perclos*100:.0f}%"
         f"  眨眼:{metrics.blink_rate_pm:.0f}/min"
     )
-    cv2.putText(out, hud_txt, (6, h - 6), font, 0.38, s_col, 1, cv2.LINE_AA)
+    _put_outlined_text(out, hud_txt, (6, h - 8), font, _HUD_FONT_SCALE, s_col,
+                        _HUD_TEXT_THICKNESS, _HUD_OUTLINE_THICK)
 
     # ── 10. Top-right: head pose angles ───────────────────────────────────────
     pose_txt = (
@@ -286,14 +362,15 @@ def draw_fatigue_annotations(
         f" Y:{metrics.head_yaw:+.0f}"
         f" R:{metrics.head_roll:+.0f}"
     )
-    (pw, ph), _ = cv2.getTextSize(pose_txt, font, 0.38, 1)
-    ox = w - pw - 8
+    (pw, ph), _ = cv2.getTextSize(pose_txt, font, _POSE_FONT_SCALE, _POSE_TEXT_THICKNESS)
+    ox = w - pw - _POSE_BG_PAD - 2
     overlay2 = out.copy()
-    cv2.rectangle(overlay2, (ox - 4, 2), (w - 2, ph + 10), (0, 0, 0), -1)
-    cv2.addWeighted(overlay2, 0.55, out, 0.45, 0, out)
+    cv2.rectangle(overlay2, (ox - _POSE_BG_PAD, 2), (w - 2, ph + _POSE_BG_PAD + 6), (0, 0, 0), -1)
+    cv2.addWeighted(overlay2, _POSE_BG_ALPHA, out, 1 - _POSE_BG_ALPHA, 0, out)
     # Pitch colour warning
     p_col = (0, 60, 220) if metrics.head_pitch < -12.0 else (150, 200, 100)
-    cv2.putText(out, pose_txt, (ox, ph + 5), font, 0.38, p_col, 1, cv2.LINE_AA)
+    _put_outlined_text(out, pose_txt, (ox, ph + _POSE_BG_PAD), font, _POSE_FONT_SCALE, p_col,
+                        _POSE_TEXT_THICKNESS, _POSE_OUTLINE_THICK)
 
     # ── 11. Top-left: alert badges ────────────────────────────────────────────
     alerts: list[tuple[str, tuple]] = []
@@ -314,24 +391,32 @@ def draw_fatigue_annotations(
 
     y_off = 4
     for badge_txt, badge_col in alerts:
-        (bw, bh), _ = cv2.getTextSize(badge_txt, font, 0.40, 1)
+        (bw, bh), _ = cv2.getTextSize(badge_txt, font, _BADGE_FONT_SCALE, _BADGE_TEXT_THICKNESS)
         overlay3 = out.copy()
-        cv2.rectangle(overlay3, (0, y_off), (bw + 10, y_off + bh + 6), (0, 0, 0), -1)
-        cv2.addWeighted(overlay3, 0.60, out, 0.40, 0, out)
-        cv2.putText(out, badge_txt, (5, y_off + bh + 2),
-                    font, 0.40, badge_col, 1, cv2.LINE_AA)
-        y_off += bh + 10
+        cv2.rectangle(overlay3, (0, y_off),
+                      (bw + _BADGE_BG_PAD_X * 2, y_off + bh + _BADGE_BG_PAD_Y * 2), (0, 0, 0), -1)
+        cv2.addWeighted(overlay3, _BADGE_BG_ALPHA, out, 1 - _BADGE_BG_ALPHA, 0, out)
+        _put_outlined_text(out, badge_txt, (_BADGE_BG_PAD_X - 5, y_off + bh + _BADGE_BG_PAD_Y),
+                            font, _BADGE_FONT_SCALE, badge_col,
+                            _BADGE_TEXT_THICKNESS, _BADGE_OUTLINE_THICK)
+        y_off += bh + _BADGE_BG_PAD_Y * 2 + _BADGE_GAP
 
     # ── 12. PERCLOS heat bar (left edge) ──────────────────────────────────────
     if metrics.calibrated and metrics.perclos > 0.0:
+        bar_w     = _PERCLOS_BAR_WIDTH
         bar_max_h = h - 40
         bar_h     = int(bar_max_h * min(metrics.perclos / 0.40, 1.0))
         bar_y0    = h - 20 - bar_h
         intensity = int(min(metrics.perclos / 0.40, 1.0) * 255)
         bar_col   = (0, max(0, 180 - intensity), min(255, intensity * 2))
-        cv2.rectangle(out, (0, bar_y0), (5, h - 20), bar_col, -1)
-        cv2.putText(out, f"{metrics.perclos*100:.0f}%",
-                    (7, h - 20), font, 0.32, bar_col, 1, cv2.LINE_AA)
+        # 底板：整條軌道先鋪深色背景，再疊填充色，讓短短的低值也清楚可見
+        cv2.rectangle(out, (0, h - 20 - bar_max_h), (bar_w, h - 20), (30, 30, 30), -1)
+        cv2.rectangle(out, (0, bar_y0), (bar_w, h - 20), bar_col, -1)
+        cv2.rectangle(out, (0, h - 20 - bar_max_h), (bar_w, h - 20),
+                      _PERCLOS_BAR_BORDER_COLOR, 1, lineType=cv2.LINE_AA)
+        _put_outlined_text(out, f"{metrics.perclos*100:.0f}%",
+                            (bar_w + 2, h - 20), font, _PERCLOS_BAR_LABEL_SCALE, bar_col,
+                            _LM_LABEL_THICKNESS, _LM_LABEL_OUTLINE_THICK)
 
     return out
 
