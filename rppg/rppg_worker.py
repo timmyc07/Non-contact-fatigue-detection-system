@@ -587,6 +587,8 @@ def collect_rppg_roi_sample_with_means(
     transform_matrix: Any | None,
     tracker: RoiGeometryTracker,
     tuning: MediaPipeTuning,
+    *,
+    weighted_mix: bool = False,
 ) -> tuple[Optional[tuple[float, float, float]], dict[str, float], int, dict[str, tuple[float, float, float]]]:
     """P6b-1 新增：伴生函式（companion），與 collect_rppg_roi_sample() 邏輯完全相同，
     額外回傳每個 ROI 各自的 (R,G,B) 均值 per_roi_means，供之後「候選 ROI 權重對同段
@@ -597,8 +599,23 @@ def collect_rppg_roi_sample_with_means(
     一次），若兩函式在同一幀各呼叫一次會使 jitter/area-stability 狀態被重複推進、
     改變既有數值行為。因此本函式獨立複製一份完全相同的運算，呼叫端每幀應二擇一。
 
-    回傳的 sample/effective_weights/len(rgbs) 與 collect_rppg_roi_sample() 在同一輸入
-    下逐位元相同（程式碼與運算順序未變動，only surfaces 額外資訊）。
+    ``weighted_mix``（P6b-3a 新增）：
+    - ``False``（預設）：走原本「有效 ROI 等權平均」路徑。回傳的
+      sample/effective_weights/len(rgbs) 與 collect_rppg_roi_sample() 在同一輸入
+      下逐位元相同（程式碼與運算順序未變動，only surfaces 額外資訊）。所有既有
+      呼叫端（含 replay/golden、live worker run() 迴圈）皆走此路徑，逐位元不變。
+    - ``True``：改用「該幀有效權重加權平均」。加權係數即本函式已算出的
+      effective_weights（= override base weight × 姿態/遮蔽懲罰，通過 min_roi_weight
+      門檻後的值），與 sample 用同一組權重、同一幀訊號，讓候選 ROI 權重能真正影響
+      混合後 RGB → 進而影響 BPM（等權語意下候選權重對混合訊號無槓桿，見
+      docs/2026-07-04-p6b-handoff.md P6b-3 動機）。**語意約定（P6b-3b 起生效）**：
+      呼叫端只有在 P6b-2 的 ROI 權重 override 存在（``rppg_params`` 不是 None，即
+      worker 的 ``self._roi_weights_override is not None``）時才傳 ``True``；override
+      為 None 時一律用預設 ``False``，確保無 override 路徑逐位元回退等權平均。
+      **目前（P6b-3a）尚未有任何生產呼叫端傳入 True**——`RppgWorker.run()`/
+      `CombinedWorker` 皆固定用預設 `False` 呼叫，此參數僅供測試與未來 P6b-3b
+      接線使用；本次新增不改變任何現行 live 行為。加權係數用正規化前或正規化後
+      皆等價（加權平均 sum(w*x)/sum(w) 對權重同比例縮放不變）。
     """
     h, w = frame_bgr.shape[:2]
     tracker.begin_frame()
@@ -637,6 +654,25 @@ def collect_rppg_roi_sample_with_means(
         sum(x[1] for x in rgbs) / len(rgbs),
         sum(x[2] for x in rgbs) / len(rgbs),
     )
+    # P6b-3a：override 存在時（呼叫端傳 weighted_mix=True）改用有效權重加權平均。
+    # 此處 effective_weights 仍為「正規化前」的門檻後權重；貢獻 ROI 集合
+    # {name: effective_weights[name] > 0 且 name in per_roi_means} 與上方等權
+    # sample 用的 rgbs 完全一致（rgbs 於 val 非 None 且 weight > 0 時加入），故
+    # w_sum 必 > 0（rgbs 非空已在上方保證），if 為安全護欄。原等權 sample 三行
+    # 完全未動：weighted_mix=False 時本區塊整段跳過，逐位元回退等權平均。
+    if weighted_mix:
+        w_sum = 0.0
+        acc_r = acc_g = acc_b = 0.0
+        for name, _ in ROI_SPECS:
+            ew = effective_weights[name]
+            rgb = per_roi_means.get(name)
+            if ew > 0.0 and rgb is not None:
+                w_sum += ew
+                acc_r += ew * rgb[0]
+                acc_g += ew * rgb[1]
+                acc_b += ew * rgb[2]
+        if w_sum > 0.0:
+            sample = (acc_r / w_sum, acc_g / w_sum, acc_b / w_sum)
     norm_total = sum(effective_weights.values()) or 1.0
     effective_weights = {k: float(v / norm_total) if v > 0.0 else 0.0 for k, v in effective_weights.items()}
     return sample, effective_weights, len(rgbs), per_roi_means

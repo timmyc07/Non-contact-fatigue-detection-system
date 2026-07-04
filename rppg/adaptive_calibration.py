@@ -21,7 +21,9 @@ import statistics
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+
+import numpy as np
 
 from rppg.calibration import (
     CalibrationParams,
@@ -362,12 +364,162 @@ class RppgParamAbEvaluator:
         self._worsen_streak = 0
 
 
+RoiWindow = tuple[Sequence[float], Sequence[float], Sequence[float], Sequence[float]]
+
+
+def recompute_raw_bpm_from_roi_windows(
+    roi_windows: Mapping[str, RoiWindow],
+    roi_weights: Mapping[str, float],
+    *,
+    min_samples: int = 64,
+    min_duration_sec: float = 6.0,
+) -> float | None:
+    """P6b-3a：以一組**靜態** ROI 權重，對同一段 per-ROI (t, r, g, b) 緩衝離線重算
+    rPPG 的「原始 BPM」（raw，不套任何 BPM 穩定器/EMA/跳變護欄後處理）。
+
+    輸入
+    ----
+    roi_windows
+        ``{roi_name: (t, r, g, b)}``，即 :meth:`RppgEngine.get_roi_window` 的回傳格式
+        （四條等長序列，t 為秒、r/g/b 為該 ROI 每幀遮罩區域的通道均值）。
+    roi_weights
+        ``{roi_name: weight}`` 靜態權重。只有 ``weight > 0`` 且在 roi_windows 中有
+        非空資料的 ROI 會參與；其餘略過。權重不需預先正規化（加權平均
+        ``sum(w*x)/sum(w)`` 對權重同比例縮放不變）。
+
+    多 ROI 時間對齊
+    --------------
+    取所有參與 ROI 的**共同時間戳交集**，不做插值（使用者定案）。精確浮點比對即可：
+    per-ROI 緩衝的時間戳皆來自同一幀的全域 ``t_now``（見
+    :meth:`RppgEngine.push_roi_means`），跨 ROI 逐位元相同，故交集用精確相等為正確的
+    join key。任一參與 ROI 在某時間戳缺格，該時間戳即被排除（不補值）。**已知行為**：
+    同一 ROI 內若出現重複時間戳（正常流程下不會發生，因每幀 t_now 各自不同），
+    ``{t: (r,g,b) for ...}`` 的 dict comprehension 會靜默保留最後一筆、覆蓋較早的
+    重複樣本；本函式不對此另行報錯或去重。
+
+    取樣頻率
+    --------
+    fs 沿用 :meth:`RppgEngine._fs` 的公式語意（來源：rppg/rppg_worker.py）：
+    ``dt = (t[-1] - t[0]) / (n - 1)``、``fs = clip(1/dt, 8.0, 90.0)`` Hz。與 live 不同的是
+    live 在樣本不足/退化時回退 ``target_fps``；離線角色改為直接回傳 ``None``（見下）。
+
+    重算管線重用 rppg/rppg_worker.py 的既有 module-level 純函式
+    ``pos_pulse`` → ``butter_bandpass``（頻帶 0.65/3.7 Hz 沿用，不改寫）→ ``welch_peak_hz``，
+    確保與 live BPM 走同一套訊號處理。
+
+    回傳
+    ----
+    重算得到的 raw BPM（float）；資料不足（參與 ROI 為空、交集為空、樣本數 < min_samples、
+    時長 < min_duration_sec、時間戳退化、或 Welch 在心率頻帶找不到峰）時回傳 ``None``，
+    不丟例外。
+
+    設計註記（重要）
+    ----------------
+    本函式使用「**靜態**」權重，**不含**逐幀 pose 懲罰與品質門檻——因為 per-ROI 緩衝
+    只保存每幀 ROI 均值，沒有保存逐幀的 pose/遮蔽/品質資訊。因此它**不是** live 混合
+    管線（``collect_rppg_roi_sample_with_means`` + ``RppgEngine.compute``）的精確複製，
+    也不保證與 live BPM 完全一致。它的角色是 **A/B 比較器**：current 與 candidate 兩組
+    ROI 權重都用「同一套重算方法、同一段訊號」重算 BPM，只要比較公平（同法同料）即可
+    據此判斷候選是否更接近心跳帶真值，不需與 live 逐位元對齊。
+    """
+    # 惰性匯入 rppg_worker 的純訊號函式：rppg_worker 於 module 頂層匯入 PySide6/cv2/
+    # mediapipe，於此惰性匯入可維持本模組（純運算、無 Qt）的 import-time 輕量與可攜性。
+    from rppg.rppg_worker import butter_bandpass, pos_pulse, welch_peak_hz
+
+    # 參與 ROI：權重 > 0 且緩衝非空。
+    per_roi: dict[str, dict[float, tuple[float, float, float]]] = {}
+    active_weights: dict[str, float] = {}
+    for name, window in roi_windows.items():
+        try:
+            weight = float(roi_weights.get(name, 0.0))
+        except (TypeError, ValueError):
+            continue
+        if not (weight > 0.0) or not np.isfinite(weight):
+            continue
+        t_seq, r_seq, g_seq, b_seq = window
+        n_pts = min(len(t_seq), len(r_seq), len(g_seq), len(b_seq))
+        if n_pts == 0:
+            continue
+        mapping = {
+            float(t_seq[i]): (float(r_seq[i]), float(g_seq[i]), float(b_seq[i]))
+            for i in range(n_pts)
+        }
+        if not mapping:
+            continue
+        per_roi[name] = mapping
+        active_weights[name] = weight
+
+    if not per_roi:
+        return None
+
+    # 共同時間戳交集（精確浮點比對，不插值）。
+    common: set[float] | None = None
+    for mapping in per_roi.values():
+        keys = set(mapping.keys())
+        common = keys if common is None else (common & keys)
+    if not common:
+        return None
+
+    common_sorted = sorted(common)
+    n = len(common_sorted)
+    if n < max(int(min_samples), 5):
+        return None
+    duration = common_sorted[-1] - common_sorted[0]
+    if duration < float(min_duration_sec):
+        return None
+
+    dt = duration / (n - 1)
+    if dt <= 1e-6:
+        return None
+    fs = float(np.clip(1.0 / dt, 8.0, 90.0))
+
+    w_total = sum(active_weights.values())
+    if w_total <= 0.0:
+        return None
+
+    r_mix = np.empty(n, dtype=np.float64)
+    g_mix = np.empty(n, dtype=np.float64)
+    b_mix = np.empty(n, dtype=np.float64)
+    for i, tt in enumerate(common_sorted):
+        acc_r = acc_g = acc_b = 0.0
+        for name, weight in active_weights.items():
+            rgb = per_roi[name][tt]
+            acc_r += weight * rgb[0]
+            acc_g += weight * rgb[1]
+            acc_b += weight * rgb[2]
+        r_mix[i] = acc_r / w_total
+        g_mix[i] = acc_g / w_total
+        b_mix[i] = acc_b / w_total
+
+    # 防護：任一來源樣本含 NaN/Inf 會透過加權混合污染 r_mix/g_mix/b_mix，進而讓
+    # pos_pulse/butter_bandpass 的輸出也含非有限值。np.argmax（welch_peak_hz 內部
+    # 用於選頻譜峰）在含 NaN 的陣列上行為不穩定，可能選到某個仍為有限值的
+    # peak_hz，繞過下方 `peak_hz <= 0.0` 護欄、靜默回傳錯誤 BPM。因此在混合完成後
+    # 立刻擋一次，不讓非有限輸入進入 pos_pulse。
+    if not (np.all(np.isfinite(r_mix)) and np.all(np.isfinite(g_mix)) and np.all(np.isfinite(b_mix))):
+        return None
+
+    pulse = pos_pulse(r_mix, g_mix, b_mix)
+    filt = butter_bandpass(pulse, fs, 0.65, 3.7)
+    peak_hz, _freqs, _pxx = welch_peak_hz(filt, fs)
+    # 第二道防護：即便混合輸入有限，pos_pulse/butter_bandpass 內部運算理論上也可能
+    # 因極端數值產生非有限中間結果；最終 BPM 算出前再次確認為有限值，避免任何來源
+    # 的 NaN/Inf 悄悄流入回傳值。
+    if not np.isfinite(peak_hz) or peak_hz <= 0.0:
+        return None
+    bpm = float(peak_hz * 60.0)
+    if not np.isfinite(bpm):
+        return None
+    return bpm
+
+
 __all__ = [
     "ADAPTIVE_QUALITY_GATES",
     "AdaptiveCalibState",
     "OnlineBpmCalibrator",
     "RppgParamAbEvaluator",
     "RppgParamAbVerdict",
+    "recompute_raw_bpm_from_roi_windows",
     "CONF_HIGH",
     "CONF_MED",
     "CONF_LOW",

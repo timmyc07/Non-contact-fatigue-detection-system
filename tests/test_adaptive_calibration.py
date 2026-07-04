@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import numpy as np
 import pytest
 
+from gui.mediapipe_tuning import load_mediapipe_tuning
 from rppg.adaptive_calibration import (
     CONF_LOW,
     OnlineBpmCalibrator,
     RppgParamAbEvaluator,
+    recompute_raw_bpm_from_roi_windows,
 )
 from rppg.calibration import apply_bpm_calibration
+from rppg.rppg_worker import ROI_SPECS, RppgEngine, RoiGeometryTracker
 
 
 def _good_rppg(bpm: float, *, raw_bpm: float | None = None) -> dict:
@@ -242,3 +248,197 @@ def test_ab_reset_clears_state():
     v = ev.evaluate()
     assert v.pairs_used == 0
     assert v.improve_streak == 0 and v.worsen_streak == 0
+
+
+# ── recompute_raw_bpm_from_roi_windows（P6b-3a 離線重算純函式）─────────────────
+
+def _pulse_channels(
+    t: np.ndarray,
+    f0: float,
+    *,
+    seed: int | None = None,
+    amp: tuple[float, float, float] = (0.5, 2.0, 0.2),
+    phase: tuple[float, float, float] = (0.0, 0.4, 0.8),
+    noise: float = 0.05,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """合成 (r,g,b) 三通道脈搏訊號。各通道用不同振幅+相位，避免三通道互為純量倍數
+    而在 POS 正規化後互相抵消；如此 POS→bandpass→Welch 能取到 f0 的主峰。"""
+    rng = np.random.default_rng(seed) if seed is not None else None
+    out = []
+    for a, ph in zip(amp, phase):
+        c = a * np.sin(2 * np.pi * f0 * t + ph)
+        if rng is not None and noise > 0.0:
+            c = c + noise * rng.standard_normal(t.size)
+        out.append(c)
+    return out[0], out[1], out[2]
+
+
+def _fake_landmarks() -> list[SimpleNamespace]:
+    pts = [SimpleNamespace(x=0.5, y=0.5) for _ in range(478)]
+    pts[1] = SimpleNamespace(x=0.50, y=0.45)
+    pts[10] = SimpleNamespace(x=0.50, y=0.20)
+    pts[152] = SimpleNamespace(x=0.50, y=0.82)
+    pts[234] = SimpleNamespace(x=0.34, y=0.52)
+    pts[454] = SimpleNamespace(x=0.66, y=0.52)
+    pts[33] = SimpleNamespace(x=0.38, y=0.36)
+    pts[263] = SimpleNamespace(x=0.62, y=0.38)
+    return pts
+
+
+def test_recompute_matches_engine_raw_bpm_single_roi_equal_weight() -> None:
+    """3(a)：單一 ROI、權重 1.0，重算 BPM 與 RppgEngine.compute() 的 raw_bpm 一致。
+
+    容差 1e-6 BPM：單 ROI 權重 1.0 時加權平均 = w*x/w = x（除以 1.0 為精確浮點），
+    兩路徑餵入完全相同的 (t,r,g,b)，走完全相同的 _fs 公式 + pos_pulse/butter_bandpass/
+    welch_peak_hz 純函式，理論上逐位元相等（實測 diff=0.0）。1e-6 僅為防範任何非
+    決定性浮點加總差異的安全邊界，非表示允許有意義偏差。"""
+    n, fs, f0 = 256, 30.0, 1.25
+    t = np.arange(n) / fs
+    r, g, b = _pulse_channels(t, f0, seed=0)
+
+    engine = RppgEngine(buffer_sec=12.0, target_fps=30.0)
+    for i in range(n):
+        engine.push(float(t[i]), float(r[i]), float(g[i]), float(b[i]))
+    metrics = engine.compute(
+        float(t[-1]),
+        np.full((480, 640, 3), 128, dtype=np.uint8),
+        _fake_landmarks(),
+        transform_matrix=None,
+        roi_valid_count=4,
+        roi_weights={name: 0.25 for name, _ in ROI_SPECS},
+        roi_tracker=RoiGeometryTracker(),
+        tuning=load_mediapipe_tuning(),
+    )
+    rec = recompute_raw_bpm_from_roi_windows({"forehead": (t, r, g, b)}, {"forehead": 1.0})
+
+    assert metrics.raw_bpm > 0.0
+    assert rec is not None
+    assert abs(rec - metrics.raw_bpm) < 1e-6
+
+
+def test_recompute_weights_change_bpm() -> None:
+    """3(d)：本次任務核心——不同權重必須產生可分辨的不同 BPM（證明權重有槓桿）。
+
+    forehead 脈搏在 1.0 Hz（60 bpm）、L_cheek 在 2.2 Hz（132 bpm）。加重哪個 ROI，
+    加權混合後的主頻就趨近該 ROI。"""
+    n, fs = 256, 30.0
+    t = np.arange(n) / fs
+    r_fh, g_fh, b_fh = _pulse_channels(t, 1.0, seed=1)
+    r_ch, g_ch, b_ch = _pulse_channels(t, 2.2, seed=2)
+    windows = {"forehead": (t, r_fh, g_fh, b_fh), "L_cheek": (t, r_ch, g_ch, b_ch)}
+
+    bpm_forehead_heavy = recompute_raw_bpm_from_roi_windows(
+        windows, {"forehead": 0.9, "L_cheek": 0.1}
+    )
+    bpm_cheek_heavy = recompute_raw_bpm_from_roi_windows(
+        windows, {"forehead": 0.1, "L_cheek": 0.9}
+    )
+
+    assert bpm_forehead_heavy is not None and bpm_cheek_heavy is not None
+    # 可分辨且方向正確：forehead 重→趨近 60、L_cheek 重→趨近 132。
+    assert abs(bpm_forehead_heavy - 60.0) < 10.0
+    assert abs(bpm_cheek_heavy - 132.0) < 10.0
+    assert (bpm_cheek_heavy - bpm_forehead_heavy) > 30.0
+
+
+def test_recompute_uses_timestamp_intersection_not_union() -> None:
+    """3(b)：多 ROI 取共同時間戳交集、不插值。
+
+    forehead 只在偶數索引有樣本（乾淨脈搏）；L_cheek 在所有索引都有，但奇數索引是
+    3.3 Hz 的強污染。交集 = 偶數索引（兩 ROI 皆有）。若誤用聯集/插值，奇數索引的
+    污染會主導 → BPM 遠離 72；正確取交集則污染被排除 → BPM≈f0*60=72。"""
+    fs, N, f0 = 30.0, 256, 1.2
+    tf = np.arange(N) / fs
+    clean_r, clean_g, clean_b = _pulse_channels(tf, f0, noise=0.0)
+    cont_r, cont_g, cont_b = _pulse_channels(tf, 3.3, noise=0.0)
+    even = np.arange(0, N, 2)
+    is_even = (np.arange(N) % 2 == 0)
+    rB = np.where(is_even, clean_r, 8.0 * cont_r)
+    gB = np.where(is_even, clean_g, 8.0 * cont_g)
+    bB = np.where(is_even, clean_b, 8.0 * cont_b)
+
+    windows = {
+        "forehead": (tf[even], clean_r[even], clean_g[even], clean_b[even]),
+        "L_cheek": (tf, rB, gB, bB),
+    }
+    bpm = recompute_raw_bpm_from_roi_windows(
+        windows, {"forehead": 0.5, "L_cheek": 0.5}, min_samples=64, min_duration_sec=6.0
+    )
+    assert bpm is not None
+    assert abs(bpm - f0 * 60.0) < 6.0
+
+
+def test_recompute_disjoint_timestamps_returns_none() -> None:
+    """3(b) 補充：兩 ROI 時間戳完全不重疊 → 交集為空 → None（證明是交集非聯集）。"""
+    n, fs = 256, 30.0
+    t = np.arange(n) / fs
+    r, g, b = _pulse_channels(t, 1.2, seed=3)
+    windows = {"forehead": (t, r, g, b), "L_cheek": (t + 1000.0, r, g, b)}
+    assert recompute_raw_bpm_from_roi_windows(
+        windows, {"forehead": 0.5, "L_cheek": 0.5}
+    ) is None
+
+
+def test_recompute_insufficient_samples_returns_none() -> None:
+    """3(c)：樣本數過少 → None，不丟例外。"""
+    t = np.arange(10) / 30.0
+    assert recompute_raw_bpm_from_roi_windows(
+        {"forehead": (t, t, t, t)}, {"forehead": 1.0}
+    ) is None
+
+
+def test_recompute_short_duration_returns_none() -> None:
+    """3(c)：樣本數足夠但時長不足（高取樣率短視窗）→ None。"""
+    n, fs = 200, 200.0  # 恰好 ~1 秒
+    t = np.arange(n) / fs
+    r, g, b = _pulse_channels(t, 1.2, seed=5)
+    assert recompute_raw_bpm_from_roi_windows(
+        {"forehead": (t, r, g, b)}, {"forehead": 1.0}, min_samples=64, min_duration_sec=6.0
+    ) is None
+
+
+def test_recompute_nan_sample_returns_none() -> None:
+    """審查發現的 major：ROI 樣本含 NaN 時，混合後訊號被污染，welch_peak_hz 內部
+    np.argmax 在含 NaN 陣列上行為不穩定，可能選到仍為有限值的 peak_hz，繞過
+    `peak_hz <= 0.0` 護欄、靜默算出錯誤 BPM（審查者實測：乾淨訊號 ~71.9 BPM，
+    污染 1 筆 G 通道為 NaN 後變成 42.19，無例外無警告）。修法：混合完成後、
+    最終 BPM 算出後皆檢查 np.isfinite，任何非有限值一律回傳 None。"""
+    fs, N, f0 = 30.0, 256, 1.2
+    t = np.arange(N) / fs
+    r, g, b = _pulse_channels(t, f0, noise=0.0)
+
+    # 對照：乾淨訊號應能算出有限、合理的 BPM。
+    clean = recompute_raw_bpm_from_roi_windows({"forehead": (t, r, g, b)}, {"forehead": 1.0})
+    assert clean is not None and np.isfinite(clean)
+
+    g_nan = g.copy()
+    g_nan[10] = np.nan
+    contaminated = recompute_raw_bpm_from_roi_windows(
+        {"forehead": (t, r, g_nan, b)}, {"forehead": 1.0}
+    )
+    assert contaminated is None
+
+
+def test_recompute_inf_sample_returns_none() -> None:
+    """同上，補測 Inf（而非 NaN）污染樣本的情形。"""
+    fs, N, f0 = 30.0, 256, 1.2
+    t = np.arange(N) / fs
+    r, g, b = _pulse_channels(t, f0, noise=0.0)
+
+    b_inf = b.copy()
+    b_inf[50] = np.inf
+    assert recompute_raw_bpm_from_roi_windows(
+        {"forehead": (t, r, g, b_inf)}, {"forehead": 1.0}
+    ) is None
+
+
+def test_recompute_no_active_weight_returns_none() -> None:
+    """3(c)：沒有正權重的 ROI（權重全 0 或缺）→ None，不丟例外。"""
+    n, fs = 256, 30.0
+    t = np.arange(n) / fs
+    r, g, b = _pulse_channels(t, 1.2, seed=4)
+    assert recompute_raw_bpm_from_roi_windows(
+        {"forehead": (t, r, g, b)}, {"forehead": 0.0}
+    ) is None
+    assert recompute_raw_bpm_from_roi_windows({"forehead": (t, r, g, b)}, {}) is None
+    assert recompute_raw_bpm_from_roi_windows({}, {}) is None
