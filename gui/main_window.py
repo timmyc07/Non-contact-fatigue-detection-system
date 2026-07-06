@@ -2962,6 +2962,7 @@ class MainWindow(QMainWindow):
     def _on_camera_failed(self, msg: str) -> None:
         self._append_log(f"✗ 相機錯誤：{msg}")
         self._cancel_pending_auto_capture_timer()
+        self._rollback_auto_capture_toggles()
         if self._belt_calibrator is not None:
             self._stop_belt_calibration()
         self._stop_analysis_workers()
@@ -3025,6 +3026,7 @@ class MainWindow(QMainWindow):
             self._emit_web_metrics(force=True)
         else:
             self._cancel_pending_auto_capture_timer()
+            self._rollback_auto_capture_toggles()
             self._latest_rppg_metrics = None
             self._latest_fatigue_metrics = None
             self._latest_fused_score = None
@@ -3073,6 +3075,7 @@ class MainWindow(QMainWindow):
             self._emit_web_metrics(force=True)
         else:
             self._cancel_pending_auto_capture_timer()
+            self._rollback_auto_capture_toggles()
             self._btn_record.setText("開始記錄")
             self._lbl_record.setText("記錄狀態：未啟動")
             self._stop_recording()
@@ -3174,6 +3177,16 @@ class MainWindow(QMainWindow):
         任一條件不成立都跳過停止，避免誤停一段與本次自動採集無關的錄製。"""
         self._cancel_pending_auto_capture_timer()
 
+        # 讀 belt-truth writer 的即時路徑（若倒數期間使用者手動取消再重新勾選過
+        # 心跳帶校準，_belt_truth_capture 會是新建的 writer，路徑與啟動當下快照的
+        # _auto_capture_belt_path 不同）。必須在下面任何可能經由 unchecked
+        # _chk_belt_calib 觸發 _stop_belt_calibration（把 _belt_truth_capture 設回
+        # None）的動作——包含 _toggle_recording() 內部現在也會呼叫
+        # _rollback_auto_capture_toggles()——發生之前先讀取，否則會讀到 None。
+        live_belt_path = (
+            self._belt_truth_capture.path if self._belt_truth_capture is not None else None
+        )
+
         expected_db_path = self._auto_capture_expected_db_path
         self._auto_capture_expected_db_path = None
         db_path = expected_db_path
@@ -3187,15 +3200,6 @@ class MainWindow(QMainWindow):
             self._append_log(
                 "⚠ 自動採集：錄製已被其他操作結束或替換，自動採集跳過停止（未變更目前錄製狀態）。"
             )
-
-        # 讀 belt-truth writer 的即時路徑（若倒數期間使用者手動取消再重新勾選過
-        # 心跳帶校準，_belt_truth_capture 會是新建的 writer，路徑與啟動當下快照
-        # 的 _auto_capture_belt_path 不同）；必須在 _rollback_auto_capture_toggles()
-        # 可能經由 unchecked _chk_belt_calib 觸發 _stop_belt_calibration（把
-        # _belt_truth_capture 設回 None）之前先讀取。
-        live_belt_path = (
-            self._belt_truth_capture.path if self._belt_truth_capture is not None else None
-        )
 
         self._rollback_auto_capture_toggles()
 
