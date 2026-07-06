@@ -331,6 +331,19 @@ class MainWindow(QMainWindow):
         self._belt_ui_timer = QTimer(self)
         self._belt_ui_timer.setInterval(1000)
         self._belt_ui_timer.timeout.connect(self._tick_belt_calibration)
+        # 自動採集：一鍵串接既有「開始」/「開始記錄」/「心跳帶真值校準」觸發點，
+        # 不重寫任何 worker 啟停或記錄/校準邏輯本身（見 _on_auto_capture_clicked）。
+        self._auto_capture_timer: QTimer | None = None
+        self._auto_capture_belt_path: Path | None = None
+        self._auto_capture_started_belt_calib: bool = False
+        self._auto_capture_started_stress: bool = False
+        # True 僅當本次自動採集自己呼叫 _toggle_recording() 啟動了記錄；若使用者按
+        # 「自動採集」前已手動開始記錄，自動採集只是沿用既有錄製，此旗標維持 False，
+        # 收尾時就不會誤停這段與自動採集無關的錄製。
+        self._auto_capture_started_recording: bool = False
+        # 啟動計時器當下記錄的 _recording_db_path，供 _finish_auto_capture 收尾時比對，
+        # 避免誤停使用者在倒數期間另行啟動的、與本次自動採集無關的新錄製。
+        self._auto_capture_expected_db_path: Path | None = None
 
         self._build_menu()
         self._build_central()
@@ -598,6 +611,26 @@ class MainWindow(QMainWindow):
         row_c.addWidget(self._lbl_bench)
         row_c.addStretch(1)
         ctl.addLayout(row_c)
+
+        row_auto = QHBoxLayout()
+        row_auto.addWidget(QLabel("自動採集時長(秒)："))
+        self._spn_auto_capture_seconds = QSpinBox()
+        self._spn_auto_capture_seconds.setRange(10, 600)
+        self._spn_auto_capture_seconds.setValue(60)
+        row_auto.addWidget(self._spn_auto_capture_seconds)
+        self._btn_auto_capture = QPushButton("自動採集")
+        self._btn_auto_capture.setToolTip(
+            "一鍵串接既有流程：啟動管線（若未啟動）→ 開始記錄（採集 A）→\n"
+            "勾選「自動採集含心跳帶」時，同步勾選「壓力／HRV」與「心跳帶真值校準」（採集 B，"
+            "是否實際落檔仍依現有設定與硬體狀態決定）→\n"
+            "倒數結束（或再按一次提前停止）時自動停止記錄，並回報 .db／.jsonl 路徑。"
+        )
+        self._btn_auto_capture.clicked.connect(self._on_auto_capture_clicked)
+        self._chk_auto_capture_belt = QCheckBox("自動採集含心跳帶")
+        row_auto.addWidget(self._btn_auto_capture)
+        row_auto.addWidget(self._chk_auto_capture_belt)
+        row_auto.addStretch(1)
+        ctl.addLayout(row_auto)
 
         row_d = QHBoxLayout()
         row_d.addWidget(QLabel("Overlay 透明度："))
@@ -2928,6 +2961,7 @@ class MainWindow(QMainWindow):
 
     def _on_camera_failed(self, msg: str) -> None:
         self._append_log(f"✗ 相機錯誤：{msg}")
+        self._cancel_pending_auto_capture_timer()
         if self._belt_calibrator is not None:
             self._stop_belt_calibration()
         self._stop_analysis_workers()
@@ -2990,6 +3024,7 @@ class MainWindow(QMainWindow):
                 self._toggle_recording()
             self._emit_web_metrics(force=True)
         else:
+            self._cancel_pending_auto_capture_timer()
             self._latest_rppg_metrics = None
             self._latest_fatigue_metrics = None
             self._latest_fused_score = None
@@ -3037,11 +3072,145 @@ class MainWindow(QMainWindow):
                 self._append_log("● 記錄開始 → recordings/")
             self._emit_web_metrics(force=True)
         else:
+            self._cancel_pending_auto_capture_timer()
             self._btn_record.setText("開始記錄")
             self._lbl_record.setText("記錄狀態：未啟動")
             self._stop_recording()
             self._append_log("○ 記錄停止。")
             self._emit_web_metrics(force=True)
+
+    def _cancel_pending_auto_capture_timer(self) -> None:
+        """停止自動採集倒數計時器（若有）並還原其 UI 狀態：按鈕文字、時長 spinbox
+        啟用狀態。刻意不動錄製／心跳帶／壓力勾選狀態——那些由呼叫端依情境決定是否
+        一併回滾（見 `_rollback_auto_capture_toggles`）。供所有既有「停止」入口
+        （手動停止記錄／停止管線／相機失敗／關閉視窗）呼叫，避免自動採集計時器在
+        它所依附的錄製已被其他操作結束後，仍在背景倒數並於稍後誤停一段不相關的新錄製。"""
+        if self._auto_capture_timer is None:
+            return
+        self._auto_capture_timer.stop()
+        self._auto_capture_timer.deleteLater()
+        self._auto_capture_timer = None
+        self._btn_auto_capture.setText("自動採集")
+        self._spn_auto_capture_seconds.setEnabled(True)
+
+    def _rollback_auto_capture_toggles(self) -> None:
+        """回滾本次自動採集自己強制勾選的核取方塊，且只在目前仍是勾選狀態才動，
+        避免覆蓋使用者在期間手動做的操作。"""
+        if self._auto_capture_started_belt_calib and self._chk_belt_calib.isChecked():
+            self._chk_belt_calib.setChecked(False)
+        self._auto_capture_started_belt_calib = False
+        if self._auto_capture_started_stress and self._chk_stress.isChecked():
+            self._chk_stress.setChecked(False)
+        self._auto_capture_started_stress = False
+
+    def _on_auto_capture_clicked(self) -> None:
+        """一鍵自動採集：只串接既有觸發點（setChecked／_toggle_pipeline／_toggle_recording），
+        不重寫任何 worker 啟停、記錄或心跳帶校準邏輯本身。"""
+        if self._auto_capture_timer is not None:
+            # 倒數中再按一次 → 提前停止。
+            self._append_log("■ 自動採集：使用者提前按下停止。")
+            self._finish_auto_capture(early=True)
+            return
+
+        include_belt = self._chk_auto_capture_belt.isChecked()
+        self._auto_capture_started_belt_calib = False
+        self._auto_capture_started_stress = False
+        self._auto_capture_started_recording = False
+        if include_belt:
+            if not self._chk_stress.isChecked():
+                self._chk_stress.setChecked(True)
+                self._auto_capture_started_stress = True
+            if not self._chk_belt_calib.isChecked():
+                self._chk_belt_calib.setChecked(True)
+                self._auto_capture_started_belt_calib = True
+
+        pipeline_started_by_this_call = False
+        if not self._pipeline_running:
+            self._toggle_pipeline()
+            if not self._pipeline_running:
+                self._append_log("⚠ 自動採集：管線未能啟動，已中止（請先選擇攝影機）。")
+                self._rollback_auto_capture_toggles()
+                return
+            pipeline_started_by_this_call = True
+
+        if not self._recording:
+            self._toggle_recording()
+            if not self._recording:
+                self._append_log("⚠ 自動採集：記錄未能啟動，已中止。")
+                self._rollback_auto_capture_toggles()
+                if pipeline_started_by_this_call:
+                    # 設計取捨：這裡不對稱關閉管線，保留運作中狀態讓使用者自行決定
+                    # 是否繼續（不強制連帶停掉一個可能還有用的管線）。
+                    self._append_log("　（本次自動採集啟動的管線維持運作中，未一併關閉。）")
+                return
+            # 這段記錄是自動採集自己啟動的，收尾時才由自動採集負責停止；若記錄
+            # 在按下按鈕前已在跑（下方 if 不成立），維持 False，沿用不停止。
+            self._auto_capture_started_recording = True
+
+        self._auto_capture_belt_path = (
+            self._belt_truth_capture.path if self._belt_truth_capture is not None else None
+        )
+        self._auto_capture_expected_db_path = self._recording_db_path
+
+        duration_s = self._spn_auto_capture_seconds.value()
+        self._btn_auto_capture.setText("停止自動採集")
+        self._spn_auto_capture_seconds.setEnabled(False)
+        self._append_log(
+            f"▶ 自動採集開始（{duration_s}s，{'含心跳帶' if include_belt else '僅記錄'}）"
+        )
+        self._auto_capture_timer = QTimer(self)
+        self._auto_capture_timer.setSingleShot(True)
+        self._auto_capture_timer.timeout.connect(lambda: self._finish_auto_capture(early=False))
+        self._auto_capture_timer.start(duration_s * 1000)
+
+    def _finish_auto_capture(self, early: bool) -> None:
+        """自動採集收尾：只呼叫既有停止觸發點，belt-truth capture writer 的關閉交給
+        既有 _stop_belt_calibration（經由 unchecked _chk_belt_calib 觸發）自行處理。
+        停止記錄需同時滿足兩個條件才會呼叫 _toggle_recording()：
+        (1) `_auto_capture_started_recording` 為 True——這段記錄是本次自動採集自己
+            啟動的，而非使用者按下「自動採集」前就已手動開始、自動採集只是沿用；
+        (2) session token（`_auto_capture_expected_db_path`）仍與目前 `_recording_db_path`
+            相符——避免使用者在倒數期間另行結束/替換掉這段錄製後被誤停。
+        任一條件不成立都跳過停止，避免誤停一段與本次自動採集無關的錄製。"""
+        self._cancel_pending_auto_capture_timer()
+
+        expected_db_path = self._auto_capture_expected_db_path
+        self._auto_capture_expected_db_path = None
+        db_path = expected_db_path
+        started_recording = self._auto_capture_started_recording
+        self._auto_capture_started_recording = False
+        if started_recording and self._recording and self._recording_db_path == expected_db_path:
+            self._toggle_recording()
+        elif not started_recording:
+            self._append_log("⚠ 自動採集：錄製非本次自動採集啟動，自動採集跳過停止。")
+        else:
+            self._append_log(
+                "⚠ 自動採集：錄製已被其他操作結束或替換，自動採集跳過停止（未變更目前錄製狀態）。"
+            )
+
+        # 讀 belt-truth writer 的即時路徑（若倒數期間使用者手動取消再重新勾選過
+        # 心跳帶校準，_belt_truth_capture 會是新建的 writer，路徑與啟動當下快照
+        # 的 _auto_capture_belt_path 不同）；必須在 _rollback_auto_capture_toggles()
+        # 可能經由 unchecked _chk_belt_calib 觸發 _stop_belt_calibration（把
+        # _belt_truth_capture 設回 None）之前先讀取。
+        live_belt_path = (
+            self._belt_truth_capture.path if self._belt_truth_capture is not None else None
+        )
+
+        self._rollback_auto_capture_toggles()
+
+        belt_path = live_belt_path if live_belt_path is not None else self._auto_capture_belt_path
+        self._auto_capture_belt_path = None
+
+        lines = [f"自動採集{'（提前停止）' if early else '（時間到）'}已完成。"]
+        if db_path is not None:
+            lines.append(f"metrics 記錄 → {db_path}")
+        else:
+            lines.append("metrics 記錄：未取得路徑（記錄可能未成功啟動）。")
+        if belt_path is not None:
+            lines.append(f"心跳帶 belt-truth capture → {belt_path}")
+        self._append_log("● " + "  ".join(lines))
+        QMessageBox.information(self, "自動採集完成", "\n".join(lines))
 
     def _toggle_benchmark(self) -> None:
         if not self._pipeline_running:
@@ -3249,6 +3418,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._unregister_global_hotkeys()
+        self._cancel_pending_auto_capture_timer()
         if self._belt_calibrator is not None:
             self._stop_belt_calibration()   # 存本次 session 校準版本
         self._belt_ui_timer.stop()
