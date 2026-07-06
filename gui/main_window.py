@@ -12,7 +12,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt, QThread, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QImage, QImageWriter, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QImage, QImageWriter, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -234,6 +237,72 @@ def application_stylesheet() -> str:
         background-color: #0d1117;
         border-top: 1px solid #30363d;
         color: #8b949e;
+    }
+    QListWidget#navList {
+        background-color: #0d1117;
+        border: none;
+        border-right: 1px solid #30363d;
+        outline: 0;
+        padding: 10px 8px;
+        font-size: 14px;
+    }
+    QListWidget#navList::item {
+        padding: 12px 14px;
+        border-radius: 8px;
+        color: #8b949e;
+        margin: 3px 0;
+        font-weight: 600;
+    }
+    QListWidget#navList::item:selected {
+        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 #1f6feb, stop:1 #388bfd);
+        color: #ffffff;
+    }
+    QListWidget#navList::item:hover {
+        background-color: #21262d;
+        color: #e6edf3;
+    }
+    QLabel#cardCaption {
+        color: #8b949e;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    QLabel#cardValue {
+        font-size: 15px;
+        font-weight: 600;
+        color: #e6edf3;
+    }
+    QLabel#cardValueBig {
+        font-size: 32px;
+        font-weight: 700;
+        color: #e6edf3;
+        letter-spacing: 0.5px;
+    }
+    QLabel#cardUnit {
+        font-size: 12px;
+        font-weight: 500;
+        color: #8b949e;
+    }
+    QLabel#levelBadge {
+        font-size: 18px;
+        font-weight: 700;
+        color: #ffffff;
+        background-color: #30363d;
+        border-radius: 8px;
+        padding: 8px 12px;
+    }
+    QLabel#sectionSub {
+        font-size: 13px;
+        font-weight: 600;
+        color: #8b949e;
+        margin-top: 6px;
+    }
+    QLabel#previewLabel {
+        background-color: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        color: #6e7681;
+        font-size: 14px;
     }
     """
 
@@ -444,89 +513,179 @@ class MainWindow(QMainWindow):
         self._menu_actions_hotkeys = (act_metrics, act_preview, act_start, act_lock, act_all, act_rec)
 
     def _build_central(self) -> None:
+        """左側邊導航 + 右側 QStackedWidget 四頁 dashboard 架構。
+
+        僅為版面重組：所有既有 self._xxx widget 與 signal/slot 接線一律保留（維持
+        原名），只是分散到「即時監測／心跳帶／影片回測／設定」四個分頁；未觸碰任何
+        數值路徑、worker 或 overlay 視窗邏輯。
+        """
         wrap = QWidget()
         self.setCentralWidget(wrap)
-        outer = QVBoxLayout(wrap)
-        outer.setContentsMargins(20, 16, 20, 16)
-        outer.setSpacing(14)
+        root = QHBoxLayout(wrap)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        header = QVBoxLayout()
-        t = QLabel("rPPG 疲勞/生理訊號控制台")
-        t.setObjectName("titleLabel")
-        header.addWidget(t)
-        outer.addLayout(header)
+        # ── 左側邊導航 ──
+        side = QWidget()
+        side.setObjectName("sidebar")
+        side.setMinimumWidth(168)
+        side.setMaximumWidth(220)
+        side.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        side_l = QVBoxLayout(side)
+        side_l.setContentsMargins(0, 16, 0, 16)
+        side_l.setSpacing(0)
+        brand = QLabel("rPPG 監測台")
+        brand.setObjectName("titleLabel")
+        brand.setContentsMargins(18, 0, 12, 14)
+        brand.setWordWrap(True)
+        side_l.addWidget(brand)
+        self._nav = QListWidget()
+        self._nav.setObjectName("navList")
+        for text in ("即時監測", "心跳帶", "影片回測", "設定"):
+            self._nav.addItem(QListWidgetItem(text))
+        side_l.addWidget(self._nav, 1)
+        root.addWidget(side)
 
+        # ── 右側分頁堆疊 ──
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._build_monitor_page())
+        self._stack.addWidget(self._build_belt_page())
+        self._stack.addWidget(self._build_replay_page())
+        self._stack.addWidget(self._build_settings_page())
+        root.addWidget(self._stack, 1)
+
+        self._nav.currentRowChanged.connect(self._stack.setCurrentIndex)
+        self._nav.setCurrentRow(0)
+
+        # 勾選框功能接線（元件已於各分頁建立，於此統一連線，維持原行為與順序）
+        self._chk_all.toggled.connect(self._on_toggle_all)
+        self._chk_preview.toggled.connect(self._on_preview_toggled)
+        self._chk_metrics.toggled.connect(self._on_metrics_toggled)
+        self._chk_lock.toggled.connect(self._on_lock_toggled)
+        # Behaviour alertness toggle — functional
+        self._chk_behavior.toggled.connect(self._on_behavior_toggled)
+        self._chk_auto_record.toggled.connect(
+            lambda checked: self._append_log(
+                f"[UI] {self._chk_auto_record.text()} → {'開啟' if checked else '關閉'}"
+            )
+        )
+        # rPPG stress/HRV toggle — functional
+        self._chk_stress.toggled.connect(self._on_stress_toggled)
+        self._chk_belt_calib.toggled.connect(self._on_belt_calib_toggled)
+
+        self._append_log("歡迎使用 rPPG 疲勞/生理訊號偵測 V2 控制台。變更選項僅寫入此視窗日誌。")
+        self._start_camera_scan()
+
+        self._db_flush_timer = QTimer(self)
+        self._db_flush_timer.setInterval(2000)
+        self._db_flush_timer.timeout.connect(self._flush_recorder)
+        self._db_flush_timer.start()
+
+    # ── 分頁共用小工具 ────────────────────────────────────────────────────────
+    def _page_scroll(self, content: QWidget) -> QScrollArea:
+        """把分頁內容包進垂直捲動區，維持小視窗下的 responsive 行為。"""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        body = QWidget()
-        body_layout = QVBoxLayout(body)
-        body_layout.setSpacing(14)
+        scroll.setWidget(content)
+        return scroll
 
-        # --- Camera (RGB only) ---
-        gb_cam = QGroupBox("攝影機（RGB）")
-        cam_l = QVBoxLayout(gb_cam)
-        row1 = QHBoxLayout()
-        self._cmb_camera = QComboBox()
-        self._cmb_camera.addItem("── 載入中… ──", None)
-        self._cmb_camera.setEnabled(False)
-        self._cmb_camera.currentIndexChanged.connect(self._on_camera_combo_changed)
-        btn_refresh = QPushButton("刷新列表")
-        btn_refresh.clicked.connect(self._start_camera_scan)
-        self._lbl_cam_hint = QLabel("載入中…")
-        self._lbl_cam_hint.setObjectName("hintLabel")
-        row1.addWidget(QLabel("裝置："))
-        row1.addWidget(self._cmb_camera, 1)
-        row1.addWidget(btn_refresh)
-        row1.addWidget(self._lbl_cam_hint)
-        cam_l.addLayout(row1)
+    def _stat_row(self, target_layout: QVBoxLayout, caption: str, *, min_caption: int = 96) -> QLabel:
+        """在 target_layout 追加一列「說明 — 數值」列，回傳右側數值 QLabel。"""
+        row = QHBoxLayout()
+        cap = QLabel(caption)
+        cap.setObjectName("cardCaption")
+        cap.setMinimumWidth(min_caption)
+        val = QLabel("—")
+        val.setObjectName("cardValue")
+        val.setWordWrap(True)
+        row.addWidget(cap)
+        row.addWidget(val, 1, Qt.AlignmentFlag.AlignRight)
+        target_layout.addLayout(row)
+        return val
 
-        row2 = QHBoxLayout()
-        self._cmb_resolution = QComboBox()
-        self._cmb_resolution.addItems(["640×480", "800×600", "1280×720（720p）", "1280×800", "1920×1080（1080p）"])
-        self._cmb_resolution.setCurrentText("1280×720（720p）")
-        self._cmb_fps = QComboBox()
-        self._cmb_fps.addItems(["15", "24", "30", "60"])
-        self._cmb_fps.setCurrentText("30")
-        row2.addWidget(QLabel("解析度："))
-        row2.addWidget(self._cmb_resolution)
-        row2.addSpacing(16)
-        row2.addWidget(QLabel("目標 FPS："))
-        row2.addWidget(self._cmb_fps)
-        row2.addStretch(1)
-        cam_l.addLayout(row2)
+    # ── 監測頁 ────────────────────────────────────────────────────────────────
+    def _build_monitor_page(self) -> QWidget:
+        page = QWidget()
+        page_l = QVBoxLayout(page)
+        page_l.setContentsMargins(20, 18, 20, 18)
+        page_l.setSpacing(14)
 
-        row3 = QHBoxLayout()
-        self._cmb_backend = QComboBox()
-        self._cmb_backend.addItem("自動（平台預設）", "auto")
-        if sys.platform.startswith("linux"):
-            self._cmb_backend.addItem("V4L2（Linux）", "v4l2")
-        self._cmb_backend.addItem("FFMPEG", "ffmpeg")
-        if sys.platform.startswith("win"):
-            self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
-            self._cmb_backend.addItem("DSHOW（DirectShow）", "dshow")
-        self._cmb_backend.setCurrentIndex(0)
-        self._cmb_backend.setToolTip(
-            "自動 — 依平台優先選擇可用後端\n"
-            "V4L2 — Linux 原生攝影機後端\n"
-            "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端\n"
-            "MSMF — Windows Media Foundation，可保留原生 MJPG\n"
-            "DSHOW — Windows DirectShow，部分虛擬相機較穩定"
-        )
-        self._chk_horizontal_flip = QCheckBox("水平翻轉（鏡像校正）")
-        self._chk_horizontal_flip.setChecked(True)
-        self._chk_horizontal_flip.setToolTip("相機畫面左右相反時啟用；預覽、錄影與分析會使用同一個翻轉後畫面。")
-        lbl_backend = QLabel("後端：")
-        lbl_backend.setObjectName("hintLabel")
-        row3.addWidget(lbl_backend)
-        row3.addWidget(self._cmb_backend)
-        row3.addSpacing(16)
-        row3.addWidget(self._chk_horizontal_flip)
-        row3.addStretch(1)
-        cam_l.addLayout(row3)
-        body_layout.addWidget(gb_cam)
+        title = QLabel("即時監測")
+        title.setObjectName("subtitleLabel")
+        page_l.addWidget(title)
 
-        # --- Controls ---
+        top = QHBoxLayout()
+        top.setSpacing(14)
+
+        # 鏡頭預覽（主 GUI 內；overlay 視窗仍獨立運作）
+        self._lbl_monitor_preview = QLabel("鏡頭預覽（按「開始」啟動）")
+        self._lbl_monitor_preview.setObjectName("previewLabel")
+        self._lbl_monitor_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_monitor_preview.setMinimumSize(360, 270)
+        self._lbl_monitor_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        top.addWidget(self._lbl_monitor_preview, 3)
+
+        cards = QVBoxLayout()
+        cards.setSpacing(12)
+        cards.addWidget(self._build_fatigue_card())
+        cards.addWidget(self._build_rppg_card())
+        cards.addWidget(self._build_hrv_card())
+        cards.addStretch(1)
+        cards_wrap = QWidget()
+        cards_wrap.setLayout(cards)
+        cards_wrap.setMinimumWidth(260)
+        cards_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        top.addWidget(cards_wrap, 2)
+        page_l.addLayout(top, 1)
+
+        page_l.addWidget(self._build_monitor_controls())
+        page_l.addWidget(self._build_status_strip())
+
+        return self._page_scroll(page)
+
+    def _build_fatigue_card(self) -> QGroupBox:
+        gb = QGroupBox("綜合疲勞")
+        l = QVBoxLayout(gb)
+        self._mon_fused_level = QLabel("—")
+        self._mon_fused_level.setObjectName("levelBadge")
+        self._mon_fused_level.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(self._mon_fused_level)
+        self._mon_fused_score = self._stat_row(l, "疲勞分數")
+        self._mon_ear = self._stat_row(l, "EAR")
+        self._mon_perclos = self._stat_row(l, "PERCLOS")
+        self._mon_blink = self._stat_row(l, "眨眼次數")
+        self._mon_expr = self._stat_row(l, "微表情")
+        self._mon_gaze = self._stat_row(l, "注視")
+        self._mon_head = self._stat_row(l, "頭部姿態")
+        return gb
+
+    def _build_rppg_card(self) -> QGroupBox:
+        gb = QGroupBox("rPPG 生理")
+        l = QVBoxLayout(gb)
+        bpm_row = QHBoxLayout()
+        self._mon_bpm = QLabel("—")
+        self._mon_bpm.setObjectName("cardValueBig")
+        unit = QLabel("BPM")
+        unit.setObjectName("cardUnit")
+        bpm_row.addWidget(self._mon_bpm)
+        bpm_row.addWidget(unit)
+        bpm_row.addStretch(1)
+        l.addLayout(bpm_row)
+        self._mon_warmup = self._stat_row(l, "暖機進度")
+        self._mon_sqi = self._stat_row(l, "訊號品質")
+        return gb
+
+    def _build_hrv_card(self) -> QGroupBox:
+        gb = QGroupBox("HRV（rPPG 估測）")
+        l = QVBoxLayout(gb)
+        self._mon_rmssd = self._stat_row(l, "RMSSD")
+        self._mon_sdnn = self._stat_row(l, "SDNN")
+        self._mon_lfhf = self._stat_row(l, "LF/HF")
+        self._mon_hrv_conf = self._stat_row(l, "HRV 信心")
+        return gb
+
+    def _build_monitor_controls(self) -> QGroupBox:
         gb_ctl = QGroupBox("控制")
         ctl = QVBoxLayout(gb_ctl)
 
@@ -534,64 +693,15 @@ class MainWindow(QMainWindow):
         self._btn_start = QPushButton("開始")
         self._btn_start.setObjectName("primaryButton")
         self._btn_start.clicked.connect(self._toggle_pipeline)
-        self._chk_all = QCheckBox("顯示／隱藏 全部 Overlay")
-        self._chk_all.setChecked(True)
-        self._chk_preview = QCheckBox("鏡頭預覽 Overlay（含 MediaPipe）")
-        self._chk_metrics = QCheckBox("數值 Overlay")
-        self._chk_metrics.setChecked(True)
-        row_a.addWidget(self._btn_start)
-        row_a.addSpacing(16)
-        row_a.addWidget(self._chk_all)
-        row_a.addWidget(self._chk_preview)
-        row_a.addWidget(self._chk_metrics)
-        row_a.addStretch(1)
-        ctl.addLayout(row_a)
-
-        row_b = QHBoxLayout()
         self._chk_behavior = QCheckBox("行為警覺（頭部／哈欠／注視）")
         self._chk_behavior.setChecked(True)
         self._chk_stress = QCheckBox("壓力／HRV（心率估測）")
-        self._chk_belt_calib = QCheckBox("心跳帶真值校準（背景）")
-        self._chk_belt_calib.setToolTip(
-            "以 BLE 心跳帶（Scosche Rhythm+ 2.0 等標準 Heart Rate Service 裝置）的實測心率為"
-            "「真值參考」，在背景持續比對 rPPG 偵測到的心率，並以低增益慢速微調 rPPG 的 BPM"
-            "校正量，讓 rPPG 逐漸趨近真值。\n"
-            "心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞判斷。"
-            "需勾選「壓力／HRV（心率估測）」啟用 rPPG 才會開始比對。"
-        )
-        self._chk_lock = QCheckBox("Overlay 鎖定（穿透點擊）")
-        self._chk_lock.setChecked(True)
-        row_b.addWidget(self._chk_behavior)
-        row_b.addWidget(self._chk_stress)
-        row_b.addWidget(self._chk_belt_calib)
-        row_b.addWidget(self._chk_lock)
-        row_b.addStretch(1)
-        ctl.addLayout(row_b)
-
-        row_mode = QHBoxLayout()
-        row_mode.addWidget(QLabel("心跳帶校準："))
-        self._lbl_belt_status = QLabel("未啟用")
-        self._lbl_belt_status.setObjectName("hintLabel")
-        row_mode.addWidget(self._lbl_belt_status)
-        row_mode.addStretch(1)
-        ctl.addLayout(row_mode)
-
-        row_profile = QHBoxLayout()
-        self._btn_record_baseline = QPushButton("記錄清醒基線")
-        self._btn_record_baseline.setToolTip(
-            "在你精神狀態良好時按下，系統會擷取約 60 秒的清醒基線（PERCLOS／注視／眉距／"
-            "眨眼等），把疲勞判斷門檻校準到「你個人的正常範圍」，並存成個人 profile 供下次"
-            "開機自動載入。需先按「開始」啟動偵測。\n"
-            "心跳帶數值不參與此基線。"
-        )
-        self._btn_record_baseline.clicked.connect(self._on_record_baseline_clicked)
-        self._lbl_profile_status = QLabel(
-            "個人基線：已載入" if self._personal_profile is not None else "個人基線：未建立")
-        self._lbl_profile_status.setObjectName("hintLabel")
-        row_profile.addWidget(self._btn_record_baseline)
-        row_profile.addWidget(self._lbl_profile_status)
-        row_profile.addStretch(1)
-        ctl.addLayout(row_profile)
+        row_a.addWidget(self._btn_start)
+        row_a.addSpacing(16)
+        row_a.addWidget(self._chk_behavior)
+        row_a.addWidget(self._chk_stress)
+        row_a.addStretch(1)
+        ctl.addLayout(row_a)
 
         row_c = QHBoxLayout()
         self._btn_record = QPushButton("開始記錄")
@@ -632,94 +742,141 @@ class MainWindow(QMainWindow):
         row_auto.addStretch(1)
         ctl.addLayout(row_auto)
 
-        row_d = QHBoxLayout()
-        row_d.addWidget(QLabel("Overlay 透明度："))
-        self._sld_opacity = QSlider(Qt.Orientation.Horizontal)
-        self._sld_opacity.setRange(0, 100)
-        self._sld_opacity.setValue(55)
-        self._sld_opacity.valueChanged.connect(self._on_opacity)
-        self._lbl_opacity = QLabel("55%")
-        self._lbl_opacity.setMinimumWidth(48)
-        row_d.addWidget(self._sld_opacity, 1)
-        row_d.addWidget(self._lbl_opacity)
-        ctl.addLayout(row_d)
+        return gb_ctl
 
-        self._chk_all.toggled.connect(self._on_toggle_all)
-        self._chk_preview.toggled.connect(self._on_preview_toggled)
-        self._chk_metrics.toggled.connect(self._on_metrics_toggled)
-        self._chk_lock.toggled.connect(self._on_lock_toggled)
-        # Behaviour alertness toggle — functional
-        self._chk_behavior.toggled.connect(self._on_behavior_toggled)
-        self._chk_auto_record.toggled.connect(
-            lambda checked: self._append_log(
-                f"[UI] {self._chk_auto_record.text()} → {'開啟' if checked else '關閉'}"
-            )
+    def _build_status_strip(self) -> QFrame:
+        stat = QFrame()
+        stat.setObjectName("statusBarFrame")
+        sl = QHBoxLayout(stat)
+        sl.setContentsMargins(0, 0, 0, 0)
+        self._lbl_pipeline = QLabel("管線：停止")
+        self._lbl_camera = QLabel("相機：—")
+        self._lbl_face = QLabel("臉部：—")
+        self._lbl_fps = QLabel("FPS：—")
+        self._lbl_codec = QLabel("編碼：—")
+        for lb in (self._lbl_pipeline, self._lbl_camera, self._lbl_face, self._lbl_fps, self._lbl_codec):
+            lb.setStyleSheet("color: #ced4da;")
+            sl.addWidget(lb)
+            sl.addSpacing(20)
+        sl.addStretch(1)
+        return stat
+
+    # ── 心跳帶頁 ──────────────────────────────────────────────────────────────
+    def _build_belt_page(self) -> QWidget:
+        page = QWidget()
+        page_l = QVBoxLayout(page)
+        page_l.setContentsMargins(20, 18, 20, 18)
+        page_l.setSpacing(14)
+
+        title = QLabel("心跳帶設備")
+        title.setObjectName("subtitleLabel")
+        page_l.addWidget(title)
+
+        # 背景校準開關 + 摘要狀態
+        gb_ctl = QGroupBox("背景校準")
+        cl = QVBoxLayout(gb_ctl)
+        self._chk_belt_calib = QCheckBox("心跳帶真值校準（背景）")
+        self._chk_belt_calib.setToolTip(
+            "以 BLE 心跳帶（Scosche Rhythm+ 2.0 等標準 Heart Rate Service 裝置）的實測心率為"
+            "「真值參考」，在背景持續比對 rPPG 偵測到的心率，並以低增益慢速微調 rPPG 的 BPM"
+            "校正量，讓 rPPG 逐漸趨近真值。\n"
+            "心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞判斷。"
+            "需勾選「壓力／HRV（心率估測）」啟用 rPPG 才會開始比對。"
         )
-        # rPPG stress/HRV toggle — functional
-        self._chk_stress.toggled.connect(self._on_stress_toggled)
-        self._chk_belt_calib.toggled.connect(self._on_belt_calib_toggled)
+        cl.addWidget(self._chk_belt_calib)
+        row_mode = QHBoxLayout()
+        row_mode.addWidget(QLabel("心跳帶校準："))
+        self._lbl_belt_status = QLabel("未啟用")
+        self._lbl_belt_status.setObjectName("hintLabel")
+        self._lbl_belt_status.setWordWrap(True)
+        row_mode.addWidget(self._lbl_belt_status, 1)
+        cl.addLayout(row_mode)
+        page_l.addWidget(gb_ctl)
 
-        body_layout.addWidget(gb_ctl)
+        grid = QHBoxLayout()
+        grid.setSpacing(14)
+        col1 = QVBoxLayout()
+        col2 = QVBoxLayout()
+        col1.setSpacing(14)
+        col2.setSpacing(14)
 
-        # --- 心跳帶（傳輸數值 + 衍生 HRV 專屬區塊） ---
-        gb_belt = QGroupBox("心跳帶")
-        belt_l = QVBoxLayout(gb_belt)
+        # 連線
+        gb_conn = QGroupBox("連線")
+        gl = QVBoxLayout(gb_conn)
+        self._lbl_belt_device = self._stat_row(gl, "裝置名稱")
+        self._lbl_belt_address = self._stat_row(gl, "裝置位址")
+        self._lbl_belt_location = self._stat_row(gl, "配戴位置")
+        self._lbl_belt_connected_since = self._stat_row(gl, "連線時長")
+        self._lbl_belt_notifications = self._stat_row(gl, "封包數")
+        self._lbl_belt_last_error = self._stat_row(gl, "最後錯誤")
+        col1.addWidget(gb_conn)
 
-        def _belt_stat_row(label_text: str) -> QLabel:
-            row = QHBoxLayout()
-            lbl = QLabel(label_text)
-            lbl.setObjectName("hintLabel")
-            lbl.setMinimumWidth(90)
-            val = QLabel("—")
-            val.setStyleSheet("font-size: 15px; font-weight: 600; color: #e6edf3;")
-            row.addWidget(lbl)
-            row.addWidget(val, 1, Qt.AlignmentFlag.AlignRight)
-            belt_l.addLayout(row)
-            return val
+        # 即時
+        gb_rt = QGroupBox("即時")
+        rl = QVBoxLayout(gb_rt)
+        self._lbl_belt_bpm = self._stat_row(rl, "BPM")
+        self._lbl_belt_rr = self._stat_row(rl, "RR 樣本數")
+        self._lbl_belt_contact = self._stat_row(rl, "感測器接觸")
+        self._lbl_belt_battery = self._stat_row(rl, "電量")
+        self._lbl_belt_rssi = self._stat_row(rl, "RSSI")
+        self._lbl_belt_stale = self._stat_row(rl, "停滯警告")
+        col1.addWidget(gb_rt)
 
-        belt_sub_realtime = QLabel("即時")
-        belt_sub_realtime.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e;")
-        belt_l.addWidget(belt_sub_realtime)
-        self._lbl_belt_bpm = _belt_stat_row("BPM：")
-        self._lbl_belt_rr = _belt_stat_row("RR 樣本數：")
-        self._lbl_belt_contact = _belt_stat_row("感測器接觸：")
-        self._lbl_belt_battery = _belt_stat_row("電量：")
-        self._lbl_belt_rssi = _belt_stat_row("RSSI：")
-        self._lbl_belt_stale = _belt_stat_row("停滯警告：")
+        # HRV（僅供顯示）
+        gb_hrv = QGroupBox("HRV（僅供顯示，不進疲勞融合）")
+        hl = QVBoxLayout(gb_hrv)
+        self._lbl_belt_hrv_rmssd = self._stat_row(hl, "RMSSD")
+        self._lbl_belt_hrv_sdnn = self._stat_row(hl, "SDNN")
+        self._lbl_belt_hrv_lfhf = self._stat_row(hl, "LF/HF")
+        self._lbl_belt_hrv_conf = self._stat_row(hl, "HRV 信心")
+        self._lbl_belt_hrv_warmup = self._stat_row(hl, "暖機進度")
+        col2.addWidget(gb_hrv)
 
-        belt_sub_conn = QLabel("連線")
-        belt_sub_conn.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e; margin-top: 6px;")
-        belt_l.addWidget(belt_sub_conn)
-        self._lbl_belt_device = _belt_stat_row("裝置名稱：")
-        self._lbl_belt_address = _belt_stat_row("裝置位址：")
-        self._lbl_belt_location = _belt_stat_row("配戴位置：")
-        self._lbl_belt_connected_since = _belt_stat_row("連線時長：")
-        self._lbl_belt_notifications = _belt_stat_row("封包數：")
-        self._lbl_belt_last_error = _belt_stat_row("最後錯誤：")
+        # rPPG 校準
+        gb_cal = QGroupBox("rPPG 校準")
+        cal_l = QVBoxLayout(gb_cal)
+        self._lbl_belt_calib_offset = self._stat_row(cal_l, "Offset")
+        self._lbl_belt_calib_raw_resid = self._stat_row(cal_l, "原始殘差")
+        self._lbl_belt_calib_corr_resid = self._stat_row(cal_l, "校正後殘差")
+        self._lbl_belt_calib_confidence = self._stat_row(cal_l, "信心")
+        self._lbl_belt_calib_status = self._stat_row(cal_l, "狀態")
+        self._lbl_belt_calib_pairs = self._stat_row(cal_l, "配對數")
+        col2.addWidget(gb_cal)
 
-        belt_sub_hrv = QLabel("HRV（僅供顯示，不進疲勞融合）")
-        belt_sub_hrv.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e; margin-top: 6px;")
-        belt_l.addWidget(belt_sub_hrv)
-        self._lbl_belt_hrv_rmssd = _belt_stat_row("RMSSD：")
-        self._lbl_belt_hrv_sdnn = _belt_stat_row("SDNN：")
-        self._lbl_belt_hrv_lfhf = _belt_stat_row("LF/HF：")
-        self._lbl_belt_hrv_conf = _belt_stat_row("HRV 信心：")
-        self._lbl_belt_hrv_warmup = _belt_stat_row("暖機進度：")
+        # 設備設定（讀 config/hr_belt.json 載入結果，唯讀顯示）
+        gb_cfg = QGroupBox("設備設定")
+        fl = QVBoxLayout(gb_cfg)
+        self._lbl_belt_cfg_name_prefix = self._stat_row(fl, "名稱前綴")
+        self._lbl_belt_cfg_address = self._stat_row(fl, "指定位址")
+        self._lbl_belt_cfg_tuning = self._stat_row(fl, "參數自適應")
+        self._lbl_belt_cfg_capture = self._stat_row(fl, "同步錄製")
+        col2.addWidget(gb_cfg)
 
-        belt_sub_calib = QLabel("rPPG 校準")
-        belt_sub_calib.setStyleSheet("font-size: 13px; font-weight: 600; color: #8b949e; margin-top: 6px;")
-        belt_l.addWidget(belt_sub_calib)
-        self._lbl_belt_calib_offset = _belt_stat_row("Offset：")
-        self._lbl_belt_calib_raw_resid = _belt_stat_row("原始殘差：")
-        self._lbl_belt_calib_corr_resid = _belt_stat_row("校正後殘差：")
-        self._lbl_belt_calib_confidence = _belt_stat_row("信心：")
-        self._lbl_belt_calib_status = _belt_stat_row("狀態：")
-        self._lbl_belt_calib_pairs = _belt_stat_row("配對數：")
+        col1.addStretch(1)
+        col2.addStretch(1)
+        c1w = QWidget()
+        c1w.setLayout(col1)
+        c2w = QWidget()
+        c2w.setLayout(col2)
+        grid.addWidget(c1w, 1)
+        grid.addWidget(c2w, 1)
+        page_l.addLayout(grid, 1)
 
-        body_layout.addWidget(gb_belt)
+        self._refresh_belt_cfg_labels()
+        return self._page_scroll(page)
 
-        # --- 影片回測 ---
-        gb_replay = QGroupBox("影片回測")
+    # ── 影片回測頁 ────────────────────────────────────────────────────────────
+    def _build_replay_page(self) -> QWidget:
+        page = QWidget()
+        page_l = QVBoxLayout(page)
+        page_l.setContentsMargins(20, 18, 20, 18)
+        page_l.setSpacing(14)
+
+        title = QLabel("影片回測")
+        title.setObjectName("subtitleLabel")
+        page_l.addWidget(title)
+
+        gb_replay = QGroupBox("批次回放")
         replay_l = QVBoxLayout(gb_replay)
 
         replay_row_a = QHBoxLayout()
@@ -790,46 +947,256 @@ class MainWindow(QMainWindow):
         replay_preview_layout.addWidget(self._lbl_replay_preview, 1)
         replay_l.addWidget(self._frame_replay_preview)
 
-        body_layout.addWidget(gb_replay)
+        page_l.addWidget(gb_replay, 1)
+        return self._page_scroll(page)
 
-        # --- Status strip ---
-        stat = QFrame()
-        stat.setObjectName("statusBarFrame")
-        sl = QHBoxLayout(stat)
-        sl.setContentsMargins(0, 0, 0, 0)
-        self._lbl_pipeline = QLabel("管線：停止")
-        self._lbl_camera = QLabel("相機：—")
-        self._lbl_face = QLabel("臉部：—")
-        self._lbl_fps = QLabel("FPS：—")
-        self._lbl_codec = QLabel("編碼：—")
-        for lb in (self._lbl_pipeline, self._lbl_camera, self._lbl_face, self._lbl_fps, self._lbl_codec):
-            lb.setStyleSheet("color: #ced4da;")
-            sl.addWidget(lb)
-            sl.addSpacing(20)
-        sl.addStretch(1)
-        body_layout.addWidget(stat)
+    # ── 設定頁 ────────────────────────────────────────────────────────────────
+    def _build_settings_page(self) -> QWidget:
+        page = QWidget()
+        page_l = QVBoxLayout(page)
+        page_l.setContentsMargins(20, 18, 20, 18)
+        page_l.setSpacing(14)
 
-        # --- Log ---
+        title = QLabel("設定")
+        title.setObjectName("subtitleLabel")
+        page_l.addWidget(title)
+
+        # 攝影機
+        gb_cam = QGroupBox("攝影機（RGB）")
+        cam_l = QVBoxLayout(gb_cam)
+        row1 = QHBoxLayout()
+        self._cmb_camera = QComboBox()
+        self._cmb_camera.addItem("── 載入中… ──", None)
+        self._cmb_camera.setEnabled(False)
+        self._cmb_camera.currentIndexChanged.connect(self._on_camera_combo_changed)
+        btn_refresh = QPushButton("刷新列表")
+        btn_refresh.clicked.connect(self._start_camera_scan)
+        self._lbl_cam_hint = QLabel("載入中…")
+        self._lbl_cam_hint.setObjectName("hintLabel")
+        row1.addWidget(QLabel("裝置："))
+        row1.addWidget(self._cmb_camera, 1)
+        row1.addWidget(btn_refresh)
+        row1.addWidget(self._lbl_cam_hint)
+        cam_l.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self._cmb_resolution = QComboBox()
+        self._cmb_resolution.addItems(["640×480", "800×600", "1280×720（720p）", "1280×800", "1920×1080（1080p）"])
+        self._cmb_resolution.setCurrentText("1280×720（720p）")
+        self._cmb_fps = QComboBox()
+        self._cmb_fps.addItems(["15", "24", "30", "60"])
+        self._cmb_fps.setCurrentText("30")
+        row2.addWidget(QLabel("解析度："))
+        row2.addWidget(self._cmb_resolution)
+        row2.addSpacing(16)
+        row2.addWidget(QLabel("目標 FPS："))
+        row2.addWidget(self._cmb_fps)
+        row2.addStretch(1)
+        cam_l.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        self._cmb_backend = QComboBox()
+        self._cmb_backend.addItem("自動（平台預設）", "auto")
+        if sys.platform.startswith("linux"):
+            self._cmb_backend.addItem("V4L2（Linux）", "v4l2")
+        self._cmb_backend.addItem("FFMPEG", "ffmpeg")
+        if sys.platform.startswith("win"):
+            self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
+            self._cmb_backend.addItem("DSHOW（DirectShow）", "dshow")
+        self._cmb_backend.setCurrentIndex(0)
+        self._cmb_backend.setToolTip(
+            "自動 — 依平台優先選擇可用後端\n"
+            "V4L2 — Linux 原生攝影機後端\n"
+            "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端\n"
+            "MSMF — Windows Media Foundation，可保留原生 MJPG\n"
+            "DSHOW — Windows DirectShow，部分虛擬相機較穩定"
+        )
+        self._chk_horizontal_flip = QCheckBox("水平翻轉（鏡像校正）")
+        self._chk_horizontal_flip.setChecked(True)
+        self._chk_horizontal_flip.setToolTip("相機畫面左右相反時啟用；預覽、錄影與分析會使用同一個翻轉後畫面。")
+        lbl_backend = QLabel("後端：")
+        lbl_backend.setObjectName("hintLabel")
+        row3.addWidget(lbl_backend)
+        row3.addWidget(self._cmb_backend)
+        row3.addSpacing(16)
+        row3.addWidget(self._chk_horizontal_flip)
+        row3.addStretch(1)
+        cam_l.addLayout(row3)
+        page_l.addWidget(gb_cam)
+
+        # Overlay 顯示
+        gb_ov = QGroupBox("Overlay 顯示")
+        ov = QVBoxLayout(gb_ov)
+        row_ov = QHBoxLayout()
+        self._chk_all = QCheckBox("顯示／隱藏 全部 Overlay")
+        self._chk_all.setChecked(True)
+        self._chk_preview = QCheckBox("鏡頭預覽 Overlay（含 MediaPipe）")
+        self._chk_metrics = QCheckBox("數值 Overlay")
+        self._chk_metrics.setChecked(True)
+        self._chk_lock = QCheckBox("Overlay 鎖定（穿透點擊）")
+        self._chk_lock.setChecked(True)
+        row_ov.addWidget(self._chk_all)
+        row_ov.addWidget(self._chk_preview)
+        row_ov.addWidget(self._chk_metrics)
+        row_ov.addWidget(self._chk_lock)
+        row_ov.addStretch(1)
+        ov.addLayout(row_ov)
+
+        row_d = QHBoxLayout()
+        row_d.addWidget(QLabel("Overlay 透明度："))
+        self._sld_opacity = QSlider(Qt.Orientation.Horizontal)
+        self._sld_opacity.setRange(0, 100)
+        self._sld_opacity.setValue(55)
+        self._sld_opacity.valueChanged.connect(self._on_opacity)
+        self._lbl_opacity = QLabel("55%")
+        self._lbl_opacity.setMinimumWidth(48)
+        row_d.addWidget(self._sld_opacity, 1)
+        row_d.addWidget(self._lbl_opacity)
+        ov.addLayout(row_d)
+        page_l.addWidget(gb_ov)
+
+        # 個人清醒基線
+        gb_prof = QGroupBox("個人清醒基線")
+        prof_l = QVBoxLayout(gb_prof)
+        row_profile = QHBoxLayout()
+        self._btn_record_baseline = QPushButton("記錄清醒基線")
+        self._btn_record_baseline.setToolTip(
+            "在你精神狀態良好時按下，系統會擷取約 60 秒的清醒基線（PERCLOS／注視／眉距／"
+            "眨眼等），把疲勞判斷門檻校準到「你個人的正常範圍」，並存成個人 profile 供下次"
+            "開機自動載入。需先按「開始」啟動偵測。\n"
+            "心跳帶數值不參與此基線。"
+        )
+        self._btn_record_baseline.clicked.connect(self._on_record_baseline_clicked)
+        self._lbl_profile_status = QLabel(
+            "個人基線：已載入" if self._personal_profile is not None else "個人基線：未建立")
+        self._lbl_profile_status.setObjectName("hintLabel")
+        row_profile.addWidget(self._btn_record_baseline)
+        row_profile.addWidget(self._lbl_profile_status)
+        row_profile.addStretch(1)
+        prof_l.addLayout(row_profile)
+        page_l.addWidget(gb_prof)
+
+        # Log
         gb_log = QGroupBox("Log")
         log_l = QVBoxLayout(gb_log)
-
         self._log = QTextEdit()
         self._log.setReadOnly(True)
-        self._log.setMinimumHeight(200)
+        self._log.setMinimumHeight(180)
         self._log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         log_l.addWidget(self._log)
-        body_layout.addWidget(gb_log, 1)
+        page_l.addWidget(gb_log, 1)
 
-        scroll.setWidget(body)
-        outer.addWidget(scroll, 1)
+        return self._page_scroll(page)
 
-        self._append_log("歡迎使用 rPPG 疲勞/生理訊號偵測 V2 控制台。變更選項僅寫入此視窗日誌。")
-        self._start_camera_scan()
+    # ── 監測頁即時顯示（唯讀，僅讀 self._latest_* 快照） ──────────────────────
+    def _update_monitor_preview(self, image) -> None:
+        lbl = getattr(self, "_lbl_monitor_preview", None)
+        if lbl is None:
+            return
+        try:
+            pm = QPixmap.fromImage(image)
+        except Exception:
+            return
+        if pm.isNull():
+            return
+        lbl.setPixmap(pm.scaled(
+            lbl.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        ))
 
-        self._db_flush_timer = QTimer(self)
-        self._db_flush_timer.setInterval(2000)
-        self._db_flush_timer.timeout.connect(self._flush_recorder)
-        self._db_flush_timer.start()
+    def _reset_monitor_view(self) -> None:
+        lbl = getattr(self, "_lbl_monitor_preview", None)
+        if lbl is not None:
+            lbl.setPixmap(QPixmap())
+            lbl.setText("鏡頭預覽（按「開始」啟動）")
+        self._refresh_monitor_metrics()
+
+    def _refresh_monitor_metrics(self) -> None:
+        """把最新一筆 rPPG / 疲勞 / 融合快照渲染到監測頁卡片（唯讀，不改任何數值）。"""
+        if not hasattr(self, "_mon_fused_level"):
+            return
+        r = self._latest_rppg_metrics
+        f = self._latest_fatigue_metrics
+        z = self._latest_fused_score
+
+        # 綜合疲勞融合
+        if z is not None:
+            level = str(getattr(z, "level", "") or "—")
+            try:
+                b, g, rr = z.color_bgr
+                col = QColor(int(rr), int(g), int(b)).name()
+            except Exception:
+                col = "#30363d"
+            self._mon_fused_level.setText(level)
+            self._mon_fused_level.setStyleSheet(
+                f"background-color: {col}; color: #ffffff; border-radius: 8px;"
+                " padding: 8px 12px; font-size: 18px; font-weight: 700;"
+            )
+            self._mon_fused_score.setText(f"{float(getattr(z, 'score', 0.0) or 0.0) * 100:.0f}%")
+        else:
+            self._mon_fused_level.setText("—")
+            self._mon_fused_level.setStyleSheet("")
+            self._mon_fused_score.setText("—")
+
+        # 行為疲勞
+        if f is not None:
+            fd = bool(getattr(f, "face_detected", False))
+            self._mon_ear.setText(f"{float(getattr(f, 'ear', 0.0) or 0.0):.3f}" if fd else "—")
+            self._mon_perclos.setText(f"{float(getattr(f, 'perclos', 0.0) or 0.0) * 100:.0f}%")
+            self._mon_blink.setText(str(int(getattr(f, "blink_count", 0) or 0)))
+            expr = []
+            if getattr(f, "is_squinting", False):
+                expr.append("瞇眼")
+            if getattr(f, "is_frowning", False):
+                expr.append("皺眉")
+            self._mon_expr.setText("／".join(expr) if expr else "正常")
+            self._mon_gaze.setText(
+                f"固視 {float(getattr(f, 'fixation_duration', 0.0) or 0.0):.1f}s"
+                f"／掃視 {float(getattr(f, 'saccade_freq_pm', 0.0) or 0.0):.0f}/min"
+            )
+            self._mon_head.setText(
+                f"P {float(getattr(f, 'head_pitch', 0.0) or 0.0):.0f}°"
+                f" Y {float(getattr(f, 'head_yaw', 0.0) or 0.0):.0f}°"
+                f" R {float(getattr(f, 'head_roll', 0.0) or 0.0):.0f}°"
+            )
+        else:
+            for lbl in (self._mon_ear, self._mon_perclos, self._mon_blink,
+                        self._mon_expr, self._mon_gaze, self._mon_head):
+                lbl.setText("—")
+
+        # rPPG + HRV
+        if r is not None:
+            bpm = effective_bpm(r)
+            self._mon_bpm.setText(f"{bpm:.0f}" if bpm and bpm > 0 else "—")
+            self._mon_warmup.setText(f"{float(getattr(r, 'warmup_progress', 0.0) or 0.0) * 100:.0f}%")
+            sqi = float(getattr(r, "sqi", 0.0) or 0.0)
+            q = float(getattr(r, "quality_score", 0.0) or 0.0)
+            self._mon_sqi.setText(f"SQI {sqi:.2f}／Q {q:.2f}")
+            self._mon_rmssd.setText(f"{float(getattr(r, 'rmssd', 0.0) or 0.0):.1f} ms")
+            self._mon_sdnn.setText(f"{float(getattr(r, 'sdnn', 0.0) or 0.0):.1f} ms")
+            self._mon_lfhf.setText(f"{float(getattr(r, 'lf_hf', 0.0) or 0.0):.2f}")
+            self._mon_hrv_conf.setText(str(getattr(r, "hrv_confidence", "") or "—"))
+        else:
+            for lbl in (self._mon_bpm, self._mon_warmup, self._mon_sqi,
+                        self._mon_rmssd, self._mon_sdnn, self._mon_lfhf, self._mon_hrv_conf):
+                lbl.setText("—")
+
+    def _refresh_belt_cfg_labels(self) -> None:
+        """把 config/hr_belt.json 載入結果（self._belt_cfg）唯讀顯示到設備設定卡。"""
+        if not hasattr(self, "_lbl_belt_cfg_name_prefix"):
+            return
+        cfg = self._belt_cfg
+        if cfg is None:
+            self._lbl_belt_cfg_name_prefix.setText("—")
+            self._lbl_belt_cfg_address.setText("—")
+            self._lbl_belt_cfg_tuning.setText("—")
+            self._lbl_belt_cfg_capture.setText("—")
+            return
+        self._lbl_belt_cfg_name_prefix.setText(cfg.name_prefix or "（未指定）")
+        self._lbl_belt_cfg_address.setText(cfg.address or "（自動掃描）")
+        self._lbl_belt_cfg_tuning.setText("開啟" if cfg.rppg_param_tuning_enabled else "關閉")
+        self._lbl_belt_cfg_capture.setText("開啟" if cfg.capture_enabled else "關閉")
 
     def _qt_key_to_vk(self, qt_key: int) -> int | None:
         if Qt.Key.Key_A <= qt_key <= Qt.Key.Key_Z:
@@ -2488,6 +2855,7 @@ class MainWindow(QMainWindow):
         唯讀輪詢既有狀態物件，不改動任何校準/worker/BLE 邏輯與數值行為；
         HRV 僅供顯示，絕不寫回任何會被疲勞融合分數讀取的欄位。
         """
+        self._refresh_belt_cfg_labels()
         st = self._belt_runtime.belt_status()
         cal = self._belt_calibrator
         if st is None:
@@ -2666,6 +3034,7 @@ class MainWindow(QMainWindow):
     def _on_fused_score(self, score: object) -> None:
         self._preview_overlay.update_fused_score(score)  # type: ignore[arg-type]
         self._latest_fused_score = score
+        self._refresh_monitor_metrics()
         self._record_metrics()
         self._emit_web_metrics()
 
@@ -2756,6 +3125,7 @@ class MainWindow(QMainWindow):
             metrics = self._apply_rppg_calibration(metrics)
         self._preview_overlay.update_rppg_metrics(metrics)  # type: ignore[arg-type]
         self._latest_rppg_metrics = metrics
+        self._refresh_monitor_metrics()
         self._record_metrics()
         self._emit_web_metrics()
 
@@ -2828,6 +3198,7 @@ class MainWindow(QMainWindow):
     def _on_fatigue_metrics(self, metrics: object) -> None:
         self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
         self._latest_fatigue_metrics = metrics
+        self._refresh_monitor_metrics()
         self._alarm_controller.on_metrics(metrics)
         self._feed_baseline_collectors(metrics)
         self._record_metrics()
@@ -2943,6 +3314,7 @@ class MainWindow(QMainWindow):
 
     def _on_frame(self, image) -> None:
         self._preview_overlay.update_frame(image)
+        self._update_monitor_preview(image)
         self._emit_web_frame(image)
 
     def _on_record_frame(self, image) -> None:
@@ -2978,6 +3350,7 @@ class MainWindow(QMainWindow):
         self._latest_fused_score = None
         self._last_fps = 0.0
         self._last_camera_info = {"codec": "", "width": 0, "height": 0}
+        self._reset_monitor_view()
         self._btn_start.setText("開始")
         self._lbl_pipeline.setText("管線：停止")
         self._lbl_fps.setText("FPS：—")
@@ -3002,6 +3375,7 @@ class MainWindow(QMainWindow):
             self._latest_rppg_metrics = None
             self._latest_fatigue_metrics = None
             self._latest_fused_score = None
+            self._reset_monitor_view()
             self._btn_start.setText("停止")
             self._lbl_pipeline.setText("管線：運作中")
             self._lbl_fps.setText("FPS：—")
@@ -3032,6 +3406,7 @@ class MainWindow(QMainWindow):
             self._latest_fused_score = None
             self._last_fps = 0.0
             self._last_camera_info = {"codec": "", "width": 0, "height": 0}
+            self._reset_monitor_view()
             self._btn_start.setText("開始")
             self._lbl_pipeline.setText("管線：停止")
             self._lbl_fps.setText("FPS：—")
