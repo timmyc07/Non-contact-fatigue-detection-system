@@ -311,8 +311,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("rPPG 疲勞／生理訊號控制台")
-        self.resize(1040, 720)
-        self.setMinimumSize(880, 600)
+        self.resize(1380, 760)
+        self.setMinimumSize(1080, 620)
 
         self._pipeline_running = False
         self._recording = False
@@ -626,17 +626,27 @@ class MainWindow(QMainWindow):
         self._lbl_monitor_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         top.addWidget(self._lbl_monitor_preview, 3)
 
-        cards = QVBoxLayout()
+        # 卡片改為左右兩欄，壓低整頁高度，開啟即可全覽（不需垂直捲動）
+        cards_left = QVBoxLayout()
+        cards_left.setSpacing(12)
+        cards_left.addWidget(self._build_fatigue_card())
+        cards_left.addStretch(1)
+
+        cards_right = QVBoxLayout()
+        cards_right.setSpacing(12)
+        cards_right.addWidget(self._build_rppg_card())
+        cards_right.addWidget(self._build_hrv_card())
+        cards_right.addStretch(1)
+
+        cards = QHBoxLayout()
         cards.setSpacing(12)
-        cards.addWidget(self._build_fatigue_card())
-        cards.addWidget(self._build_rppg_card())
-        cards.addWidget(self._build_hrv_card())
-        cards.addStretch(1)
+        cards.addLayout(cards_left, 1)
+        cards.addLayout(cards_right, 1)
         cards_wrap = QWidget()
         cards_wrap.setLayout(cards)
-        cards_wrap.setMinimumWidth(260)
+        cards_wrap.setMinimumWidth(440)
         cards_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        top.addWidget(cards_wrap, 2)
+        top.addWidget(cards_wrap, 3)
         page_l.addLayout(top, 1)
 
         page_l.addWidget(self._build_monitor_controls())
