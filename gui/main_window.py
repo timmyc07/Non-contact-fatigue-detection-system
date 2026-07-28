@@ -310,7 +310,7 @@ def application_stylesheet() -> str:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("rPPG 疲勞／生理訊號控制台")
+        self.setWindowTitle("NCFD System")
         self.resize(1380, 760)
         self.setMinimumSize(1080, 620)
 
@@ -534,7 +534,7 @@ class MainWindow(QMainWindow):
         side_l = QVBoxLayout(side)
         side_l.setContentsMargins(0, 16, 0, 16)
         side_l.setSpacing(0)
-        brand = QLabel("rPPG 監測台")
+        brand = QLabel("NCFD System")
         brand.setObjectName("titleLabel")
         brand.setContentsMargins(18, 0, 12, 14)
         brand.setWordWrap(True)
