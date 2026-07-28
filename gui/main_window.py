@@ -6,14 +6,26 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from string import Template
 from typing import Any, cast
 
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt, QThread, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QImage, QImageWriter, QKeySequence, QPixmap
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QRect, QSize, Qt, QThread, QTimer, QUrl
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QImage,
+    QImageWriter,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -33,6 +45,8 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -75,236 +89,434 @@ from gui.web_server import (
 WEB_PREVIEW_TARGET_FPS = 30.0
 
 
-def application_stylesheet() -> str:
-    # 深色監控風視覺 token（僅視覺，不影響任何 signal/slot 或數值行為）：
-    #   背景：#0d1117 最底 / #161b22 視窗 / #1c2128 卡片 / #21262d 輸入元件
-    #   邊框：#30363d 一般 / #444c56 強調
-    #   文字：#e6edf3 主 / #8b949e 次 / #6e7681 弱
-    #   主色：#388bfd（hover #58a6ff）
-    return """
+# ── 視覺主題 token（僅影響 QSS 外觀，絕不影響任何 signal/slot 或數值行為） ──
+# 轉譯自 claude.ai/design 設計稿（Industry design system）：深色為預設，另備淺色。
+# 語意色（ok/warn/bad、綜合疲勞等級動態色）由資料驅動，不放進 palette。
+FONT_HEADING = '"Barlow Condensed", "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif'
+FONT_BODY = '"Barlow", "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif'
+FONT_MONO = '"JetBrains Mono", "Consolas", "Cascadia Mono", monospace'
+
+_PALETTES: dict[str, dict[str, str]] = {
+    "dark": {
+        "DESK": "#0b0d0f",       # 視窗最外層底
+        "BG": "#15181b",         # 內容底
+        "SIDEBAR": "#171b1e",    # 側邊導航底（微抬升）
+        "CARD": "#1b1f23",       # 卡片 / GroupBox
+        "INPUT": "#22272c",      # 輸入元件底
+        "VIDEO": "#0e1114",      # 影片 / Log 深底
+        "TEXT": "#e6e9ec",
+        "TEXT_MUTED": "rgba(230,233,236,0.62)",
+        "TEXT_FAINT": "rgba(230,233,236,0.42)",
+        # VIDEO 深底始終為深色（兩主題皆然），其上文字固定用淺色，不隨主題翻轉。
+        "TEXT_ON_VIDEO": "rgba(255,255,255,0.82)",
+        "TEXT_ON_VIDEO_MUTED": "rgba(255,255,255,0.5)",
+        "ACCENT": "#7ea6cd",
+        "ACCENT_HOVER": "#94bce3",
+        "ACCENT_PRESSED": "#6a90b8",
+        "ON_ACCENT": "#15181b",  # accent 填色上的文字
+        "DIVIDER": "rgba(230,233,236,0.16)",
+        "DIVIDER_STRONG": "rgba(230,233,236,0.28)",
+        "HOVER": "rgba(230,233,236,0.07)",
+        "PRESSED": "rgba(230,233,236,0.14)",
+        "NAV_HOVER": "rgba(126,166,205,0.12)",
+        "BAD": "#d9836c",
+        "BAD_TEXT": "#d9836c",
+        "BAD_BG": "rgba(217,131,108,0.14)",
+        "MENUBAR_BG": "#1f2429",
+    },
+    "light": {
+        "DESK": "#d4d4d7",
+        "BG": "#f2f2f3",
+        "SIDEBAR": "#ececed",
+        "CARD": "#e9e9ea",
+        "INPUT": "#f7f7f8",
+        "VIDEO": "#20262c",      # 設計稿淺色主題仍保留深色影片 / Log 面板
+        "TEXT": "#1d1f20",
+        "TEXT_MUTED": "rgba(29,31,32,0.62)",
+        "TEXT_FAINT": "rgba(29,31,32,0.45)",
+        # VIDEO 深底始終為深色（兩主題皆然），其上文字固定用淺色，不隨主題翻轉。
+        "TEXT_ON_VIDEO": "rgba(255,255,255,0.82)",
+        "TEXT_ON_VIDEO_MUTED": "rgba(255,255,255,0.5)",
+        "ACCENT": "#5980a6",
+        "ACCENT_HOVER": "#597ea3",
+        "ACCENT_PRESSED": "#416180",
+        "ON_ACCENT": "#f2f2f3",
+        "DIVIDER": "rgba(29,31,32,0.16)",
+        "DIVIDER_STRONG": "rgba(29,31,32,0.30)",
+        "HOVER": "rgba(29,31,32,0.06)",
+        "PRESSED": "rgba(29,31,32,0.12)",
+        "NAV_HOVER": "rgba(89,128,166,0.10)",
+        "BAD": "#a8503c",
+        "BAD_TEXT": "#a8503c",
+        "BAD_BG": "rgba(168,80,60,0.12)",
+        "MENUBAR_BG": "#e6e7e9",
+    },
+}
+
+_QSS_TEMPLATE = Template(
+    """
     QWidget {
-        background-color: #161b22;
-        color: #e6edf3;
+        background-color: $BG;
+        color: $TEXT;
         font-size: 13px;
-        font-family: "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+        font-family: """
+    + FONT_BODY
+    + """;
     }
-    QMainWindow, QDialog {
-        background-color: #0d1117;
+    QLabel, QCheckBox, QRadioButton { background: transparent; }
+    QMainWindow, QDialog { background-color: $DESK; }
+    QWidget#sidebar {
+        background-color: $SIDEBAR;
+        border-right: 1px solid $DIVIDER;
     }
     QGroupBox {
+        font-family: """
+    + FONT_HEADING
+    + """;
         font-weight: 600;
-        font-size: 13px;
-        border: 1px solid #30363d;
-        border-radius: 10px;
+        font-size: 15px;
+        border: 1px solid $DIVIDER;
+        border-radius: 12px;
         margin-top: 14px;
-        padding: 16px 14px 14px 14px;
-        background-color: #1c2128;
+        padding: 18px 16px 16px 16px;
+        background-color: $CARD;
     }
     QGroupBox::title {
         subcontrol-origin: margin;
-        left: 12px;
+        left: 14px;
         padding: 0 6px;
-        color: #8b949e;
+        color: $TEXT_MUTED;
     }
     QLabel#titleLabel {
-        font-size: 24px;
-        font-weight: 700;
-        color: #e6edf3;
-        letter-spacing: 0.5px;
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 25px;
+        font-weight: 600;
+        color: $TEXT;
+    }
+    QLabel#brandSub {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        color: $TEXT_FAINT;
+        letter-spacing: 2px;
+    }
+    QLabel#pageKicker {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        font-weight: 600;
+        color: $ACCENT;
+        letter-spacing: 2px;
     }
     QLabel#subtitleLabel {
-        font-size: 12px;
-        font-weight: 500;
-        color: #8b949e;
-        margin-bottom: 4px;
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 26px;
+        font-weight: 600;
+        color: $TEXT;
     }
     QLabel#hintLabel {
-        color: #8b949e;
+        color: $TEXT_MUTED;
         font-size: 12px;
-        font-weight: 500;
     }
     QComboBox, QSpinBox, QDoubleSpinBox {
-        background-color: #21262d;
-        border: 1px solid #30363d;
-        border-radius: 6px;
+        background-color: $INPUT;
+        border: 1px solid $DIVIDER;
+        border-radius: 10px;
         padding: 6px 10px;
         min-height: 22px;
         font-size: 13px;
+        color: $TEXT;
     }
     QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
-        border-color: #388bfd;
+        border-color: $ACCENT;
     }
-    QComboBox::drop-down {
-        border: none;
-        width: 24px;
+    QComboBox::drop-down { border: none; width: 24px; }
+    QComboBox QAbstractItemView {
+        background-color: $CARD;
+        color: $TEXT;
+        border: 1px solid $DIVIDER;
+        selection-background-color: $ACCENT;
+        selection-color: $ON_ACCENT;
     }
     QPushButton {
-        background-color: #21262d;
-        border: 1px solid #30363d;
-        border-radius: 8px;
+        background-color: transparent;
+        border: 1px solid $DIVIDER;
+        border-radius: 10px;
         padding: 8px 16px;
         min-height: 20px;
-        font-weight: 500;
-    }
-    QPushButton:hover {
-        background-color: #262c36;
-        border-color: #444c56;
-    }
-    QPushButton:pressed {
-        background-color: #1c2128;
-    }
-    QPushButton#primaryButton {
-        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 #388bfd, stop:1 #1f6feb);
-        border: 1px solid #58a6ff;
-        color: #ffffff;
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 14px;
         font-weight: 600;
+        color: $TEXT;
+    }
+    QPushButton:hover { background-color: $HOVER; border-color: $DIVIDER_STRONG; }
+    QPushButton:pressed { background-color: $PRESSED; }
+    QPushButton#primaryButton {
+        background-color: $ACCENT;
+        border: 1px solid $ACCENT;
+        color: $ON_ACCENT;
         padding: 10px 22px;
     }
-    QPushButton#primaryButton:hover {
-        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 #58a6ff, stop:1 #388bfd);
-    }
+    QPushButton#primaryButton:hover { background-color: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
+    QPushButton#primaryButton:pressed { background-color: $ACCENT_PRESSED; }
     QPushButton#dangerButton {
-        background-color: #2d1618;
-        border-color: #da3633;
-        color: #ffa198;
+        border-color: $BAD;
+        color: $BAD_TEXT;
+        background-color: $BAD_BG;
     }
-    QCheckBox {
-        spacing: 8px;
+    QPushButton#dangerButton:hover { background-color: $BAD_BG; border-color: $BAD; }
+    QPushButton#themeToggle {
+        border: 1px solid $DIVIDER;
+        border-radius: 999px;
+        padding: 7px 14px;
+        color: $TEXT_MUTED;
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 12px;
     }
+    QPushButton#themeToggle:hover { background-color: $NAV_HOVER; color: $TEXT; }
+    QCheckBox { spacing: 8px; color: $TEXT; }
     QCheckBox::indicator {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
-        border: 1px solid #444c56;
-        background-color: #21262d;
+        width: 17px;
+        height: 17px;
+        border-radius: 5px;
+        border: 1px solid $DIVIDER_STRONG;
+        background-color: $INPUT;
     }
-    QCheckBox::indicator:checked {
-        background-color: #388bfd;
-        border-color: #58a6ff;
-    }
-    QSlider::groove:horizontal {
-        height: 6px;
-        background: #21262d;
-        border-radius: 3px;
-    }
-    QSlider::handle:horizontal {
-        width: 16px;
-        margin: -6px 0;
-        border-radius: 8px;
-        background: #388bfd;
-        border: 2px solid #58a6ff;
-    }
-    QScrollArea {
-        border: none;
-        background: transparent;
-    }
+    QCheckBox::indicator:checked { background-color: $ACCENT; border-color: $ACCENT; }
+    QSlider::groove:horizontal { height: 4px; background: $DIVIDER; border-radius: 2px; }
+    QSlider::sub-page:horizontal { background: $ACCENT; border-radius: 2px; }
+    QSlider::handle:horizontal { width: 16px; margin: -7px 0; border-radius: 8px; background: $ACCENT; }
+    QScrollArea { border: none; background: transparent; }
+    QScrollBar:vertical { background: transparent; width: 9px; margin: 0; }
+    QScrollBar::handle:vertical { background: $DIVIDER_STRONG; border-radius: 4px; min-height: 30px; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+    QScrollBar:horizontal { background: transparent; height: 9px; margin: 0; }
+    QScrollBar::handle:horizontal { background: $DIVIDER_STRONG; border-radius: 4px; min-width: 30px; }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
     QFrame#statusBarFrame {
-        background-color: #0d1117;
-        border: 1px solid #30363d;
-        border-radius: 8px;
-        padding: 10px 14px;
-        font-size: 13px;
+        background-color: $CARD;
+        border: 1px solid $DIVIDER;
+        border-radius: 10px;
+        padding: 8px 14px;
+    }
+    QLabel#statusStripLabel {
+        color: $TEXT_MUTED;
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 12px;
     }
     QTextEdit, QPlainTextEdit {
-        background-color: #0d1117;
-        border: 1px solid #30363d;
-        border-radius: 8px;
+        background-color: $VIDEO;
+        border: 1px solid $DIVIDER;
+        border-radius: 10px;
         padding: 8px;
-        font-family: "Cascadia Mono", "Consolas", monospace;
+        font-family: """
+    + FONT_MONO
+    + """;
         font-size: 12px;
+        color: $TEXT_ON_VIDEO;
     }
-    QMenuBar {
-        background-color: #0d1117;
-        border-bottom: 1px solid #30363d;
-        padding: 2px;
-    }
-    QMenuBar::item:selected {
-        background-color: #21262d;
-        border-radius: 4px;
-    }
-    QMenu {
-        background-color: #1c2128;
-        border: 1px solid #30363d;
-        padding: 4px;
-    }
-    QMenu::item:selected {
-        background-color: #388bfd;
-        color: #ffffff;
-    }
-    QStatusBar {
-        background-color: #0d1117;
-        border-top: 1px solid #30363d;
-        color: #8b949e;
-    }
+    QMenuBar { background-color: $MENUBAR_BG; border-bottom: 1px solid $DIVIDER; padding: 2px; color: $TEXT; }
+    QMenuBar::item { padding: 4px 10px; border-radius: 8px; background: transparent; }
+    QMenuBar::item:selected { background-color: $HOVER; }
+    QMenu { background-color: $CARD; border: 1px solid $DIVIDER; padding: 4px; color: $TEXT; }
+    QMenu::item { padding: 6px 20px; border-radius: 6px; }
+    QMenu::item:selected { background-color: $ACCENT; color: $ON_ACCENT; }
+    QStatusBar { background-color: $DESK; border-top: 1px solid $DIVIDER; color: $TEXT_MUTED; }
     QListWidget#navList {
-        background-color: #0d1117;
+        background-color: transparent;
         border: none;
-        border-right: 1px solid #30363d;
         outline: 0;
-        padding: 10px 8px;
-        font-size: 14px;
-    }
-    QListWidget#navList::item {
-        padding: 12px 14px;
-        border-radius: 8px;
-        color: #8b949e;
-        margin: 3px 0;
-        font-weight: 600;
-    }
-    QListWidget#navList::item:selected {
-        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 #1f6feb, stop:1 #388bfd);
-        color: #ffffff;
-    }
-    QListWidget#navList::item:hover {
-        background-color: #21262d;
-        color: #e6edf3;
+        padding: 8px 6px;
     }
     QLabel#cardCaption {
-        color: #8b949e;
-        font-size: 12px;
-        font-weight: 600;
+        color: $TEXT_MUTED;
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 11px;
+        letter-spacing: 1px;
     }
     QLabel#cardValue {
-        font-size: 15px;
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 14px;
         font-weight: 600;
-        color: #e6edf3;
+        color: $TEXT;
     }
     QLabel#cardValueBig {
-        font-size: 32px;
-        font-weight: 700;
-        color: #e6edf3;
-        letter-spacing: 0.5px;
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 40px;
+        font-weight: 600;
+        color: $TEXT;
     }
     QLabel#cardUnit {
+        font-family: """
+    + FONT_MONO
+    + """;
         font-size: 12px;
-        font-weight: 500;
-        color: #8b949e;
+        color: $TEXT_MUTED;
     }
     QLabel#levelBadge {
+        font-family: """
+    + FONT_HEADING
+    + """;
         font-size: 18px;
-        font-weight: 700;
-        color: #ffffff;
-        background-color: #30363d;
-        border-radius: 8px;
-        padding: 8px 12px;
+        font-weight: 600;
+        color: $ON_ACCENT;
+        background-color: $DIVIDER_STRONG;
+        border-radius: 999px;
+        padding: 6px 14px;
     }
     QLabel#sectionSub {
         font-size: 13px;
         font-weight: 600;
-        color: #8b949e;
+        color: $TEXT_MUTED;
         margin-top: 6px;
     }
     QLabel#previewLabel {
-        background-color: #0d1117;
-        border: 1px solid #30363d;
-        border-radius: 10px;
-        color: #6e7681;
+        background-color: $VIDEO;
+        border: 1px solid $DIVIDER;
+        border-radius: 12px;
+        color: $TEXT_ON_VIDEO_MUTED;
         font-size: 14px;
     }
+    QFrame#replayPreviewFrame {
+        background-color: $VIDEO;
+        border: 1px solid $DIVIDER;
+        border-radius: 12px;
+    }
+    QLabel#replayPreviewLabel { background: transparent; color: $TEXT_ON_VIDEO_MUTED; }
+    QProgressBar {
+        border: 1px solid $DIVIDER;
+        border-radius: 999px;
+        background-color: $INPUT;
+        max-height: 10px;
+        text-align: center;
+        color: $TEXT_MUTED;
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+    }
+    QProgressBar::chunk { background-color: $ACCENT; border-radius: 999px; }
+    QToolTip { background-color: $CARD; color: $TEXT; border: 1px solid $DIVIDER; padding: 4px 8px; }
     """
+)
+
+
+def application_stylesheet(theme: str = "dark") -> str:
+    """依主題（dark 預設 / light）產生全域 QSS。
+
+    僅視覺 token 替換，不含任何 signal/slot 或數值邏輯；深淺主題共用同一份模板，
+    差異全在 `_PALETTES`。未知主題名一律回退 dark。
+    """
+    palette = _PALETTES.get(theme, _PALETTES["dark"])
+    return _QSS_TEMPLATE.substitute(palette)
+
+
+# QFont 只吃單一 family 名稱（不解析 CSS fallback 串），故另存首選 family 供 delegate 用。
+FONT_HEADING_FAMILY = "Barlow Condensed"
+FONT_MONO_FAMILY = "JetBrains Mono"
+
+
+class _NavItemDelegate(QStyledItemDelegate):
+    """側邊導航的編號雙語繪製（純視覺 delegate，不改任何選取 / 訊號行為）。
+
+    每列畫出：選中態的 accent 指示條 + 背景、mono 編號、Barlow Condensed 中文主行、
+    mono 英文輔助行。編號與英文存在 item 的 UserRole，DisplayRole 仍是中文，確保
+    任何 fallback 與既有 `currentRowChanged` 行為完全不受影響。
+    """
+
+    NO_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+    EN_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.set_colors(_PALETTES["dark"]["ACCENT"], _PALETTES["dark"]["TEXT"])
+
+    def set_colors(self, accent_hex: str, text_hex: str) -> None:
+        self._accent = QColor(accent_hex)
+        self._text = QColor(text_hex)
+        self._muted = QColor(text_hex)
+        self._muted.setAlpha(150)
+        self._sel_bg = QColor(accent_hex)
+        self._sel_bg.setAlpha(46)
+        self._hover_bg = QColor(accent_hex)
+        self._hover_bg.setAlpha(28)
+
+    def sizeHint(self, option, index):  # type: ignore[override]
+        return QSize(option.rect.width(), 52)
+
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = option.rect
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+
+        if selected:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._sel_bg)
+            painter.drawRoundedRect(rect.adjusted(2, 1, -2, -1), 10, 10)
+            painter.setBrush(self._accent)
+            painter.drawRoundedRect(QRect(rect.left() + 4, rect.top() + 12, 3, rect.height() - 24), 1, 1)
+        elif hovered:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._hover_bg)
+            painter.drawRoundedRect(rect.adjusted(2, 1, -2, -1), 10, 10)
+
+        no = str(index.data(self.NO_ROLE) or "")
+        zh = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        en = str(index.data(self.EN_ROLE) or "")
+
+        num_font = QFont(FONT_MONO_FAMILY)
+        num_font.setPointSize(8)
+        painter.setFont(num_font)
+        painter.setPen(self._accent if selected else self._muted)
+        painter.drawText(
+            QRect(rect.left() + 16, rect.top(), 26, rect.height()),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            no,
+        )
+
+        zh_font = QFont(FONT_HEADING_FAMILY)
+        zh_font.setPointSize(12)
+        zh_font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(zh_font)
+        painter.setPen(self._text if (selected or hovered) else self._muted)
+        painter.drawText(
+            QRect(rect.left() + 46, rect.top() + 8, rect.width() - 52, 20),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            zh,
+        )
+
+        en_font = QFont(FONT_MONO_FAMILY)
+        en_font.setPointSize(7)
+        painter.setFont(en_font)
+        painter.setPen(self._muted)
+        painter.drawText(
+            QRect(rect.left() + 46, rect.top() + 28, rect.width() - 52, 15),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            en,
+        )
+        painter.restore()
 
 
 class MainWindow(QMainWindow):
@@ -314,6 +526,8 @@ class MainWindow(QMainWindow):
         self.resize(1380, 760)
         self.setMinimumSize(1080, 620)
 
+        # 視覺主題（僅影響 QSS 外觀）：預設深色，偏好僅 in-session（不落設定檔）。
+        self._theme = "dark"
         self._pipeline_running = False
         self._recording = False
         self._benchmark_active = False
@@ -532,18 +746,48 @@ class MainWindow(QMainWindow):
         side.setMaximumWidth(220)
         side.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         side_l = QVBoxLayout(side)
-        side_l.setContentsMargins(0, 16, 0, 16)
+        side_l.setContentsMargins(0, 16, 0, 14)
         side_l.setSpacing(0)
         brand = QLabel("NCFD System")
         brand.setObjectName("titleLabel")
-        brand.setContentsMargins(18, 0, 12, 14)
+        brand.setContentsMargins(18, 0, 12, 2)
         brand.setWordWrap(True)
         side_l.addWidget(brand)
+        brand_sub = QLabel("非接觸式疲勞監測系統")
+        brand_sub.setObjectName("brandSub")
+        brand_sub.setContentsMargins(18, 0, 12, 12)
+        brand_sub.setWordWrap(True)
+        side_l.addWidget(brand_sub)
         self._nav = QListWidget()
         self._nav.setObjectName("navList")
-        for text in ("即時監測", "心跳帶", "影片回測", "設定"):
-            self._nav.addItem(QListWidgetItem(text))
+        self._nav.setSpacing(2)
+        self._nav_delegate = _NavItemDelegate(self._nav)
+        self._nav.setItemDelegate(self._nav_delegate)
+        # DisplayRole 維持中文（fallback 與既有行為不變），編號 / 英文存 UserRole 供 delegate 繪製。
+        for no, zh, en in (
+            ("01", "即時監測", "LIVE MONITOR"),
+            ("02", "心跳帶", "CHEST BELT"),
+            ("03", "影片回測", "BATCH REPLAY"),
+            ("04", "設定", "SETTINGS"),
+        ):
+            item = QListWidgetItem(zh)
+            item.setData(_NavItemDelegate.NO_ROLE, no)
+            item.setData(_NavItemDelegate.EN_ROLE, en)
+            self._nav.addItem(item)
         side_l.addWidget(self._nav, 1)
+
+        # 主題切換 pill（放側邊欄底部）：翻轉 self._theme 並對 QApplication 重套 QSS。
+        theme_wrap = QWidget()
+        theme_l = QHBoxLayout(theme_wrap)
+        theme_l.setContentsMargins(12, 8, 12, 0)
+        theme_l.setSpacing(0)
+        self._btn_theme = QPushButton()
+        self._btn_theme.setObjectName("themeToggle")
+        self._btn_theme.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_theme.clicked.connect(self._toggle_theme)
+        theme_l.addWidget(self._btn_theme)
+        theme_l.addStretch(1)
+        side_l.addWidget(theme_wrap)
         root.addWidget(side)
 
         # ── 右側分頁堆疊 ──
@@ -573,7 +817,7 @@ class MainWindow(QMainWindow):
         self._chk_stress.toggled.connect(self._on_stress_toggled)
         self._chk_belt_calib.toggled.connect(self._on_belt_calib_toggled)
 
-        self._append_log("歡迎使用 rPPG 疲勞/生理訊號偵測 V2 控制台。變更選項僅寫入此視窗日誌。")
+        self._append_log("歡迎使用 NCFD System。變更選項僅寫入此視窗日誌。")
         self._start_camera_scan()
 
         self._db_flush_timer = QTimer(self)
@@ -581,7 +825,45 @@ class MainWindow(QMainWindow):
         self._db_flush_timer.timeout.connect(self._flush_recorder)
         self._db_flush_timer.start()
 
+        # 依當前主題同步 delegate 顏色與主題按鈕文字（app 級 QSS 由 main.py 套用）。
+        self._sync_theme_widgets()
+
+    # ── 主題切換 ──────────────────────────────────────────────────────────────
+    def _toggle_theme(self) -> None:
+        """深 / 淺主題切換：翻轉 self._theme，對 QApplication 重套 QSS 並同步動態上色處。"""
+        self._theme = "light" if self._theme == "dark" else "dark"
+        app = QApplication.instance()
+        if app is not None:
+            cast(Any, app).setStyleSheet(application_stylesheet(self._theme))
+        self._sync_theme_widgets()
+        # 綜合疲勞等級徽章：無資料時回到 QSS 中性樣式，有資料時維持資料驅動語意色。
+        if hasattr(self, "_mon_fused_level"):
+            self._refresh_monitor_metrics()
+
+    def _sync_theme_widgets(self) -> None:
+        """把非 QSS 能觸及的動態元件（nav delegate 顏色、主題按鈕文字）對齊當前主題。"""
+        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
+        if hasattr(self, "_nav_delegate"):
+            self._nav_delegate.set_colors(pal["ACCENT"], pal["TEXT"])
+            self._nav.viewport().update()
+        if hasattr(self, "_btn_theme"):
+            self._btn_theme.setText("● 深色主題" if self._theme == "dark" else "○ 淺色主題")
+
     # ── 分頁共用小工具 ────────────────────────────────────────────────────────
+    def _page_header(self, kicker: str, title: str) -> QWidget:
+        """頁首區塊：mono 編號 kicker（如「01 / LIVE MONITOR」）+ 大標題（純視覺）。"""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(1)
+        k = QLabel(kicker)
+        k.setObjectName("pageKicker")
+        t = QLabel(title)
+        t.setObjectName("subtitleLabel")
+        v.addWidget(k)
+        v.addWidget(t)
+        return w
+
     def _page_scroll(self, content: QWidget) -> QScrollArea:
         """把分頁內容包進垂直捲動區，維持小視窗下的 responsive 行為。"""
         scroll = QScrollArea()
@@ -611,9 +893,7 @@ class MainWindow(QMainWindow):
         page_l.setContentsMargins(20, 18, 20, 18)
         page_l.setSpacing(14)
 
-        title = QLabel("即時監測")
-        title.setObjectName("subtitleLabel")
-        page_l.addWidget(title)
+        page_l.addWidget(self._page_header("01 / LIVE MONITOR", "即時監測"))
 
         top = QHBoxLayout()
         top.setSpacing(14)
@@ -765,7 +1045,7 @@ class MainWindow(QMainWindow):
         self._lbl_fps = QLabel("FPS：—")
         self._lbl_codec = QLabel("編碼：—")
         for lb in (self._lbl_pipeline, self._lbl_camera, self._lbl_face, self._lbl_fps, self._lbl_codec):
-            lb.setStyleSheet("color: #ced4da;")
+            lb.setObjectName("statusStripLabel")
             sl.addWidget(lb)
             sl.addSpacing(20)
         sl.addStretch(1)
@@ -778,9 +1058,7 @@ class MainWindow(QMainWindow):
         page_l.setContentsMargins(20, 18, 20, 18)
         page_l.setSpacing(14)
 
-        title = QLabel("心跳帶設備")
-        title.setObjectName("subtitleLabel")
-        page_l.addWidget(title)
+        page_l.addWidget(self._page_header("02 / CHEST BELT", "心跳帶設備"))
 
         # 背景校準開關 + 摘要狀態
         gb_ctl = QGroupBox("背景校準")
@@ -882,9 +1160,7 @@ class MainWindow(QMainWindow):
         page_l.setContentsMargins(20, 18, 20, 18)
         page_l.setSpacing(14)
 
-        title = QLabel("影片回測")
-        title.setObjectName("subtitleLabel")
-        page_l.addWidget(title)
+        page_l.addWidget(self._page_header("03 / BATCH REPLAY", "影片回測"))
 
         gb_replay = QGroupBox("批次回放")
         replay_l = QVBoxLayout(gb_replay)
@@ -941,19 +1217,17 @@ class MainWindow(QMainWindow):
         replay_l.addWidget(self._lbl_replay_parallel_status)
 
         self._frame_replay_preview = QFrame()
+        self._frame_replay_preview.setObjectName("replayPreviewFrame")
         self._frame_replay_preview.setFixedHeight(360)
         self._frame_replay_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._frame_replay_preview.setStyleSheet(
-            "background-color: #101318; border: 1px solid #2a2f38; border-radius: 8px;"
-        )
         replay_preview_layout = QVBoxLayout(self._frame_replay_preview)
         replay_preview_layout.setContentsMargins(0, 0, 0, 0)
         replay_preview_layout.setSpacing(0)
         self._lbl_replay_preview = QLabel("影片預覽")
+        self._lbl_replay_preview.setObjectName("replayPreviewLabel")
         self._lbl_replay_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_replay_preview.setScaledContents(False)
         self._lbl_replay_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self._lbl_replay_preview.setStyleSheet("background-color: transparent; color: #868e96;")
         replay_preview_layout.addWidget(self._lbl_replay_preview, 1)
         replay_l.addWidget(self._frame_replay_preview)
 
@@ -967,9 +1241,7 @@ class MainWindow(QMainWindow):
         page_l.setContentsMargins(20, 18, 20, 18)
         page_l.setSpacing(14)
 
-        title = QLabel("設定")
-        title.setObjectName("subtitleLabel")
-        page_l.addWidget(title)
+        page_l.addWidget(self._page_header("04 / SETTINGS", "設定"))
 
         # 攝影機
         gb_cam = QGroupBox("攝影機（RGB）")
@@ -1140,8 +1412,8 @@ class MainWindow(QMainWindow):
                 col = "#30363d"
             self._mon_fused_level.setText(level)
             self._mon_fused_level.setStyleSheet(
-                f"background-color: {col}; color: #ffffff; border-radius: 8px;"
-                " padding: 8px 12px; font-size: 18px; font-weight: 700;"
+                f"background-color: {col}; color: #ffffff; border-radius: 999px;"
+                " padding: 6px 14px; font-size: 18px; font-weight: 700;"
             )
             self._mon_fused_score.setText(f"{float(getattr(z, 'score', 0.0) or 0.0) * 100:.0f}%")
         else:

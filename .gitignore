@@ -35,6 +35,9 @@ docs/
 !docs/rppg_technical_report.pdf
 !docs/2026-05-21-mediapipe-landmark-expansion-log.md
 
+# Claude Design 匯入的設計稿原始素材（僅供本機參考，不入版控）
+.design_import/
+
 # OS/Editor
 .DS_Store
 Thumbs.db
