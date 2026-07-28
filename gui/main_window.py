@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import queue
 import sys
@@ -12,7 +13,7 @@ from typing import Any, cast
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QRect, QSize, Qt, QThread, QTimer, QUrl
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -22,6 +23,7 @@ from PySide6.QtGui import (
     QImageWriter,
     QKeySequence,
     QPainter,
+    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import (
@@ -30,8 +32,10 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QListWidget,
@@ -47,6 +51,8 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QStyle,
     QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -123,6 +129,14 @@ _PALETTES: dict[str, dict[str, str]] = {
         "BAD_TEXT": "#d9836c",
         "BAD_BG": "rgba(217,131,108,0.14)",
         "MENUBAR_BG": "#1f2429",
+        # 綜合疲勞大卡（hero）：accent 10% 疊在 BG 上的近似值 + accent 邊框。
+        "HERO_BG": "#1b2530",
+        # 預覽面板 blueprint 網格線（深底上的淺色細線）。
+        "GRID_LINE": "rgba(255,255,255,0.06)",
+        # DEVICE STATUS / 預覽 tag 的狀態圓點語意色（非疲勞等級語意）。
+        "STATUS_OK": "#6fb891",
+        "STATUS_WARN": "#d6b56a",
+        "STATUS_OFF": "rgba(230,233,236,0.30)",
     },
     "light": {
         "DESK": "#d4d4d7",
@@ -150,6 +164,14 @@ _PALETTES: dict[str, dict[str, str]] = {
         "BAD_TEXT": "#a8503c",
         "BAD_BG": "rgba(168,80,60,0.12)",
         "MENUBAR_BG": "#e6e7e9",
+        # 綜合疲勞大卡（hero）：accent 10% 疊在 BG 上的近似值 + accent 邊框。
+        "HERO_BG": "#e6ecf2",
+        # 預覽面板始終為深底（VIDEO），網格線用白色細線兩主題共用。
+        "GRID_LINE": "rgba(255,255,255,0.06)",
+        # DEVICE STATUS / 預覽 tag 的狀態圓點語意色（非疲勞等級語意）。
+        "STATUS_OK": "#4a7f5f",
+        "STATUS_WARN": "#a8833c",
+        "STATUS_OFF": "rgba(29,31,32,0.30)",
     },
 }
 
@@ -377,12 +399,12 @@ _QSS_TEMPLATE = Template(
         font-family: """
     + FONT_HEADING
     + """;
-        font-size: 18px;
+        font-size: 15px;
         font-weight: 600;
         color: $ON_ACCENT;
         background-color: $DIVIDER_STRONG;
         border-radius: 999px;
-        padding: 6px 14px;
+        padding: 3px 12px;
     }
     QLabel#sectionSub {
         font-size: 13px;
@@ -417,6 +439,259 @@ _QSS_TEMPLATE = Template(
     }
     QProgressBar::chunk { background-color: $ACCENT; border-radius: 999px; }
     QToolTip { background-color: $CARD; color: $TEXT; border: 1px solid $DIVIDER; padding: 4px 8px; }
+    /* ── 設計稿重建：卡片外殼與版面元件（純視覺 object name） ── */
+    QFrame#panelCard {
+        background-color: $CARD;
+        border: 1px solid $DIVIDER;
+        border-radius: 12px;
+    }
+    QFrame#panelHero {
+        background-color: $HERO_BG;
+        border: 1px solid $ACCENT;
+        border-radius: 12px;
+    }
+    QFrame#previewPanel {
+        background-color: $VIDEO;
+        border: 1px solid $DIVIDER;
+        border-radius: 12px;
+    }
+    QLabel#previewInner {
+        background: transparent;
+        color: $TEXT_ON_VIDEO_MUTED;
+        font-size: 14px;
+    }
+    QLabel#cardHeading {
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 16px;
+        font-weight: 600;
+        color: $TEXT;
+    }
+    QLabel#monoCaption {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        color: $TEXT_FAINT;
+        letter-spacing: 2px;
+    }
+    QLabel#groupLabel {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        color: $TEXT_FAINT;
+        letter-spacing: 2px;
+    }
+    QLabel#heroScore {
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 46px;
+        font-weight: 600;
+        color: $TEXT;
+    }
+    QLabel#heroTrend {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 11px;
+        color: $TEXT_MUTED;
+    }
+    QLabel#contribName { font-size: 12px; color: $TEXT_MUTED; }
+    QLabel#contribValue {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 12px;
+        color: $TEXT;
+    }
+    QLabel#scaleMark {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 9px;
+        color: $TEXT_FAINT;
+    }
+    QLabel#bpmDelta {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        color: $TEXT_MUTED;
+    }
+    QLabel#hrvLabel {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 9px;
+        color: $TEXT_FAINT;
+        letter-spacing: 1px;
+    }
+    QLabel#hrvValue {
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 20px;
+        font-weight: 600;
+        color: $TEXT;
+    }
+    QFrame#hrvCell {
+        border: none;
+        border-left: 2px solid $ACCENT;
+        border-radius: 2px;
+        background: transparent;
+    }
+    QFrame#hrvCellMuted {
+        border: none;
+        border-left: 2px solid $DIVIDER_STRONG;
+        border-radius: 2px;
+        background: transparent;
+    }
+    QLabel#telemetry {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        color: $TEXT_ON_VIDEO;
+        background: transparent;
+    }
+    QLabel#brandMono {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 9px;
+        color: $TEXT_FAINT;
+        letter-spacing: 3px;
+    }
+    QLabel#deviceStatusTitle {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 9px;
+        color: $TEXT_FAINT;
+        letter-spacing: 3px;
+    }
+    QLabel#deviceStatusName { font-size: 11px; color: $TEXT_MUTED; }
+    QLabel#deviceStatusValue { font-size: 11px; color: $TEXT; }
+    QLabel#recPill {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 11px;
+        color: $BAD_TEXT;
+        border: 1px solid $BAD;
+        border-radius: 999px;
+        padding: 4px 12px;
+        background-color: $BAD_BG;
+    }
+    QFrame#segGroup {
+        border: 1px solid $DIVIDER;
+        border-radius: 14px;
+        background: transparent;
+    }
+    QPushButton#segButton {
+        border: none;
+        border-radius: 12px;
+        padding: 5px 13px;
+        margin: 0;
+        min-height: 0;
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 12px;
+        font-weight: 600;
+        color: $TEXT_MUTED;
+        background: transparent;
+    }
+    QPushButton#segButton:hover { color: $TEXT; }
+    QPushButton#segButton[selected="true"] {
+        background-color: $ACCENT;
+        color: $ON_ACCENT;
+    }
+    QLabel#sessionLabel {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        color: $TEXT_FAINT;
+        letter-spacing: 2px;
+    }
+    /* ── 設計稿重建（2/3/4 頁）：key-value 列、橫幅、佇列表格、摘要 ── */
+    QFrame#kvRow {
+        border: none;
+        border-bottom: 1px solid $DIVIDER;
+        background: transparent;
+    }
+    QLabel#kvKey { color: $TEXT_MUTED; font-size: 13px; }
+    QLabel#kvVal {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 12px;
+        color: $TEXT;
+    }
+    QLabel#bannerDevice {
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 22px;
+        font-weight: 600;
+        color: $TEXT;
+    }
+    QLabel#bannerBig {
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 44px;
+        font-weight: 600;
+        color: $TEXT;
+    }
+    QLabel#bannerConn { font-size: 12px; color: $TEXT_MUTED; }
+    QLabel#sumBig {
+        font-family: """
+    + FONT_HEADING
+    + """;
+        font-size: 24px;
+        font-weight: 600;
+        color: $TEXT;
+    }
+    QLabel#calibResid {
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 11px;
+        color: $TEXT;
+    }
+    QTableWidget#queueTable {
+        background: transparent;
+        border: none;
+        gridline-color: transparent;
+        outline: 0;
+    }
+    QTableWidget#queueTable::item {
+        padding: 4px 6px;
+        border: none;
+        border-bottom: 1px solid $DIVIDER;
+        color: $TEXT;
+    }
+    QTableWidget#queueTable::item:selected {
+        background-color: $NAV_HOVER;
+        color: $TEXT;
+    }
+    QHeaderView#queueHeader::section {
+        background: transparent;
+        color: $TEXT_FAINT;
+        border: none;
+        border-bottom: 1px solid $DIVIDER_STRONG;
+        padding: 4px 6px;
+        font-family: """
+    + FONT_MONO
+    + """;
+        font-size: 10px;
+        letter-spacing: 1px;
+    }
     """
 )
 
@@ -519,12 +794,142 @@ class _NavItemDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class _MiniBar(QWidget):
+    """指標貢獻列的迷你橫條（純顯示層正規化，不宣稱任何語意權重）。
+
+    `set_fraction(f)` 的 f 已由呼叫端 clamp 至 0–1；None 代表無資料（畫空槽）。
+    顏色由 `set_color` 依主題設定。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(6)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._fraction: float | None = None
+        self._fill = QColor("#7ea6cd")
+        self._track = QColor(255, 255, 255, 26)
+
+    def set_colors(self, fill_hex: str, track: QColor) -> None:
+        self._fill = QColor(fill_hex)
+        self._track = track
+        self.update()
+
+    def set_fraction(self, f: float | None) -> None:
+        self._fraction = None if f is None else max(0.0, min(1.0, float(f)))
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # type: ignore[override]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        r = h / 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(self._track)
+        p.drawRoundedRect(0, 0, w, h, r, r)
+        if self._fraction:
+            fw = int(w * self._fraction)
+            if fw > 0:
+                p.setBrush(self._fill)
+                p.drawRoundedRect(0, 0, max(fw, int(h)), h, r, r)
+        p.end()
+
+
+class _SparklineWidget(QWidget):
+    """rPPG 脈搏波形迷你圖（主題感知輕量版；復用資料來自 RppgMetrics.waveform）。
+
+    等價於 gui/preview_overlay_window._WaveformWidget，但背景透明、顏色隨主題，
+    以嵌入淺/深主題卡片內。無資料時畫提示文字。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMinimumHeight(46)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._data: list[float] = []
+        self._color = QColor("#7ea6cd")
+        self._muted = QColor(150, 150, 150)
+
+    def set_colors(self, line_hex: str, muted: QColor) -> None:
+        self._color = QColor(line_hex)
+        self._muted = muted
+        self.update()
+
+    def set_data(self, data: list[float]) -> None:
+        self._data = list(data or [])
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # type: ignore[override]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        if len(self._data) < 2:
+            p.setPen(self._muted)
+            p.drawText(QRect(0, 0, w, h), int(Qt.AlignmentFlag.AlignCenter), "等待脈搏信號…")
+            p.end()
+            return
+        data = self._data
+        mn, mx = min(data), max(data)
+        span = mx - mn
+        if span < 1e-9:
+            p.end()
+            return
+        n = len(data)
+        pen = QPen(self._color, 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        prev = None
+        for i, v in enumerate(data):
+            x = int(i / (n - 1) * (w - 1))
+            y = int((1.0 - (v - mn) / span) * (h - 6) + 3)
+            pt = QPoint(x, y)
+            if prev is not None:
+                p.drawLine(prev, pt)
+            prev = pt
+        p.end()
+
+
+class _PreviewPanel(QFrame):
+    """即時預覽面板：深底 + blueprint 網格質感（paintEvent 疊在 QSS 底色上）。
+
+    子控件（相機畫面 label、telemetry 文字、MESH/rPPG tag）以 QGridLayout 疊在
+    同一格，網格線畫在最底層。純視覺，不影響任何資料流。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._grid = QColor(255, 255, 255, 16)
+
+    def set_grid_color(self, c: QColor) -> None:
+        self._grid = c
+        self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setPen(QPen(self._grid, 1))
+        step = 44
+        w, h = self.width(), self.height()
+        x = step
+        while x < w:
+            p.drawLine(x, 0, x, h)
+            x += step
+        y = step
+        while y < h:
+            p.drawLine(0, y, w, y)
+            y += step
+        p.end()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("NCFD System")
-        self.resize(1380, 760)
+        self.setWindowTitle("NCFD System — 非接觸式疲勞監測系統 V2")
+        self.resize(1420, 900)
         self.setMinimumSize(1080, 620)
+
+        # 本次啟動的 session 識別（真實識別碼，非設計稿假資料）：以啟動日期+時分生成一次。
+        self._session_id = "S-" + time.strftime("%m%d")
 
         # 視覺主題（僅影響 QSS 外觀）：預設深色，偏好僅 in-session（不落設定檔）。
         self._theme = "dark"
@@ -614,6 +1019,10 @@ class MainWindow(QMainWindow):
         self._belt_ui_timer = QTimer(self)
         self._belt_ui_timer.setInterval(1000)
         self._belt_ui_timer.timeout.connect(self._tick_belt_calibration)
+        # 純 UI 顯示用：REC 錄影指示 pill 的 elapsed 計時（1s，僅在錄製中運行）。
+        self._rec_ui_timer = QTimer(self)
+        self._rec_ui_timer.setInterval(1000)
+        self._rec_ui_timer.timeout.connect(self._update_rec_pill)
         # 自動採集：一鍵串接既有「開始」/「開始記錄」/「心跳帶真值校準」觸發點，
         # 不重寫任何 worker 啟停或記錄/校準邏輯本身（見 _on_auto_capture_clicked）。
         self._auto_capture_timer: QTimer | None = None
@@ -638,6 +1047,37 @@ class MainWindow(QMainWindow):
         self._start_web_server()
 
         self.statusBar().showMessage("就緒 — 選擇攝影機後按「開始」可預覽（無 MediaPipe）")
+        self._apply_native_titlebar_theme()
+
+    def _apply_native_titlebar_theme(self) -> None:
+        """Windows：讓原生標題列跟隨深/淺主題（DWM immersive dark mode）。
+
+        非 Windows 或任何 ctypes/DWM 呼叫失敗一律靜默略過（try/except 包好），
+        不做 frameless、不影響任何非視覺行為。
+        """
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            hwnd = int(self.winId())
+            value = ctypes.c_int(1 if self._theme == "dark" else 0)
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            dwmapi = cast(Any, ctypes).windll.dwmapi
+            res = dwmapi.DwmSetWindowAttribute(
+                wintypes.HWND(hwnd),
+                ctypes.c_int(DWMWA_USE_IMMERSIVE_DARK_MODE),
+                ctypes.byref(value),
+                ctypes.sizeof(value),
+            )
+            if res != 0:
+                # 舊版 Windows 10 用屬性索引 19。
+                dwmapi.DwmSetWindowAttribute(
+                    wintypes.HWND(hwnd),
+                    ctypes.c_int(19),
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+        except Exception:
+            pass
 
     def _build_menu(self) -> None:
         act_hotkeys = QAction("快捷鍵設定…", self)
@@ -726,6 +1166,23 @@ class MainWindow(QMainWindow):
 
         self._menu_actions_hotkeys = (act_metrics, act_preview, act_start, act_lock, act_all, act_rec)
 
+        # 選單列右側 corner widget：SESSION 識別 + LIGHT/DARK 兩段式主題切換。
+        corner = QWidget()
+        cl = QHBoxLayout(corner)
+        cl.setContentsMargins(0, 0, 8, 0)
+        cl.setSpacing(10)
+        self._lbl_session = QLabel(f"SESSION {self._session_id}")
+        self._lbl_session.setObjectName("sessionLabel")
+        cl.addWidget(self._lbl_session)
+        self._theme_seg, self._theme_seg_buttons = self._make_segmented(
+            [("light", "LIGHT"), ("dark", "DARK")],
+            lambda key: (self._toggle_theme() if key != self._theme else None),
+        )
+        cl.addWidget(self._theme_seg)
+        # 保留 Python 參照，避免 corner widget 被 GC（offscreen 下 menubar 可能不接管所有權）。
+        self._menu_corner = corner
+        self.menuBar().setCornerWidget(corner, Qt.Corner.TopRightCorner)
+
     def _build_central(self) -> None:
         """左側邊導航 + 右側 QStackedWidget 四頁 dashboard 架構。
 
@@ -742,22 +1199,39 @@ class MainWindow(QMainWindow):
         # ── 左側邊導航 ──
         side = QWidget()
         side.setObjectName("sidebar")
-        side.setMinimumWidth(168)
-        side.setMaximumWidth(220)
+        side.setMinimumWidth(196)
+        side.setMaximumWidth(230)
         side.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         side_l = QVBoxLayout(side)
-        side_l.setContentsMargins(0, 16, 0, 14)
+        side_l.setContentsMargins(0, 18, 0, 0)
         side_l.setSpacing(0)
+
+        # 品牌區：圓形圖示 + NCFD System + mono 副標 + 中文副標
+        brand_wrap = QWidget()
+        brand_l = QVBoxLayout(brand_wrap)
+        brand_l.setContentsMargins(18, 0, 14, 16)
+        brand_l.setSpacing(6)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+        self._brand_dot = QLabel("●")
+        self._brand_dot.setObjectName("brandDot")
+        self._brand_dot.setFixedSize(30, 30)
+        self._brand_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_row.addWidget(self._brand_dot)
         brand = QLabel("NCFD System")
         brand.setObjectName("titleLabel")
-        brand.setContentsMargins(18, 0, 12, 2)
-        brand.setWordWrap(True)
-        side_l.addWidget(brand)
+        brand_row.addWidget(brand)
+        brand_row.addStretch(1)
+        brand_l.addLayout(brand_row)
+        brand_mono = QLabel("NON-CONTACT FATIGUE\nDETECTION SYSTEM")
+        brand_mono.setObjectName("brandMono")
+        brand_l.addWidget(brand_mono)
         brand_sub = QLabel("非接觸式疲勞監測系統")
         brand_sub.setObjectName("brandSub")
-        brand_sub.setContentsMargins(18, 0, 12, 12)
         brand_sub.setWordWrap(True)
-        side_l.addWidget(brand_sub)
+        brand_l.addWidget(brand_sub)
+        side_l.addWidget(brand_wrap)
+
         self._nav = QListWidget()
         self._nav.setObjectName("navList")
         self._nav.setSpacing(2)
@@ -776,18 +1250,24 @@ class MainWindow(QMainWindow):
             self._nav.addItem(item)
         side_l.addWidget(self._nav, 1)
 
-        # 主題切換 pill（放側邊欄底部）：翻轉 self._theme 並對 QApplication 重套 QSS。
-        theme_wrap = QWidget()
-        theme_l = QHBoxLayout(theme_wrap)
-        theme_l.setContentsMargins(12, 8, 12, 0)
-        theme_l.setSpacing(0)
-        self._btn_theme = QPushButton()
-        self._btn_theme.setObjectName("themeToggle")
-        self._btn_theme.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_theme.clicked.connect(self._toggle_theme)
-        theme_l.addWidget(self._btn_theme)
-        theme_l.addStretch(1)
-        side_l.addWidget(theme_wrap)
+        # ── DEVICE STATUS 區（側邊欄底部）──
+        dev_wrap = QWidget()
+        dev_l = QVBoxLayout(dev_wrap)
+        dev_l.setContentsMargins(18, 14, 18, 16)
+        dev_l.setSpacing(10)
+        dev_title = QLabel("DEVICE STATUS")
+        dev_title.setObjectName("deviceStatusTitle")
+        dev_l.addWidget(dev_title)
+        self._dot_cam = QLabel()
+        self._lbl_dev_cam = QLabel("OFF")
+        dev_l.addLayout(self._device_status_row("攝影機", self._dot_cam, self._lbl_dev_cam))
+        self._dot_belt = QLabel()
+        self._lbl_dev_belt = QLabel("OFF")
+        dev_l.addLayout(self._device_status_row("心跳帶", self._dot_belt, self._lbl_dev_belt))
+        self._dot_mp = QLabel()
+        self._lbl_dev_mp = QLabel("CPU")
+        dev_l.addLayout(self._device_status_row("MediaPipe", self._dot_mp, self._lbl_dev_mp))
+        side_l.addWidget(dev_wrap)
         root.addWidget(side)
 
         # ── 右側分頁堆疊 ──
@@ -836,18 +1316,126 @@ class MainWindow(QMainWindow):
         if app is not None:
             cast(Any, app).setStyleSheet(application_stylesheet(self._theme))
         self._sync_theme_widgets()
+        self._apply_native_titlebar_theme()
         # 綜合疲勞等級徽章：無資料時回到 QSS 中性樣式，有資料時維持資料驅動語意色。
         if hasattr(self, "_mon_fused_level"):
             self._refresh_monitor_metrics()
 
     def _sync_theme_widgets(self) -> None:
-        """把非 QSS 能觸及的動態元件（nav delegate 顏色、主題按鈕文字）對齊當前主題。"""
+        """把非 QSS 能觸及的動態元件（手動上色處）對齊當前主題。
+
+        涵蓋：nav delegate、LIGHT/DARK segmented 高亮、品牌圓點、sparkline 線色、
+        指標貢獻迷你條、預覽網格線、預覽 MESH/rPPG tag、DEVICE STATUS 圓點。
+        """
         pal = _PALETTES.get(self._theme, _PALETTES["dark"])
         if hasattr(self, "_nav_delegate"):
             self._nav_delegate.set_colors(pal["ACCENT"], pal["TEXT"])
             self._nav.viewport().update()
-        if hasattr(self, "_btn_theme"):
-            self._btn_theme.setText("● 深色主題" if self._theme == "dark" else "○ 淺色主題")
+        if hasattr(self, "_theme_seg_buttons"):
+            self._set_segmented_selection(self._theme_seg_buttons, self._theme)
+        if hasattr(self, "_brand_dot"):
+            self._brand_dot.setStyleSheet(
+                f"color: {pal['ACCENT']}; border: 1px solid {pal['ACCENT']};"
+                " border-radius: 10px; font-size: 12px;"
+            )
+        if hasattr(self, "_mon_wave"):
+            muted = QColor(pal["TEXT"])
+            muted.setAlpha(110)
+            self._mon_wave.set_colors(pal["ACCENT"], muted)
+        if hasattr(self, "_mon_contrib_bars"):
+            track = QColor(pal["TEXT"])
+            track.setAlpha(26)
+            for bar in self._mon_contrib_bars.values():
+                bar.set_colors(pal["ACCENT"], track)
+        if hasattr(self, "_belt_bpm_spark"):
+            muted = QColor(pal["TEXT"])
+            muted.setAlpha(110)
+            self._belt_bpm_spark.set_colors(pal["ACCENT"], muted)
+        if hasattr(self, "_belt_calib_bar"):
+            track = QColor(pal["TEXT"])
+            track.setAlpha(26)
+            self._belt_calib_bar.set_colors(pal["STATUS_OK"], track)
+        if hasattr(self, "_replay_queue_table"):
+            self._restyle_replay_queue_rows()
+        if hasattr(self, "_preview_panel"):
+            self._preview_panel.set_grid_color(QColor(255, 255, 255, 16))
+        self._refresh_preview_tags()
+        self._update_device_status()
+
+    # ── DEVICE STATUS（側邊欄） ───────────────────────────────────────────────
+    def _device_status_row(self, name: str, dot: QLabel, value: QLabel) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        nm = QLabel(name)
+        nm.setObjectName("deviceStatusName")
+        dot.setFixedSize(7, 7)
+        value.setObjectName("deviceStatusValue")
+        row.addWidget(nm)
+        row.addStretch(1)
+        row.addWidget(dot)
+        row.addWidget(value)
+        return row
+
+    def _set_status_dot(self, dot: QLabel, color: str) -> None:
+        dot.setStyleSheet(f"background-color: {color}; border-radius: 3px;")
+
+    def _update_device_status(self) -> None:
+        """更新側邊欄 DEVICE STATUS 三列（攝影機 / 心跳帶 / MediaPipe）。
+
+        只讀既有旗標與 belt_status()，由管線啟停點與 belt 1s timer 觸發，不新增輪詢。
+        """
+        if not hasattr(self, "_dot_cam"):
+            return
+        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
+        cam_on = self._pipeline_running or self._cam_worker is not None
+        self._set_status_dot(self._dot_cam, pal["STATUS_OK"] if cam_on else pal["STATUS_OFF"])
+        self._lbl_dev_cam.setText("ON" if cam_on else "OFF")
+
+        belt_on = False
+        belt_name = "OFF"
+        try:
+            if self._belt_runtime.belt_running:
+                st = self._belt_runtime.belt_status()
+                if st is not None and st.state == "connected":
+                    belt_on = True
+                    belt_name = (st.device_name or "ON")[:12]
+                else:
+                    belt_name = "連線中"
+        except Exception:
+            belt_on = False
+        self._set_status_dot(self._dot_belt, pal["STATUS_OK"] if belt_on else pal["STATUS_OFF"])
+        self._lbl_dev_belt.setText(belt_name)
+
+        # MediaPipe 恆以 CPU 執行（BaseOptions 未指定 delegate，屬事實靜態顯示）。
+        self._set_status_dot(self._dot_mp, pal["STATUS_WARN"])
+        self._lbl_dev_mp.setText("CPU")
+
+    # ── 兩段式 segmented 切換（LIGHT/DARK、分割/專注共用視覺語彙） ────────────
+    def _make_segmented(self, items: list[tuple[str, str]], on_select) -> tuple[QFrame, dict[str, QPushButton]]:
+        frame = QFrame()
+        frame.setObjectName("segGroup")
+        l = QHBoxLayout(frame)
+        l.setContentsMargins(2, 2, 2, 2)
+        l.setSpacing(2)
+        buttons: dict[str, QPushButton] = {}
+        for key, label in items:
+            b = QPushButton(label)
+            b.setObjectName("segButton")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setProperty("selected", "false")
+            b.clicked.connect(lambda _=False, k=key: on_select(k))
+            l.addWidget(b)
+            buttons[key] = b
+        return frame, buttons
+
+    @staticmethod
+    def _set_segmented_selection(buttons: dict[str, QPushButton], selected_key: str) -> None:
+        for key, b in buttons.items():
+            b.setProperty("selected", "true" if key == selected_key else "false")
+            style = b.style()
+            style.unpolish(b)
+            style.polish(b)
 
     # ── 分頁共用小工具 ────────────────────────────────────────────────────────
     def _page_header(self, kicker: str, title: str) -> QWidget:
@@ -886,138 +1474,397 @@ class MainWindow(QMainWindow):
         target_layout.addLayout(row)
         return val
 
+    def _kv_row(self, target_layout: QVBoxLayout, caption: str) -> QLabel:
+        """設計稿 key-value 列：底部細分隔線、左側說明（muted）、右側 mono 數值，回傳數值 QLabel。"""
+        frame = QFrame()
+        frame.setObjectName("kvRow")
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(0, 4, 0, 4)
+        row.setSpacing(8)
+        cap = QLabel(caption)
+        cap.setObjectName("kvKey")
+        val = QLabel("—")
+        val.setObjectName("kvVal")
+        val.setWordWrap(True)
+        row.addWidget(cap)
+        row.addWidget(val, 1, Qt.AlignmentFlag.AlignRight)
+        target_layout.addWidget(frame)
+        return val
+
     # ── 監測頁 ────────────────────────────────────────────────────────────────
+    def _card(self, heading: str, caption: str, *, hero: bool = False) -> tuple[QFrame, QVBoxLayout]:
+        """設計稿卡片外殼：卡內頂部（中文 heading + mono caption），回傳容器與內容 layout。"""
+        frame = QFrame()
+        frame.setObjectName("panelHero" if hero else "panelCard")
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(14, 9, 14, 10)
+        v.setSpacing(7)
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+        h = QLabel(heading)
+        h.setObjectName("cardHeading")
+        c = QLabel(caption)
+        c.setObjectName("monoCaption")
+        hdr.addWidget(h, 0, Qt.AlignmentFlag.AlignBottom)
+        hdr.addWidget(c, 0, Qt.AlignmentFlag.AlignBottom)
+        hdr.addStretch(1)
+        v.addLayout(hdr)
+        return frame, v
+
+    def _group_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("groupLabel")
+        return lbl
+
     def _build_monitor_page(self) -> QWidget:
         page = QWidget()
         page_l = QVBoxLayout(page)
-        page_l.setContentsMargins(20, 18, 20, 18)
-        page_l.setSpacing(14)
+        page_l.setContentsMargins(18, 14, 18, 12)
+        page_l.setSpacing(12)
 
-        page_l.addWidget(self._page_header("01 / LIVE MONITOR", "即時監測"))
+        # 頁首列：kicker+大標｜ REC pill ｜ 分割/專注切換
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        header.addWidget(self._page_header("01 / LIVE MONITOR", "即時監測"))
+        header.addStretch(1)
+        self._mon_rec_pill = QLabel("● REC 00:00")
+        self._mon_rec_pill.setObjectName("recPill")
+        self._mon_rec_pill.setVisible(False)
+        header.addWidget(self._mon_rec_pill, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._layout_seg, self._layout_seg_buttons = self._make_segmented(
+            [("split", "分割 Split"), ("focus", "專注 Focus")],
+            lambda key: self._set_monitor_layout(key == "focus"),
+        )
+        header.addWidget(self._layout_seg, 0, Qt.AlignmentFlag.AlignVCenter)
+        page_l.addLayout(header)
 
-        top = QHBoxLayout()
-        top.setSpacing(14)
+        # 主體：左欄（預覽 + 控制卡）｜右欄 rail（疲勞 hero + rPPG + HRV）
+        body = QHBoxLayout()
+        body.setSpacing(16)
 
-        # 鏡頭預覽（主 GUI 內；overlay 視窗仍獨立運作）
+        left_col = QVBoxLayout()
+        left_col.setSpacing(12)
+        # 預覽為彈性件：空間不足時先由它縮（下限 260），確保卡片與狀態列不被裁切。
+        left_col.addWidget(self._build_preview_panel(), 1)
+        self._monitor_controls_panel = self._build_monitor_controls()
+        left_col.addWidget(self._monitor_controls_panel)
+        left_wrap = QWidget()
+        left_wrap.setLayout(left_col)
+        self._monitor_left_wrap = left_wrap
+
+        rail = QVBoxLayout()
+        rail.setContentsMargins(0, 0, 0, 0)
+        rail.setSpacing(12)
+        rail.addWidget(self._build_fatigue_card())
+        rail.addWidget(self._build_rppg_card())
+        rail.addWidget(self._build_hrv_card())
+        rail.addStretch(1)
+        rail_inner = QWidget()
+        rail_inner.setLayout(rail)
+        # fallback：視窗縮到很小時右欄可垂直捲動（無框、細滾條、透明底），寧可捲動不裁切。
+        rail_scroll = QScrollArea()
+        rail_scroll.setObjectName("railScroll")
+        rail_scroll.setWidgetResizable(True)
+        rail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        rail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rail_scroll.setWidget(rail_inner)
+        rail_scroll.setMinimumWidth(324)
+        rail_scroll.setMaximumWidth(440)
+        rail_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._monitor_rail = rail_scroll
+
+        body.addWidget(left_wrap, 3)
+        body.addWidget(rail_scroll, 2)
+        page_l.addLayout(body, 1)
+
+        # 狀態列釘底：內容區 stretch=1，狀態列固定，任何視窗高度都不被擠出。
+        page_l.addWidget(self._build_status_strip(), 0)
+
+        self._set_monitor_layout(False)
+        return page
+
+    def _build_preview_panel(self) -> QWidget:
+        """深底 blueprint 網格預覽面板：相機畫面填滿，左上 telemetry、右下 MESH/rPPG tag。"""
+        panel = _PreviewPanel()
+        panel.setObjectName("previewPanel")
+        panel.setMinimumSize(320, 260)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._preview_panel = panel
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(0, 0, 0, 0)
+
+        # 相機畫面 label（底層，透明底讓網格質感透出；運行時 _update_monitor_preview 貼 pixmap）
         self._lbl_monitor_preview = QLabel("鏡頭預覽（按「開始」啟動）")
-        self._lbl_monitor_preview.setObjectName("previewLabel")
+        self._lbl_monitor_preview.setObjectName("previewInner")
         self._lbl_monitor_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_monitor_preview.setMinimumSize(360, 270)
         self._lbl_monitor_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        top.addWidget(self._lbl_monitor_preview, 3)
+        grid.addWidget(self._lbl_monitor_preview, 0, 0)
 
-        # 卡片改為左右兩欄，壓低整頁高度，開啟即可全覽（不需垂直捲動）
-        cards_left = QVBoxLayout()
-        cards_left.setSpacing(12)
-        cards_left.addWidget(self._build_fatigue_card())
-        cards_left.addStretch(1)
+        # overlay 容器（透明、穿透點擊），內含 telemetry（上）與 tag 列（下）
+        overlay = QWidget()
+        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        overlay.setStyleSheet("background: transparent;")
+        ov = QVBoxLayout(overlay)
+        ov.setContentsMargins(14, 14, 14, 14)
+        ov.setSpacing(0)
+        self._lbl_preview_telemetry = QLabel("PIPE · STOPPED")
+        self._lbl_preview_telemetry.setObjectName("telemetry")
+        ov.addWidget(self._lbl_preview_telemetry, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        ov.addStretch(1)
+        tag_row = QHBoxLayout()
+        tag_row.setSpacing(6)
+        tag_row.addStretch(1)
+        self._tag_mesh = QLabel("MESH")
+        self._tag_rppg = QLabel("rPPG")
+        tag_row.addWidget(self._tag_mesh)
+        tag_row.addWidget(self._tag_rppg)
+        ov.addLayout(tag_row)
+        grid.addWidget(overlay, 0, 0)
 
-        cards_right = QVBoxLayout()
-        cards_right.setSpacing(12)
-        cards_right.addWidget(self._build_rppg_card())
-        cards_right.addWidget(self._build_hrv_card())
-        cards_right.addStretch(1)
+        self._update_preview_telemetry()
+        self._refresh_preview_tags()
+        return panel
 
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
-        cards.addLayout(cards_left, 1)
-        cards.addLayout(cards_right, 1)
-        cards_wrap = QWidget()
-        cards_wrap.setLayout(cards)
-        cards_wrap.setMinimumWidth(440)
-        cards_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        top.addWidget(cards_wrap, 3)
-        page_l.addLayout(top, 1)
+    def _refresh_preview_tags(self) -> None:
+        """MESH / rPPG tag 亮暗綁行為警覺 / 壓力 HRV checkbox 實際啟用狀態（非裝飾）。"""
+        if not hasattr(self, "_tag_mesh"):
+            return
+        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
+        mesh_on = hasattr(self, "_chk_behavior") and self._chk_behavior.isChecked()
+        rppg_on = hasattr(self, "_chk_stress") and self._chk_stress.isChecked()
 
-        page_l.addWidget(self._build_monitor_controls())
-        page_l.addWidget(self._build_status_strip())
+        def _tag_style(on: bool) -> str:
+            col = pal["ACCENT"] if on else pal["TEXT_ON_VIDEO_MUTED"]
+            return (
+                f"font-family: {FONT_MONO}; font-size: 10px; letter-spacing: 1px;"
+                f" padding: 3px 10px; border-radius: 999px; border: 1px solid {col};"
+                f" color: {col}; background: transparent;"
+            )
 
-        return self._page_scroll(page)
+        self._tag_mesh.setStyleSheet(_tag_style(mesh_on))
+        self._tag_rppg.setStyleSheet(_tag_style(rppg_on))
 
-    def _build_fatigue_card(self) -> QGroupBox:
-        gb = QGroupBox("綜合疲勞")
-        l = QVBoxLayout(gb)
+    def _update_preview_telemetry(self) -> None:
+        """左上 mono telemetry：解析度·FPS + PIPE 狀態（無 LAT，無資料來源）。"""
+        if not hasattr(self, "_lbl_preview_telemetry"):
+            return
+        info = self._last_camera_info
+        w = int(info.get("width", 0) or 0)
+        h = int(info.get("height", 0) or 0)
+        running = self._pipeline_running
+        lines: list[str] = []
+        if running and w > 0 and h > 0:
+            fps_str = f"{self._last_fps:.0f}" if self._last_fps > 0 else "—"
+            lines.append(f"{w}×{h} · {fps_str} FPS")
+        lines.append("PIPE · RUNNING" if running else "PIPE · STOPPED")
+        self._lbl_preview_telemetry.setText("\n".join(lines))
+
+    def _set_monitor_layout(self, focus: bool) -> None:
+        """分割 Split（雙欄）／專注 Focus（隱藏右欄與控制卡、預覽放大）純視覺切換。"""
+        self._monitor_focus = focus
+        if hasattr(self, "_monitor_rail"):
+            self._monitor_rail.setVisible(not focus)
+        if hasattr(self, "_monitor_controls_panel"):
+            self._monitor_controls_panel.setVisible(not focus)
+        if hasattr(self, "_layout_seg_buttons"):
+            self._set_segmented_selection(self._layout_seg_buttons, "focus" if focus else "split")
+
+    def _build_fatigue_card(self) -> QWidget:
+        frame, v = self._card("綜合疲勞", "FATIGUE INDEX", hero=True)
+
+        score_row = QHBoxLayout()
+        score_row.setSpacing(12)
+        self._mon_score_big = QLabel("—")
+        self._mon_score_big.setObjectName("heroScore")
+        score_row.addWidget(self._mon_score_big, 0, Qt.AlignmentFlag.AlignBottom)
+        badge_col = QVBoxLayout()
+        badge_col.setSpacing(4)
         self._mon_fused_level = QLabel("—")
         self._mon_fused_level.setObjectName("levelBadge")
         self._mon_fused_level.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        l.addWidget(self._mon_fused_level)
-        self._mon_fused_score = self._stat_row(l, "疲勞分數")
-        self._mon_ear = self._stat_row(l, "EAR")
-        self._mon_perclos = self._stat_row(l, "PERCLOS")
-        self._mon_blink = self._stat_row(l, "眨眼次數")
-        self._mon_expr = self._stat_row(l, "微表情")
-        self._mon_gaze = self._stat_row(l, "注視")
-        self._mon_head = self._stat_row(l, "頭部姿態")
-        return gb
+        self._mon_trend = QLabel("—")
+        self._mon_trend.setObjectName("heroTrend")
+        badge_col.addWidget(self._mon_fused_level)
+        badge_col.addWidget(self._mon_trend)
+        score_row.addLayout(badge_col)
+        score_row.addStretch(1)
+        v.addLayout(score_row)
 
-    def _build_rppg_card(self) -> QGroupBox:
-        gb = QGroupBox("rPPG 生理")
-        l = QVBoxLayout(gb)
+        self._mon_score_bar = QProgressBar()
+        self._mon_score_bar.setRange(0, 100)
+        self._mon_score_bar.setValue(0)
+        self._mon_score_bar.setTextVisible(False)
+        v.addWidget(self._mon_score_bar)
+        scale = QHBoxLayout()
+        m0 = QLabel("0 清醒")
+        m0.setObjectName("scaleMark")
+        m50 = QLabel("50")
+        m50.setObjectName("scaleMark")
+        m100 = QLabel("100 高風險")
+        m100.setObjectName("scaleMark")
+        scale.addWidget(m0)
+        scale.addStretch(1)
+        scale.addWidget(m50)
+        scale.addStretch(1)
+        scale.addWidget(m100)
+        v.addLayout(scale)
+
+        v.addWidget(self._group_label("指標貢獻 CONTRIBUTION"))
+        self._mon_contrib_bars = {}
+        # 貢獻列放進緊湊容器（行距 3），壓低整卡高度；value label 沿用既有 _mon_* 屬性名。
+        contrib = QVBoxLayout()
+        contrib.setContentsMargins(0, 0, 0, 0)
+        contrib.setSpacing(3)
+        self._mon_fused_score = self._contrib_row(contrib, "疲勞分數", "score")
+        self._mon_ear = self._contrib_row(contrib, "EAR", "ear")
+        self._mon_perclos = self._contrib_row(contrib, "PERCLOS", "perclos")
+        self._mon_blink = self._contrib_row(contrib, "眨眼次數", "blink")
+        self._mon_expr = self._contrib_row(contrib, "微表情", "expr")
+        self._mon_gaze = self._contrib_row(contrib, "注視", "gaze")
+        self._mon_head = self._contrib_row(contrib, "頭部姿態", "head")
+        v.addLayout(contrib)
+        return frame
+
+    def _contrib_row(self, layout: QVBoxLayout, name: str, key: str) -> QLabel:
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        nm = QLabel(name)
+        nm.setObjectName("contribName")
+        nm.setFixedWidth(72)
+        bar = _MiniBar()
+        val = QLabel("—")
+        val.setObjectName("contribValue")
+        val.setMinimumWidth(58)
+        val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(nm)
+        row.addWidget(bar, 1)
+        row.addWidget(val)
+        layout.addLayout(row)
+        self._mon_contrib_bars[key] = bar
+        return val
+
+    def _build_rppg_card(self) -> QWidget:
+        frame, v = self._card("rPPG 生理", "PHYSIOLOGY")
         bpm_row = QHBoxLayout()
+        bpm_row.setSpacing(8)
         self._mon_bpm = QLabel("—")
         self._mon_bpm.setObjectName("cardValueBig")
         unit = QLabel("BPM")
         unit.setObjectName("cardUnit")
-        bpm_row.addWidget(self._mon_bpm)
-        bpm_row.addWidget(unit)
+        bpm_row.addWidget(self._mon_bpm, 0, Qt.AlignmentFlag.AlignBottom)
+        bpm_row.addWidget(unit, 0, Qt.AlignmentFlag.AlignBottom)
         bpm_row.addStretch(1)
-        l.addLayout(bpm_row)
-        self._mon_warmup = self._stat_row(l, "暖機進度")
-        self._mon_sqi = self._stat_row(l, "訊號品質")
-        return gb
+        self._mon_bpm_delta = QLabel("")
+        self._mon_bpm_delta.setObjectName("bpmDelta")
+        self._mon_bpm_delta.setVisible(False)
+        bpm_row.addWidget(self._mon_bpm_delta, 0, Qt.AlignmentFlag.AlignBottom)
+        v.addLayout(bpm_row)
 
-    def _build_hrv_card(self) -> QGroupBox:
-        gb = QGroupBox("HRV（rPPG 估測）")
-        l = QVBoxLayout(gb)
-        self._mon_rmssd = self._stat_row(l, "RMSSD")
-        self._mon_sdnn = self._stat_row(l, "SDNN")
-        self._mon_lfhf = self._stat_row(l, "LF/HF")
-        self._mon_hrv_conf = self._stat_row(l, "HRV 信心")
-        return gb
+        self._mon_wave = _SparklineWidget()
+        self._mon_wave.setFixedHeight(40)
+        v.addWidget(self._mon_wave)
 
-    def _build_monitor_controls(self) -> QGroupBox:
-        gb_ctl = QGroupBox("控制")
-        ctl = QVBoxLayout(gb_ctl)
+        self._mon_warmup = self._stat_row(v, "暖機進度")
+        self._mon_sqi = self._stat_row(v, "訊號品質")
+        return frame
 
-        row_a = QHBoxLayout()
+    def _build_hrv_card(self) -> QWidget:
+        frame, v = self._card("HRV", "rPPG ESTIMATE")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        self._mon_rmssd = self._hrv_cell(grid, 0, 0, "RMSSD", accent=True)
+        self._mon_sdnn = self._hrv_cell(grid, 0, 1, "SDNN", accent=True)
+        self._mon_lfhf = self._hrv_cell(grid, 1, 0, "LF/HF", accent=False)
+        self._mon_hrv_conf = self._hrv_cell(grid, 1, 1, "HRV 信心", accent=False)
+        v.addLayout(grid)
+        return frame
+
+    def _hrv_cell(self, grid: QGridLayout, r: int, c: int, label: str, *, accent: bool) -> QLabel:
+        cell = QFrame()
+        cell.setObjectName("hrvCell" if accent else "hrvCellMuted")
+        cl = QVBoxLayout(cell)
+        cl.setContentsMargins(10, 2, 4, 2)
+        cl.setSpacing(1)
+        lab = QLabel(label)
+        lab.setObjectName("hrvLabel")
+        val = QLabel("—")
+        val.setObjectName("hrvValue")
+        cl.addWidget(lab)
+        cl.addWidget(val)
+        grid.addWidget(cell, r, c)
+        return val
+
+    def _build_monitor_controls(self) -> QWidget:
+        frame, v = self._card("控制", "CONTROL")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(10)
+
+        # 主控 MAIN
+        main_col = QVBoxLayout()
+        main_col.setSpacing(7)
+        main_col.addWidget(self._group_label("主控 MAIN"))
+        main_row = QHBoxLayout()
+        main_row.setSpacing(9)
         self._btn_start = QPushButton("開始")
         self._btn_start.setObjectName("primaryButton")
         self._btn_start.clicked.connect(self._toggle_pipeline)
+        self._btn_bench = QPushButton("DL 基準測試（120s）")
+        self._btn_bench.clicked.connect(self._toggle_benchmark)
+        main_row.addWidget(self._btn_start)
+        main_row.addWidget(self._btn_bench)
+        main_row.addStretch(1)
+        main_col.addLayout(main_row)
+        self._lbl_bench = QLabel("")
+        self._lbl_bench.setObjectName("hintLabel")
+        main_col.addWidget(self._lbl_bench)
+        main_col.addStretch(1)
+        grid.addLayout(main_col, 0, 0)
+
+        # 偵測模組 MODULES
+        mod_col = QVBoxLayout()
+        mod_col.setSpacing(7)
+        mod_col.addWidget(self._group_label("偵測模組 MODULES"))
         self._chk_behavior = QCheckBox("行為警覺（頭部／哈欠／注視）")
         self._chk_behavior.setChecked(True)
         self._chk_stress = QCheckBox("壓力／HRV（心率估測）")
-        row_a.addWidget(self._btn_start)
-        row_a.addSpacing(16)
-        row_a.addWidget(self._chk_behavior)
-        row_a.addWidget(self._chk_stress)
-        row_a.addStretch(1)
-        ctl.addLayout(row_a)
+        self._chk_behavior.toggled.connect(self._refresh_preview_tags)
+        self._chk_stress.toggled.connect(self._refresh_preview_tags)
+        mod_col.addWidget(self._chk_behavior)
+        mod_col.addWidget(self._chk_stress)
+        mod_col.addStretch(1)
+        grid.addLayout(mod_col, 0, 1)
 
-        row_c = QHBoxLayout()
+        # 記錄 RECORDING
+        rec_col = QVBoxLayout()
+        rec_col.setSpacing(7)
+        rec_col.addWidget(self._group_label("記錄 RECORDING"))
+        rec_row = QHBoxLayout()
+        rec_row.setSpacing(10)
         self._btn_record = QPushButton("開始記錄")
         self._btn_record.clicked.connect(self._toggle_recording)
-        self._chk_auto_record = QCheckBox("按下開始時自動記錄")
         self._lbl_record = QLabel("記錄狀態：未啟動")
         self._lbl_record.setObjectName("hintLabel")
-        self._btn_bench = QPushButton("DL 基準測試（120s）")
-        self._btn_bench.clicked.connect(self._toggle_benchmark)
-        self._lbl_bench = QLabel("")
-        self._lbl_bench.setObjectName("hintLabel")
-        row_c.addWidget(self._btn_record)
-        row_c.addWidget(self._chk_auto_record)
-        row_c.addWidget(self._lbl_record)
-        row_c.addSpacing(16)
-        row_c.addWidget(self._btn_bench)
-        row_c.addWidget(self._lbl_bench)
-        row_c.addStretch(1)
-        ctl.addLayout(row_c)
+        rec_row.addWidget(self._btn_record)
+        rec_row.addWidget(self._lbl_record, 1)
+        rec_col.addLayout(rec_row)
+        self._chk_auto_record = QCheckBox("按下開始時自動記錄")
+        rec_col.addWidget(self._chk_auto_record)
+        rec_col.addStretch(1)
+        grid.addLayout(rec_col, 1, 0)
 
-        row_auto = QHBoxLayout()
-        row_auto.addWidget(QLabel("自動採集時長(秒)："))
+        # 自動採集 AUTO CAPTURE
+        auto_col = QVBoxLayout()
+        auto_col.setSpacing(7)
+        auto_col.addWidget(self._group_label("自動採集 AUTO CAPTURE"))
+        auto_row = QHBoxLayout()
+        auto_row.setSpacing(9)
+        auto_row.addWidget(QLabel("時長（秒）"))
         self._spn_auto_capture_seconds = QSpinBox()
         self._spn_auto_capture_seconds.setRange(10, 600)
         self._spn_auto_capture_seconds.setValue(60)
-        row_auto.addWidget(self._spn_auto_capture_seconds)
+        auto_row.addWidget(self._spn_auto_capture_seconds)
         self._btn_auto_capture = QPushButton("自動採集")
         self._btn_auto_capture.setToolTip(
             "一鍵串接既有流程：啟動管線（若未啟動）→ 開始記錄（採集 A）→\n"
@@ -1026,13 +1873,18 @@ class MainWindow(QMainWindow):
             "倒數結束（或再按一次提前停止）時自動停止記錄，並回報 .db／.jsonl 路徑。"
         )
         self._btn_auto_capture.clicked.connect(self._on_auto_capture_clicked)
+        auto_row.addWidget(self._btn_auto_capture)
+        auto_row.addStretch(1)
+        auto_col.addLayout(auto_row)
         self._chk_auto_capture_belt = QCheckBox("自動採集含心跳帶")
-        row_auto.addWidget(self._btn_auto_capture)
-        row_auto.addWidget(self._chk_auto_capture_belt)
-        row_auto.addStretch(1)
-        ctl.addLayout(row_auto)
+        auto_col.addWidget(self._chk_auto_capture_belt)
+        auto_col.addStretch(1)
+        grid.addLayout(auto_col, 1, 1)
 
-        return gb_ctl
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        v.addLayout(grid)
+        return frame
 
     def _build_status_strip(self) -> QFrame:
         stat = QFrame()
@@ -1049,20 +1901,41 @@ class MainWindow(QMainWindow):
             sl.addWidget(lb)
             sl.addSpacing(20)
         sl.addStretch(1)
+        self._lbl_status_ready = QLabel("就緒 · READY · NO ERRORS")
+        self._lbl_status_ready.setObjectName("statusStripLabel")
+        sl.addWidget(self._lbl_status_ready)
         return stat
 
     # ── 心跳帶頁 ──────────────────────────────────────────────────────────────
+    def _belt_banner_metric(self, caption: str) -> tuple[QVBoxLayout, QLabel]:
+        """橫幅卡右側電量／RSSI 小型指標欄（mono caption + heading 值），回傳 layout 與值 label。"""
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        cap = QLabel(caption)
+        cap.setObjectName("monoCaption")
+        val = QLabel("—")
+        val.setObjectName("hrvValue")
+        col.addWidget(cap)
+        col.addWidget(val)
+        return col, val
+
+    def _belt_banner_divider(self) -> QFrame:
+        line = QFrame()
+        line.setObjectName("bannerDivider")
+        line.setFixedWidth(1)
+        line.setStyleSheet("background: transparent;")
+        line.setFrameShape(QFrame.Shape.VLine)
+        return line
+
     def _build_belt_page(self) -> QWidget:
         page = QWidget()
         page_l = QVBoxLayout(page)
-        page_l.setContentsMargins(20, 18, 20, 18)
+        page_l.setContentsMargins(20, 16, 20, 16)
         page_l.setSpacing(14)
 
         page_l.addWidget(self._page_header("02 / CHEST BELT", "心跳帶設備"))
 
-        # 背景校準開關 + 摘要狀態
-        gb_ctl = QGroupBox("背景校準")
-        cl = QVBoxLayout(gb_ctl)
+        # 校準開關（既有控件，移入橫幅前先建立）
         self._chk_belt_calib = QCheckBox("心跳帶真值校準（背景）")
         self._chk_belt_calib.setToolTip(
             "以 BLE 心跳帶（Scosche Rhythm+ 2.0 等標準 Heart Rate Service 裝置）的實測心率為"
@@ -1071,16 +1944,60 @@ class MainWindow(QMainWindow):
             "心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞判斷。"
             "需勾選「壓力／HRV（心率估測）」啟用 rPPG 才會開始比對。"
         )
-        cl.addWidget(self._chk_belt_calib)
-        row_mode = QHBoxLayout()
-        row_mode.addWidget(QLabel("心跳帶校準："))
-        self._lbl_belt_status = QLabel("未啟用")
-        self._lbl_belt_status.setObjectName("hintLabel")
+        self._lbl_belt_status = QLabel("心跳帶校準：未啟用")
+        self._lbl_belt_status.setObjectName("bannerConn")
         self._lbl_belt_status.setWordWrap(True)
-        row_mode.addWidget(self._lbl_belt_status, 1)
-        cl.addLayout(row_mode)
-        page_l.addWidget(gb_ctl)
 
+        # 裝置橫幅卡（hero，橫向排列；不套 _card 卡頭，直接用 panelHero 外殼）
+        banner = QFrame()
+        banner.setObjectName("panelHero")
+        brow = QHBoxLayout(banner)
+        brow.setContentsMargins(16, 12, 18, 14)
+        brow.setSpacing(18)
+        # 裝置名 + 連線狀態
+        dev_col = QVBoxLayout()
+        dev_col.setSpacing(2)
+        dev_cap = QLabel("DEVICE")
+        dev_cap.setObjectName("monoCaption")
+        self._lbl_belt_banner_device = QLabel("—")
+        self._lbl_belt_banner_device.setObjectName("bannerDevice")
+        conn_row = QHBoxLayout()
+        conn_row.setSpacing(7)
+        self._belt_banner_dot = QLabel()
+        self._belt_banner_dot.setFixedSize(7, 7)
+        self._set_status_dot(self._belt_banner_dot, _PALETTES[self._theme]["STATUS_OFF"])
+        conn_row.addWidget(self._belt_banner_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        conn_row.addWidget(self._lbl_belt_status, 1)
+        dev_col.addWidget(dev_cap)
+        dev_col.addWidget(self._lbl_belt_banner_device)
+        dev_col.addLayout(conn_row)
+        brow.addLayout(dev_col)
+        brow.addWidget(self._belt_banner_divider())
+        # BPM 真值
+        bpm_row = QHBoxLayout()
+        bpm_row.setSpacing(7)
+        self._lbl_belt_banner_bpm = QLabel("—")
+        self._lbl_belt_banner_bpm.setObjectName("bannerBig")
+        bpm_unit = QLabel("BPM 真值")
+        bpm_unit.setObjectName("cardUnit")
+        bpm_row.addWidget(self._lbl_belt_banner_bpm, 0, Qt.AlignmentFlag.AlignBottom)
+        bpm_row.addWidget(bpm_unit, 0, Qt.AlignmentFlag.AlignBottom)
+        brow.addLayout(bpm_row)
+        brow.addWidget(self._belt_banner_divider())
+        # 背景校準 checkbox
+        chk_col = QVBoxLayout()
+        chk_col.setSpacing(2)
+        chk_col.addWidget(self._chk_belt_calib)
+        brow.addLayout(chk_col)
+        brow.addStretch(1)
+        # 電量 / RSSI
+        batt_col, self._lbl_belt_banner_battery = self._belt_banner_metric("電量")
+        rssi_col, self._lbl_belt_banner_rssi = self._belt_banner_metric("RSSI")
+        brow.addLayout(batt_col)
+        brow.addLayout(rssi_col)
+        page_l.addWidget(banner)
+
+        # 下方雙欄
         grid = QHBoxLayout()
         grid.setSpacing(14)
         col1 = QVBoxLayout()
@@ -1088,57 +2005,67 @@ class MainWindow(QMainWindow):
         col1.setSpacing(14)
         col2.setSpacing(14)
 
-        # 連線
-        gb_conn = QGroupBox("連線")
-        gl = QVBoxLayout(gb_conn)
-        self._lbl_belt_device = self._stat_row(gl, "裝置名稱")
-        self._lbl_belt_address = self._stat_row(gl, "裝置位址")
-        self._lbl_belt_location = self._stat_row(gl, "配戴位置")
-        self._lbl_belt_connected_since = self._stat_row(gl, "連線時長")
-        self._lbl_belt_notifications = self._stat_row(gl, "封包數")
-        self._lbl_belt_last_error = self._stat_row(gl, "最後錯誤")
-        col1.addWidget(gb_conn)
+        # 連線 CONNECTION
+        conn_card, cl = self._card("連線", "CONNECTION")
+        self._lbl_belt_device = self._kv_row(cl, "裝置名稱")
+        self._lbl_belt_address = self._kv_row(cl, "裝置位址")
+        self._lbl_belt_location = self._kv_row(cl, "配戴位置")
+        self._lbl_belt_connected_since = self._kv_row(cl, "連線時長")
+        self._lbl_belt_notifications = self._kv_row(cl, "封包數")
+        self._lbl_belt_last_error = self._kv_row(cl, "最後錯誤")
+        col1.addWidget(conn_card)
 
-        # 即時
-        gb_rt = QGroupBox("即時")
-        rl = QVBoxLayout(gb_rt)
-        self._lbl_belt_bpm = self._stat_row(rl, "BPM")
-        self._lbl_belt_rr = self._stat_row(rl, "RR 樣本數")
-        self._lbl_belt_contact = self._stat_row(rl, "感測器接觸")
-        self._lbl_belt_battery = self._stat_row(rl, "電量")
-        self._lbl_belt_rssi = self._stat_row(rl, "RSSI")
-        self._lbl_belt_stale = self._stat_row(rl, "停滯警告")
-        col1.addWidget(gb_rt)
+        # 即時 LIVE（含 BPM 趨勢 sparkline）
+        live_card, rl = self._card("即時", "LIVE")
+        self._belt_bpm_spark = _SparklineWidget()
+        self._belt_bpm_spark.setFixedHeight(46)
+        rl.addWidget(self._belt_bpm_spark)
+        self._lbl_belt_bpm = self._kv_row(rl, "BPM")
+        self._lbl_belt_rr = self._kv_row(rl, "RR 樣本數")
+        self._lbl_belt_contact = self._kv_row(rl, "感測器接觸")
+        self._lbl_belt_battery = self._kv_row(rl, "電量")
+        self._lbl_belt_rssi = self._kv_row(rl, "RSSI")
+        self._lbl_belt_stale = self._kv_row(rl, "停滯警告")
+        col1.addWidget(live_card)
 
         # HRV（僅供顯示）
-        gb_hrv = QGroupBox("HRV（僅供顯示，不進疲勞融合）")
-        hl = QVBoxLayout(gb_hrv)
-        self._lbl_belt_hrv_rmssd = self._stat_row(hl, "RMSSD")
-        self._lbl_belt_hrv_sdnn = self._stat_row(hl, "SDNN")
-        self._lbl_belt_hrv_lfhf = self._stat_row(hl, "LF/HF")
-        self._lbl_belt_hrv_conf = self._stat_row(hl, "HRV 信心")
-        self._lbl_belt_hrv_warmup = self._stat_row(hl, "暖機進度")
-        col2.addWidget(gb_hrv)
+        hrv_card, hl = self._card("HRV", "僅供顯示，不進疲勞融合")
+        self._lbl_belt_hrv_rmssd = self._kv_row(hl, "RMSSD")
+        self._lbl_belt_hrv_sdnn = self._kv_row(hl, "SDNN")
+        self._lbl_belt_hrv_lfhf = self._kv_row(hl, "LF/HF")
+        self._lbl_belt_hrv_conf = self._kv_row(hl, "HRV 信心")
+        self._lbl_belt_hrv_warmup = self._kv_row(hl, "暖機進度")
+        col2.addWidget(hrv_card)
 
-        # rPPG 校準
-        gb_cal = QGroupBox("rPPG 校準")
-        cal_l = QVBoxLayout(gb_cal)
-        self._lbl_belt_calib_offset = self._stat_row(cal_l, "Offset")
-        self._lbl_belt_calib_raw_resid = self._stat_row(cal_l, "原始殘差")
-        self._lbl_belt_calib_corr_resid = self._stat_row(cal_l, "校正後殘差")
-        self._lbl_belt_calib_confidence = self._stat_row(cal_l, "信心")
-        self._lbl_belt_calib_status = self._stat_row(cal_l, "狀態")
-        self._lbl_belt_calib_pairs = self._stat_row(cal_l, "配對數")
-        col2.addWidget(gb_cal)
+        # rPPG 校準 CALIBRATION（含殘差橫條）
+        cal_card, cal_l = self._card("rPPG 校準", "CALIBRATION")
+        resid_row = QHBoxLayout()
+        resid_row.setSpacing(10)
+        resid_cap = QLabel("殘差")
+        resid_cap.setObjectName("monoCaption")
+        self._belt_calib_bar = _MiniBar()
+        self._lbl_belt_calib_resid = QLabel("—")
+        self._lbl_belt_calib_resid.setObjectName("calibResid")
+        resid_row.addWidget(resid_cap)
+        resid_row.addWidget(self._belt_calib_bar, 1)
+        resid_row.addWidget(self._lbl_belt_calib_resid)
+        cal_l.addLayout(resid_row)
+        self._lbl_belt_calib_offset = self._kv_row(cal_l, "Offset")
+        self._lbl_belt_calib_raw_resid = self._kv_row(cal_l, "原始殘差")
+        self._lbl_belt_calib_corr_resid = self._kv_row(cal_l, "校正後殘差")
+        self._lbl_belt_calib_confidence = self._kv_row(cal_l, "信心")
+        self._lbl_belt_calib_status = self._kv_row(cal_l, "狀態")
+        self._lbl_belt_calib_pairs = self._kv_row(cal_l, "配對數")
+        col2.addWidget(cal_card)
 
-        # 設備設定（讀 config/hr_belt.json 載入結果，唯讀顯示）
-        gb_cfg = QGroupBox("設備設定")
-        fl = QVBoxLayout(gb_cfg)
-        self._lbl_belt_cfg_name_prefix = self._stat_row(fl, "名稱前綴")
-        self._lbl_belt_cfg_address = self._stat_row(fl, "指定位址")
-        self._lbl_belt_cfg_tuning = self._stat_row(fl, "參數自適應")
-        self._lbl_belt_cfg_capture = self._stat_row(fl, "同步錄製")
-        col2.addWidget(gb_cfg)
+        # 設備設定（讀 config/hr_belt.json 載入結果，唯讀顯示；設計稿為可編輯輸入，
+        # 但 GUI 無對應套用 handler，故保留為唯讀資訊卡，不造假輸入控件）
+        cfg_card, fl = self._card("設備設定", "PREFERENCES")
+        self._lbl_belt_cfg_name_prefix = self._kv_row(fl, "名稱前綴")
+        self._lbl_belt_cfg_address = self._kv_row(fl, "指定位址")
+        self._lbl_belt_cfg_tuning = self._kv_row(fl, "參數自適應")
+        self._lbl_belt_cfg_capture = self._kv_row(fl, "同步錄製")
+        col2.addWidget(cfg_card)
 
         col1.addStretch(1)
         col2.addStretch(1)
@@ -1155,27 +2082,35 @@ class MainWindow(QMainWindow):
 
     # ── 影片回測頁 ────────────────────────────────────────────────────────────
     def _build_replay_page(self) -> QWidget:
+        self._replay_queue_rows: dict[str, int] = {}
+        self._replay_completed_summaries: list[ReplayVideoSummary] = []
+
         page = QWidget()
         page_l = QVBoxLayout(page)
-        page_l.setContentsMargins(20, 18, 20, 18)
+        page_l.setContentsMargins(20, 16, 20, 16)
         page_l.setSpacing(14)
 
-        page_l.addWidget(self._page_header("03 / BATCH REPLAY", "影片回測"))
-
-        gb_replay = QGroupBox("批次回放")
-        replay_l = QVBoxLayout(gb_replay)
-
-        replay_row_a = QHBoxLayout()
+        # 頁首：kicker/大標 + 右側（資料夾路徑 mono + 選擇資料夾鈕）
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        header.addWidget(self._page_header("03 / BATCH REPLAY", "影片回測"))
+        header.addStretch(1)
+        self._lbl_replay_dir = QLabel("尚未選擇資料夾")
+        self._lbl_replay_dir.setObjectName("sessionLabel")
+        self._lbl_replay_dir.setWordWrap(True)
+        self._lbl_replay_dir.setMaximumWidth(360)
+        header.addWidget(self._lbl_replay_dir, 0, Qt.AlignmentFlag.AlignVCenter)
         self._btn_replay_choose = QPushButton("選擇資料夾")
         self._btn_replay_choose.clicked.connect(self._choose_replay_dir)
-        self._lbl_replay_dir = QLabel("尚未選擇資料夾")
-        self._lbl_replay_dir.setObjectName("hintLabel")
-        self._lbl_replay_dir.setWordWrap(True)
-        replay_row_a.addWidget(self._btn_replay_choose)
-        replay_row_a.addWidget(self._lbl_replay_dir, 1)
-        replay_l.addLayout(replay_row_a)
+        header.addWidget(self._btn_replay_choose, 0, Qt.AlignmentFlag.AlignVCenter)
+        page_l.addLayout(header)
 
-        replay_row_b = QHBoxLayout()
+        # 工具列卡（hero，橫向）：主要動作 + 平行數 + 標註 chk + 右側進度區
+        toolbar = QFrame()
+        toolbar.setObjectName("panelHero")
+        tb = QHBoxLayout(toolbar)
+        tb.setContentsMargins(16, 12, 18, 12)
+        tb.setSpacing(12)
         self._btn_replay_start = QPushButton("開始批次")
         self._btn_replay_start.setObjectName("primaryButton")
         self._btn_replay_start.clicked.connect(self._start_replay)
@@ -1190,36 +2125,73 @@ class MainWindow(QMainWindow):
         self._spn_replay_jobs.setValue(2)
         self._spn_replay_jobs.setPrefix("平行數 ")
         self._chk_replay_annotated = QCheckBox("輸出標註影片")
+        tb.addWidget(self._btn_replay_start)
+        tb.addWidget(self._btn_replay_parallel)
+        tb.addWidget(self._btn_replay_stop)
+        tb.addWidget(self._belt_banner_divider())
+        tb.addWidget(self._spn_replay_jobs)
+        tb.addWidget(self._chk_replay_annotated)
+        tb.addStretch(1)
+        # 右側進度區
+        prog_col = QVBoxLayout()
+        prog_col.setSpacing(5)
         self._lbl_replay_current = QLabel("目前影片：--")
         self._lbl_replay_current.setObjectName("hintLabel")
-        replay_row_b.addWidget(self._btn_replay_start)
-        replay_row_b.addWidget(self._btn_replay_parallel)
-        replay_row_b.addWidget(self._btn_replay_stop)
-        replay_row_b.addWidget(self._spn_replay_jobs)
-        replay_row_b.addWidget(self._chk_replay_annotated)
-        replay_row_b.addWidget(self._lbl_replay_current, 1)
-        replay_l.addLayout(replay_row_b)
-
-        replay_row_c = QHBoxLayout()
         self._bar_replay_progress = QProgressBar()
         self._bar_replay_progress.setRange(0, 1)
         self._bar_replay_progress.setValue(0)
         self._lbl_replay_result = QLabel("摘要檔：--")
-        self._lbl_replay_result.setObjectName("hintLabel")
+        self._lbl_replay_result.setObjectName("sessionLabel")
         self._lbl_replay_result.setWordWrap(True)
-        replay_row_c.addWidget(self._bar_replay_progress, 1)
-        replay_row_c.addWidget(self._lbl_replay_result, 2)
-        replay_l.addLayout(replay_row_c)
+        prog_col.addWidget(self._lbl_replay_current)
+        prog_col.addWidget(self._bar_replay_progress)
+        prog_col.addWidget(self._lbl_replay_result)
+        prog_wrap = QWidget()
+        prog_wrap.setLayout(prog_col)
+        prog_wrap.setMinimumWidth(300)
+        tb.addWidget(prog_wrap)
+        page_l.addWidget(toolbar)
 
+        # 下方：處理清單表格（左，較寬）｜ 預覽 + 摘要（右）
+        grid = QHBoxLayout()
+        grid.setSpacing(14)
+
+        # 處理清單 QUEUE
+        queue_card, ql = self._card("處理清單", "QUEUE")
+        table = QTableWidget(0, 5)
+        table.setObjectName("queueTable")
+        table.setHorizontalHeaderLabels(["#", "檔案", "時長", "疲勞", "狀態"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.setShowGrid(False)
+        table.setWordWrap(False)
+        hh = table.horizontalHeader()
+        hh.setObjectName("queueHeader")
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(4, 88)
+        hh.setHighlightSections(False)
+        table.setMinimumHeight(300)
+        self._replay_queue_table = table
+        ql.addWidget(table, 1)
         self._lbl_replay_parallel_status = QLabel("處理清單：--")
         self._lbl_replay_parallel_status.setObjectName("hintLabel")
         self._lbl_replay_parallel_status.setWordWrap(True)
-        replay_l.addWidget(self._lbl_replay_parallel_status)
+        ql.addWidget(self._lbl_replay_parallel_status)
+        grid.addWidget(queue_card, 3)
 
+        # 右欄：預覽 + 摘要
+        right_col = QVBoxLayout()
+        right_col.setSpacing(14)
         self._frame_replay_preview = QFrame()
         self._frame_replay_preview.setObjectName("replayPreviewFrame")
-        self._frame_replay_preview.setFixedHeight(360)
-        self._frame_replay_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._frame_replay_preview.setMinimumHeight(240)
+        self._frame_replay_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         replay_preview_layout = QVBoxLayout(self._frame_replay_preview)
         replay_preview_layout.setContentsMargins(0, 0, 0, 0)
         replay_preview_layout.setSpacing(0)
@@ -1229,10 +2201,153 @@ class MainWindow(QMainWindow):
         self._lbl_replay_preview.setScaledContents(False)
         self._lbl_replay_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         replay_preview_layout.addWidget(self._lbl_replay_preview, 1)
-        replay_l.addWidget(self._frame_replay_preview)
+        right_col.addWidget(self._frame_replay_preview, 1)
 
-        page_l.addWidget(gb_replay, 1)
+        # 摘要 SUMMARY（GUI 端對已完成片聚合；MAE(BPM) 無資料來源，故不做該格）
+        sum_card, sl = self._card("摘要", "SUMMARY")
+        sum_grid = QHBoxLayout()
+        sum_grid.setSpacing(12)
+        self._lbl_replay_sum_avg = self._summary_cell(sum_grid, "平均疲勞")
+        self._lbl_replay_sum_warn = self._summary_cell(sum_grid, "警戒影片")
+        self._lbl_replay_sum_fail = self._summary_cell(sum_grid, "失敗數")
+        sl.addLayout(sum_grid)
+        right_col.addWidget(sum_card)
+
+        right_wrap = QWidget()
+        right_wrap.setLayout(right_col)
+        grid.addWidget(right_wrap, 2)
+        page_l.addLayout(grid, 1)
         return self._page_scroll(page)
+
+    def _summary_cell(self, target: QHBoxLayout, caption: str) -> QLabel:
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        cap = QLabel(caption)
+        cap.setObjectName("monoCaption")
+        val = QLabel("—")
+        val.setObjectName("sumBig")
+        col.addWidget(cap)
+        col.addWidget(val)
+        target.addLayout(col, 1)
+        return val
+
+    def _replay_status_kind(self, summary: ReplayVideoSummary | None, *, done: bool) -> str:
+        """把 summary.status 對映到佇列 pill 的語意種類（done/fail/warn/run/wait）。"""
+        if not done:
+            return "run"
+        if summary is None:
+            return "wait"
+        if summary.status == "failed":
+            return "fail"
+        if summary.critical_frames > 0 or summary.drowsy_frames > 0:
+            return "warn"
+        return "done"
+
+    def _replay_status_color_text(self, kind: str) -> tuple[str, str]:
+        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
+        return {
+            "done": (pal["STATUS_OK"], "完成"),
+            "fail": (pal["BAD"], "失敗"),
+            "warn": (pal["STATUS_WARN"], "警戒"),
+            "run": (pal["ACCENT"], "處理中"),
+            "wait": (pal["TEXT_FAINT"], "等待"),
+        }.get(kind, (pal["TEXT_FAINT"], "—"))
+
+    def _make_status_pill(self, kind: str) -> QLabel:
+        pill = QLabel()
+        pill.setProperty("statusKind", kind)
+        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._apply_status_pill_style(pill, kind)
+        return pill
+
+    def _apply_status_pill_style(self, pill: QLabel, kind: str) -> None:
+        color, text = self._replay_status_color_text(kind)
+        pill.setText(text)
+        pill.setStyleSheet(
+            f"font-family: {FONT_HEADING}; font-size: 11px; font-weight: 600;"
+            f" padding: 1px 10px; border-radius: 999px; border: 1px solid {color};"
+            f" color: {color}; background: transparent;"
+        )
+
+    def _restyle_replay_queue_rows(self) -> None:
+        """主題切換時重新著色佇列 pill（顏色含主題相依 accent）。"""
+        table = getattr(self, "_replay_queue_table", None)
+        if table is None:
+            return
+        for r in range(table.rowCount()):
+            pill = table.cellWidget(r, 4)
+            if pill is not None:
+                self._apply_status_pill_style(pill, pill.property("statusKind") or "wait")
+
+    def _queue_mono_item(self, text: str, *, muted: bool = False) -> QTableWidgetItem:
+        item = QTableWidgetItem(text)
+        font = QFont()
+        font.setFamilies(["JetBrains Mono", "Consolas", "Cascadia Mono", "monospace"])
+        font.setPointSize(9)
+        item.setFont(font)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        if muted:
+            pal = _PALETTES.get(self._theme, _PALETTES["dark"])
+            c = QColor(pal["TEXT"])
+            c.setAlpha(140)
+            item.setForeground(c)
+        return item
+
+    @staticmethod
+    def _fmt_duration(seconds: float) -> str:
+        s = int(round(seconds or 0.0))
+        if s <= 0:
+            return "—"
+        return f"{s // 60:02d}:{s % 60:02d}"
+
+    def _replay_queue_reset(self) -> None:
+        """批次開始時清空處理清單表格與摘要聚合。"""
+        self._replay_queue_rows = {}
+        self._replay_completed_summaries = []
+        if hasattr(self, "_replay_queue_table"):
+            self._replay_queue_table.setRowCount(0)
+        self._refresh_replay_summary()
+
+    def _replay_queue_upsert(self, summary: ReplayVideoSummary, *, done: bool) -> None:
+        """依 video_start／video_done 事件在處理清單表格新增或更新一列（純顯示層）。"""
+        table = getattr(self, "_replay_queue_table", None)
+        if table is None:
+            return
+        key = self._replay_video_key(summary)
+        row = self._replay_queue_rows.get(key)
+        if row is None:
+            row = table.rowCount()
+            table.insertRow(row)
+            self._replay_queue_rows[key] = row
+            table.setItem(row, 0, self._queue_mono_item(f"{row + 1:02d}", muted=True))
+            table.setItem(row, 1, self._queue_mono_item(""))
+            table.setItem(row, 2, self._queue_mono_item("—", muted=True))
+            table.setItem(row, 3, self._queue_mono_item("—"))
+            table.setCellWidget(row, 4, self._make_status_pill("run"))
+        name = Path(summary.video_path).name or f"S{summary.subject}/L{summary.label}"
+        table.item(row, 1).setText(name)
+        if done:
+            table.item(row, 2).setText(self._fmt_duration(summary.duration_sec))
+            if summary.status == "failed":
+                table.item(row, 3).setText("—")
+            else:
+                table.item(row, 3).setText(f"{round(summary.avg_fatigue_score * 100)}")
+        kind = self._replay_status_kind(summary, done=done)
+        pill = table.cellWidget(row, 4)
+        if pill is not None:
+            self._apply_status_pill_style(pill, kind)
+
+    def _refresh_replay_summary(self) -> None:
+        """摘要卡三格：平均疲勞 / 警戒影片數 / 失敗數（GUI 端對已完成片聚合）。"""
+        if not hasattr(self, "_lbl_replay_sum_avg"):
+            return
+        done = self._replay_completed_summaries
+        scored = [s.avg_fatigue_score for s in done if s.status != "failed"]
+        warn = sum(1 for s in done if s.status != "failed" and (s.critical_frames > 0 or s.drowsy_frames > 0))
+        fail = sum(1 for s in done if s.status == "failed")
+        self._lbl_replay_sum_avg.setText(f"{round(sum(scored) / len(scored) * 100)}" if scored else "—")
+        self._lbl_replay_sum_warn.setText(str(warn) if done else "—")
+        self._lbl_replay_sum_fail.setText(str(fail) if done else "—")
 
     # ── 設定頁 ────────────────────────────────────────────────────────────────
     def _build_settings_page(self) -> QWidget:
@@ -1243,9 +2358,12 @@ class MainWindow(QMainWindow):
 
         page_l.addWidget(self._page_header("04 / SETTINGS", "設定"))
 
-        # 攝影機
-        gb_cam = QGroupBox("攝影機（RGB）")
-        cam_l = QVBoxLayout(gb_cam)
+        # 上半：攝影機（左）｜ Overlay + 個人清醒基線（右）
+        grid = QHBoxLayout()
+        grid.setSpacing(14)
+
+        # 攝影機（RGB）
+        cam_card, cam_l = self._card("攝影機（RGB）", "CAMERA")
         row1 = QHBoxLayout()
         self._cmb_camera = QComboBox()
         self._cmb_camera.addItem("── 載入中… ──", None)
@@ -1258,8 +2376,8 @@ class MainWindow(QMainWindow):
         row1.addWidget(QLabel("裝置："))
         row1.addWidget(self._cmb_camera, 1)
         row1.addWidget(btn_refresh)
-        row1.addWidget(self._lbl_cam_hint)
         cam_l.addLayout(row1)
+        cam_l.addWidget(self._lbl_cam_hint)
 
         row2 = QHBoxLayout()
         self._cmb_resolution = QComboBox()
@@ -1269,11 +2387,10 @@ class MainWindow(QMainWindow):
         self._cmb_fps.addItems(["15", "24", "30", "60"])
         self._cmb_fps.setCurrentText("30")
         row2.addWidget(QLabel("解析度："))
-        row2.addWidget(self._cmb_resolution)
+        row2.addWidget(self._cmb_resolution, 1)
         row2.addSpacing(16)
         row2.addWidget(QLabel("目標 FPS："))
         row2.addWidget(self._cmb_fps)
-        row2.addStretch(1)
         cam_l.addLayout(row2)
 
         row3 = QHBoxLayout()
@@ -1296,20 +2413,22 @@ class MainWindow(QMainWindow):
         self._chk_horizontal_flip = QCheckBox("水平翻轉（鏡像校正）")
         self._chk_horizontal_flip.setChecked(True)
         self._chk_horizontal_flip.setToolTip("相機畫面左右相反時啟用；預覽、錄影與分析會使用同一個翻轉後畫面。")
-        lbl_backend = QLabel("後端：")
-        lbl_backend.setObjectName("hintLabel")
-        row3.addWidget(lbl_backend)
-        row3.addWidget(self._cmb_backend)
+        row3.addWidget(QLabel("後端："))
+        row3.addWidget(self._cmb_backend, 1)
         row3.addSpacing(16)
         row3.addWidget(self._chk_horizontal_flip)
-        row3.addStretch(1)
         cam_l.addLayout(row3)
-        page_l.addWidget(gb_cam)
+        cam_l.addStretch(1)
+        grid.addWidget(cam_card, 1)
 
-        # Overlay 顯示
-        gb_ov = QGroupBox("Overlay 顯示")
-        ov = QVBoxLayout(gb_ov)
-        row_ov = QHBoxLayout()
+        # 右欄：Overlay 顯示 + 個人清醒基線
+        right_col = QVBoxLayout()
+        right_col.setSpacing(14)
+
+        ov_card, ov = self._card("Overlay 顯示", "OVERLAY")
+        ov_grid = QGridLayout()
+        ov_grid.setHorizontalSpacing(16)
+        ov_grid.setVerticalSpacing(8)
         self._chk_all = QCheckBox("顯示／隱藏 全部 Overlay")
         self._chk_all.setChecked(True)
         self._chk_preview = QCheckBox("鏡頭預覽 Overlay（含 MediaPipe）")
@@ -1317,29 +2436,31 @@ class MainWindow(QMainWindow):
         self._chk_metrics.setChecked(True)
         self._chk_lock = QCheckBox("Overlay 鎖定（穿透點擊）")
         self._chk_lock.setChecked(True)
-        row_ov.addWidget(self._chk_all)
-        row_ov.addWidget(self._chk_preview)
-        row_ov.addWidget(self._chk_metrics)
-        row_ov.addWidget(self._chk_lock)
-        row_ov.addStretch(1)
-        ov.addLayout(row_ov)
+        ov_grid.addWidget(self._chk_all, 0, 0)
+        ov_grid.addWidget(self._chk_preview, 0, 1)
+        ov_grid.addWidget(self._chk_metrics, 1, 0)
+        ov_grid.addWidget(self._chk_lock, 1, 1)
+        ov_grid.setColumnStretch(0, 1)
+        ov_grid.setColumnStretch(1, 1)
+        ov.addLayout(ov_grid)
 
         row_d = QHBoxLayout()
-        row_d.addWidget(QLabel("Overlay 透明度："))
+        lbl_op = QLabel("Overlay 透明度")
+        lbl_op.setObjectName("hintLabel")
+        row_d.addWidget(lbl_op)
         self._sld_opacity = QSlider(Qt.Orientation.Horizontal)
         self._sld_opacity.setRange(0, 100)
         self._sld_opacity.setValue(55)
         self._sld_opacity.valueChanged.connect(self._on_opacity)
         self._lbl_opacity = QLabel("55%")
-        self._lbl_opacity.setMinimumWidth(48)
+        self._lbl_opacity.setObjectName("cardValue")
+        self._lbl_opacity.setMinimumWidth(40)
         row_d.addWidget(self._sld_opacity, 1)
         row_d.addWidget(self._lbl_opacity)
         ov.addLayout(row_d)
-        page_l.addWidget(gb_ov)
+        right_col.addWidget(ov_card)
 
-        # 個人清醒基線
-        gb_prof = QGroupBox("個人清醒基線")
-        prof_l = QVBoxLayout(gb_prof)
+        prof_card, prof_l = self._card("個人清醒基線", "PERSONAL")
         row_profile = QHBoxLayout()
         self._btn_record_baseline = QPushButton("記錄清醒基線")
         self._btn_record_baseline.setToolTip(
@@ -1350,23 +2471,28 @@ class MainWindow(QMainWindow):
         )
         self._btn_record_baseline.clicked.connect(self._on_record_baseline_clicked)
         self._lbl_profile_status = QLabel(
-            "個人基線：已載入" if self._personal_profile is not None else "個人基線：未建立")
+            "個人基線：已載入" if self._personal_profile is not None else "個人基線：未建立 · 建議 120 秒清醒錄製")
         self._lbl_profile_status.setObjectName("hintLabel")
-        row_profile.addWidget(self._btn_record_baseline)
-        row_profile.addWidget(self._lbl_profile_status)
-        row_profile.addStretch(1)
+        self._lbl_profile_status.setWordWrap(True)
+        row_profile.addWidget(self._lbl_profile_status, 1)
+        row_profile.addWidget(self._btn_record_baseline, 0, Qt.AlignmentFlag.AlignVCenter)
         prof_l.addLayout(row_profile)
-        page_l.addWidget(gb_prof)
+        right_col.addWidget(prof_card)
+        right_col.addStretch(1)
 
-        # Log
-        gb_log = QGroupBox("Log")
-        log_l = QVBoxLayout(gb_log)
+        right_wrap = QWidget()
+        right_wrap.setLayout(right_col)
+        grid.addWidget(right_wrap, 1)
+        page_l.addLayout(grid)
+
+        # Log CONSOLE（全寬，深底 console 風格）
+        log_card, log_l = self._card("Log", "CONSOLE")
         self._log = QTextEdit()
         self._log.setReadOnly(True)
-        self._log.setMinimumHeight(180)
+        self._log.setMinimumHeight(150)
         self._log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         log_l.addWidget(self._log)
-        page_l.addWidget(gb_log, 1)
+        page_l.addWidget(log_card, 1)
 
         return self._page_scroll(page)
 
@@ -1392,7 +2518,13 @@ class MainWindow(QMainWindow):
         if lbl is not None:
             lbl.setPixmap(QPixmap())
             lbl.setText("鏡頭預覽（按「開始」啟動）")
+        self._update_preview_telemetry()
+        self._update_rec_pill()
         self._refresh_monitor_metrics()
+
+    @staticmethod
+    def _clamp01(x: float) -> float:
+        return max(0.0, min(1.0, x))
 
     def _refresh_monitor_metrics(self) -> None:
         """把最新一筆 rPPG / 疲勞 / 融合快照渲染到監測頁卡片（唯讀，不改任何數值）。"""
@@ -1401,51 +2533,85 @@ class MainWindow(QMainWindow):
         r = self._latest_rppg_metrics
         f = self._latest_fatigue_metrics
         z = self._latest_fused_score
+        bars = getattr(self, "_mon_contrib_bars", {})
 
-        # 綜合疲勞融合
+        # 綜合疲勞融合：大分數（0–100）+ 等級徽章（資料驅動語意色）+ 趨勢 + 0–100 進度條
         if z is not None:
             level = str(getattr(z, "level", "") or "—")
+            score01 = float(getattr(z, "score", 0.0) or 0.0)
             try:
                 b, g, rr = z.color_bgr
                 col = QColor(int(rr), int(g), int(b)).name()
             except Exception:
                 col = "#30363d"
+            self._mon_score_big.setText(f"{round(score01 * 100)}")
             self._mon_fused_level.setText(level)
             self._mon_fused_level.setStyleSheet(
                 f"background-color: {col}; color: #ffffff; border-radius: 999px;"
-                " padding: 6px 14px; font-size: 18px; font-weight: 700;"
+                " padding: 3px 12px; font-size: 15px; font-weight: 700;"
             )
-            self._mon_fused_score.setText(f"{float(getattr(z, 'score', 0.0) or 0.0) * 100:.0f}%")
+            # 趨勢：trend 為分數（0–1）/30s 增量，*100 換算成與大分數同尺度的 pts。
+            trend = float(getattr(z, "trend", 0.0) or 0.0)
+            sym = str(getattr(z, "trend_symbol", "→") or "→")
+            self._mon_trend.setText(f"{sym} {abs(trend) * 100:.0f} pts / 30s")
+            self._mon_score_bar.setValue(int(round(self._clamp01(score01) * 100)))
+            self._mon_score_bar.setStyleSheet(
+                f"QProgressBar::chunk {{ background-color: {col}; border-radius: 999px; }}"
+            )
+            # 疲勞分數貢獻列（沿用 _mon_fused_score 屬性）
+            self._mon_fused_score.setText(f"{score01 * 100:.0f}%")
+            if "score" in bars:
+                bars["score"].set_fraction(self._clamp01(score01))
         else:
+            self._mon_score_big.setText("—")
             self._mon_fused_level.setText("—")
             self._mon_fused_level.setStyleSheet("")
+            self._mon_trend.setText("—")
+            self._mon_score_bar.setValue(0)
+            self._mon_score_bar.setStyleSheet("")
             self._mon_fused_score.setText("—")
+            if "score" in bars:
+                bars["score"].set_fraction(None)
 
-        # 行為疲勞
+        # 行為疲勞（貢獻列數值沿用現行格式；迷你條為顯示層正規化，clamp 範圍見下，無語意權重）
         if f is not None:
             fd = bool(getattr(f, "face_detected", False))
-            self._mon_ear.setText(f"{float(getattr(f, 'ear', 0.0) or 0.0):.3f}" if fd else "—")
-            self._mon_perclos.setText(f"{float(getattr(f, 'perclos', 0.0) or 0.0) * 100:.0f}%")
-            self._mon_blink.setText(str(int(getattr(f, "blink_count", 0) or 0)))
+            ear = float(getattr(f, "ear", 0.0) or 0.0)
+            perclos = float(getattr(f, "perclos", 0.0) or 0.0)
+            blink = int(getattr(f, "blink_count", 0) or 0)
+            self._mon_ear.setText(f"{ear:.3f}" if fd else "—")
+            self._mon_perclos.setText(f"{perclos * 100:.0f}%")
+            self._mon_blink.setText(str(blink))
             expr = []
             if getattr(f, "is_squinting", False):
                 expr.append("瞇眼")
             if getattr(f, "is_frowning", False):
                 expr.append("皺眉")
             self._mon_expr.setText("／".join(expr) if expr else "正常")
+            fixation = float(getattr(f, "fixation_duration", 0.0) or 0.0)
             self._mon_gaze.setText(
-                f"固視 {float(getattr(f, 'fixation_duration', 0.0) or 0.0):.1f}s"
+                f"固視 {fixation:.1f}s"
                 f"／掃視 {float(getattr(f, 'saccade_freq_pm', 0.0) or 0.0):.0f}/min"
             )
-            self._mon_head.setText(
-                f"P {float(getattr(f, 'head_pitch', 0.0) or 0.0):.0f}°"
-                f" Y {float(getattr(f, 'head_yaw', 0.0) or 0.0):.0f}°"
-                f" R {float(getattr(f, 'head_roll', 0.0) or 0.0):.0f}°"
-            )
+            pitch = float(getattr(f, "head_pitch", 0.0) or 0.0)
+            yaw = float(getattr(f, "head_yaw", 0.0) or 0.0)
+            roll = float(getattr(f, "head_roll", 0.0) or 0.0)
+            self._mon_head.setText(f"P {pitch:.0f}° Y {yaw:.0f}° R {roll:.0f}°")
+            if bars:
+                # EAR: 眼開合度映射到 0–1（0.10–0.40 clamp）；其餘同理，純視覺。
+                bars["ear"].set_fraction(self._clamp01((ear - 0.10) / 0.30) if fd else None)
+                bars["perclos"].set_fraction(self._clamp01(perclos))
+                bars["blink"].set_fraction(self._clamp01(blink / 40.0))
+                bars["expr"].set_fraction(0.5 * len(expr))
+                bars["gaze"].set_fraction(self._clamp01(fixation / 3.0))
+                bars["head"].set_fraction(self._clamp01(max(abs(pitch), abs(yaw), abs(roll)) / 30.0))
         else:
             for lbl in (self._mon_ear, self._mon_perclos, self._mon_blink,
                         self._mon_expr, self._mon_gaze, self._mon_head):
                 lbl.setText("—")
+            for key in ("ear", "perclos", "blink", "expr", "gaze", "head"):
+                if key in bars:
+                    bars[key].set_fraction(None)
 
         # rPPG + HRV
         if r is not None:
@@ -1459,10 +2625,50 @@ class MainWindow(QMainWindow):
             self._mon_sdnn.setText(f"{float(getattr(r, 'sdnn', 0.0) or 0.0):.1f} ms")
             self._mon_lfhf.setText(f"{float(getattr(r, 'lf_hf', 0.0) or 0.0):.2f}")
             self._mon_hrv_conf.setText(str(getattr(r, "hrv_confidence", "") or "—"))
+            if hasattr(self, "_mon_wave"):
+                self._mon_wave.set_data(list(getattr(r, "waveform", []) or []))
+            self._update_bpm_delta(bpm)
         else:
             for lbl in (self._mon_bpm, self._mon_warmup, self._mon_sqi,
                         self._mon_rmssd, self._mon_sdnn, self._mon_lfhf, self._mon_hrv_conf):
                 lbl.setText("—")
+            if hasattr(self, "_mon_wave"):
+                self._mon_wave.set_data([])
+            self._update_bpm_delta(0.0)
+
+    def _update_bpm_delta(self, rppg_bpm: float) -> None:
+        """rPPG vs 心跳帶真值差值（Δ）：僅心跳帶連線且雙方 BPM 有效時顯示，否則隱藏。"""
+        if not hasattr(self, "_mon_bpm_delta"):
+            return
+        belt_bpm = 0.0
+        belt_name = "belt"
+        try:
+            if self._belt_runtime.belt_running:
+                st = self._belt_runtime.belt_status()
+                if st is not None and st.state == "connected" and st.bpm > 0 and not hr_is_stale(st):
+                    belt_bpm = float(st.bpm)
+                    belt_name = (st.device_name or "belt").split()[0][:6]
+        except Exception:
+            belt_bpm = 0.0
+        if rppg_bpm and rppg_bpm > 0 and belt_bpm > 0:
+            diff = rppg_bpm - belt_bpm
+            arrow = "↑" if diff > 0 else ("↓" if diff < 0 else "→")
+            self._mon_bpm_delta.setText(f"Δ {arrow} {abs(diff):.1f} vs {belt_name}")
+            self._mon_bpm_delta.setVisible(True)
+        else:
+            self._mon_bpm_delta.setVisible(False)
+
+    def _update_rec_pill(self) -> None:
+        """REC 錄影指示 pill：錄製中顯示 ● REC mm:ss（elapsed 來自 _recording_started_at）。"""
+        if not hasattr(self, "_mon_rec_pill"):
+            return
+        if self._recording and self._recording_started_at is not None:
+            elapsed = max(0, int(time.time() - self._recording_started_at))
+            m, s = divmod(elapsed, 60)
+            self._mon_rec_pill.setText(f"● REC {m:02d}:{s:02d}")
+            self._mon_rec_pill.setVisible(True)
+        else:
+            self._mon_rec_pill.setVisible(False)
 
     def _refresh_belt_cfg_labels(self) -> None:
         """把 config/hr_belt.json 載入結果（self._belt_cfg）唯讀顯示到設備設定卡。"""
@@ -2137,6 +3343,8 @@ class MainWindow(QMainWindow):
         self._recording_db_path = db_path
         self._recording_started_at = time.time()
         self._recording_count = 0
+        self._rec_ui_timer.start()
+        self._update_rec_pill()
 
         self._video_queue = queue.Queue(maxsize=8)
         video_path = rec_dir / f"video_{stamp}.mp4"
@@ -2156,6 +3364,9 @@ class MainWindow(QMainWindow):
         self._update_recording_routing()
 
     def _stop_recording(self) -> None:
+        self._rec_ui_timer.stop()
+        if hasattr(self, "_mon_rec_pill"):
+            self._mon_rec_pill.setVisible(False)
         if self._metrics_recorder is None:
             return
         try:
@@ -2319,8 +3530,34 @@ class MainWindow(QMainWindow):
             self._append_log(f"✗ 影片錄製失敗：{msg}")
 
     def _append_log(self, msg: str) -> None:
-        self._log.append(msg)
+        self._append_log_html(msg)
         self.statusBar().showMessage(msg, 4000)
+
+    def _append_log_html(self, msg: str) -> None:
+        """把訊息以 rich text 顯示到 Log console：前綴 HH:MM:SS 時間戳，依既有符號著色。
+
+        純顯示層加工（不改任何呼叫端傳入的訊息內容）；console 底色恆為深色（VIDEO），
+        故著色一律取深色 palette 語意色以確保對比。訊息文字先 html escape 再嵌入。
+        """
+        if not hasattr(self, "_log"):
+            return
+        d = _PALETTES["dark"]
+        if "✗" in msg or "錯誤" in msg or "失敗" in msg:
+            color = d["BAD"]
+        elif "⚠" in msg:
+            color = d["STATUS_WARN"]
+        elif "✓" in msg:
+            color = d["STATUS_OK"]
+        elif "http://" in msg or "https://" in msg:
+            color = d["ACCENT"]
+        else:
+            color = d["TEXT_ON_VIDEO"]
+        ts = time.strftime("%H:%M:%S")
+        line = (
+            f'<span style="color:rgba(255,255,255,0.45)">{ts}</span> '
+            f'<span style="color:{color}">{html.escape(msg)}</span>'
+        )
+        self._log.append(line)
 
     def _choose_replay_dir(self) -> None:
         start_dir = Path.home()
@@ -2398,6 +3635,7 @@ class MainWindow(QMainWindow):
         self._replay_done_count = 0
         self._replay_active_videos.clear()
         self._replay_recent_done.clear()
+        self._replay_queue_reset()
         self._set_replay_controls_running(True)
         self._bar_replay_progress.setRange(0, 0)
         self._lbl_replay_current.setText("目前影片：準備中")
@@ -2457,6 +3695,7 @@ class MainWindow(QMainWindow):
             if summary is not None:
                 key = self._replay_video_key(summary)
                 self._replay_active_videos[key] = summary
+                self._replay_queue_upsert(summary, done=False)
                 self._lbl_replay_current.setText(
                     f"目前影片：派發 {current}/{total}，正在跑 {len(self._replay_active_videos)} 支"
                 )
@@ -2471,6 +3710,9 @@ class MainWindow(QMainWindow):
             if summary is not None:
                 key = self._replay_video_key(summary)
                 self._replay_active_videos.pop(key, None)
+                self._replay_completed_summaries.append(summary)
+                self._replay_queue_upsert(summary, done=True)
+                self._refresh_replay_summary()
                 self._replay_recent_done.insert(0, self._format_replay_video_label(summary, include_status=True))
                 self._replay_recent_done = self._replay_recent_done[:3]
                 failed_text = "，此支失敗" if summary.status == "failed" else ""
@@ -2924,6 +4166,7 @@ class MainWindow(QMainWindow):
         self._append_log("■ 心跳帶真值校準停止。")
         self._lbl_belt_status.setText("未啟用")
         self._reset_belt_panel()
+        self._update_device_status()
 
     def _persist_belt_calibration(self) -> None:
         """把本次收斂的 offset 存成新的自適應校準版本（信心足夠時）。"""
@@ -2987,6 +4230,7 @@ class MainWindow(QMainWindow):
                 self._last_calib_fed_metrics = r
         self._tick_rppg_param_coordinator(cal)
         self._update_belt_status_label()
+        self._update_device_status()
 
     # ── P6b-3b：rPPG 參數線上協調層（GUI 薄接線）───────────────────────────────
 
@@ -3128,8 +4372,15 @@ class MainWindow(QMainWindow):
             self._lbl_belt_hrv_conf, self._lbl_belt_hrv_warmup,
             self._lbl_belt_calib_offset, self._lbl_belt_calib_raw_resid, self._lbl_belt_calib_corr_resid,
             self._lbl_belt_calib_confidence, self._lbl_belt_calib_status, self._lbl_belt_calib_pairs,
+            self._lbl_belt_banner_device, self._lbl_belt_banner_bpm,
+            self._lbl_belt_banner_battery, self._lbl_belt_banner_rssi,
+            self._lbl_belt_calib_resid,
         ):
             lbl.setText("—")
+        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
+        self._set_status_dot(self._belt_banner_dot, pal["STATUS_OFF"])
+        self._belt_bpm_spark.set_data([])
+        self._belt_calib_bar.set_fraction(None)
 
     def _update_belt_panel(self) -> None:
         """更新「心跳帶」專屬區塊的所有數值（即時／連線／HRV／rPPG 校準）。
@@ -3143,6 +4394,18 @@ class MainWindow(QMainWindow):
         if st is None:
             self._reset_belt_panel()
             return
+
+        # 橫幅卡（裝置名／連線狀態圓點／BPM 真值／電量／RSSI）
+        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
+        self._lbl_belt_banner_device.setText(st.device_name or st.device_address or "—")
+        connected = st.state == "connected" and not hr_is_stale(st)
+        self._set_status_dot(
+            self._belt_banner_dot,
+            pal["STATUS_OK"] if connected else (pal["STATUS_WARN"] if st.state == "connected" else pal["STATUS_OFF"]),
+        )
+        self._lbl_belt_banner_bpm.setText(f"{st.bpm}" if st.bpm > 0 and not hr_is_stale(st) else "—")
+        self._lbl_belt_banner_battery.setText(f"{st.battery_level}%" if st.battery_level is not None else "—")
+        self._lbl_belt_banner_rssi.setText(f"{st.rssi:.0f} dBm" if st.rssi else "—")
 
         # 即時
         self._lbl_belt_bpm.setText(f"{st.bpm} BPM" if st.bpm > 0 else "—")
@@ -3177,7 +4440,11 @@ class MainWindow(QMainWindow):
             samples = self._belt_runtime.hub.snapshot()
             physio = compute_watch_physio(samples)
         except Exception:
+            samples = []
             physio = None
+        # 即時卡 BPM 趨勢 sparkline（復用既有 hub 樣本，不新增採樣機制）
+        bpm_hist = [float(s.bpm) for s in samples if getattr(s, "bpm", 0) and s.bpm > 0]
+        self._belt_bpm_spark.set_data(bpm_hist[-120:])
         if physio is not None and physio.sample_count >= 2:
             self._lbl_belt_hrv_rmssd.setText(f"{physio.rmssd:.1f} ms" if physio.rmssd > 0 else "暖機中")
             self._lbl_belt_hrv_sdnn.setText(f"{physio.sdnn:.1f} ms" if physio.sdnn > 0 else "暖機中")
@@ -3203,12 +4470,23 @@ class MainWindow(QMainWindow):
             else:
                 self._lbl_belt_calib_status.setText("收斂中")
             self._lbl_belt_calib_pairs.setText(f"{cs.pairs_used} / {cs.total_observations}")
+            # 殘差橫條：校正後殘差相對原始殘差的比例（越短代表校正後越接近真值）
+            raw = float(cs.raw_residual_bpm or 0.0)
+            corr = float(cs.corrected_residual_bpm or 0.0)
+            if raw > 0.0:
+                self._belt_calib_bar.set_fraction(self._clamp01(corr / raw))
+                self._lbl_belt_calib_resid.setText(f"{raw:.1f} → {corr:.1f}")
+            else:
+                self._belt_calib_bar.set_fraction(None)
+                self._lbl_belt_calib_resid.setText("—")
         else:
             for lbl in (
                 self._lbl_belt_calib_offset, self._lbl_belt_calib_raw_resid, self._lbl_belt_calib_corr_resid,
                 self._lbl_belt_calib_confidence, self._lbl_belt_calib_status, self._lbl_belt_calib_pairs,
+                self._lbl_belt_calib_resid,
             ):
                 lbl.setText("—")
+            self._belt_calib_bar.set_fraction(None)
 
     def _analysis_needed(self) -> tuple[bool, bool]:
         """Return (want_rppg, want_fatigue) from checkbox state."""
@@ -3592,6 +4870,7 @@ class MainWindow(QMainWindow):
             f"[相機] 實際格式 → 編碼：{codec}  解析度：{w}×{h}  FPS：{fps_str}"
         )
         self._preview_overlay.update_camera_info(codec, w, h, cam_text)
+        self._update_preview_telemetry()
         self._emit_web_metrics(force=True)
 
     def _on_frame(self, image) -> None:
@@ -3611,6 +4890,7 @@ class MainWindow(QMainWindow):
         self._preview_overlay.update_fps(fps)
         self._lbl_fps.setText(f"FPS：{fps:.1f}")
         self._last_fps = float(fps)
+        self._update_preview_telemetry()
         self._emit_web_metrics()
 
     def _on_camera_failed(self, msg: str) -> None:
@@ -3637,6 +4917,7 @@ class MainWindow(QMainWindow):
         self._lbl_pipeline.setText("管線：停止")
         self._lbl_fps.setText("FPS：—")
         self._sync_overlay_visibility()
+        self._update_device_status()
         self._emit_web_metrics(force=True)
         dlg = QMessageBox(self)
         dlg.setWindowTitle("攝影機錯誤")
@@ -3665,6 +4946,8 @@ class MainWindow(QMainWindow):
             self._start_camera_worker()
             if not self._pipeline_running:
                 self._sync_overlay_visibility()
+                self._update_preview_telemetry()
+                self._update_device_status()
                 self._emit_web_metrics(force=True)
                 return
             # Start the appropriate analysis worker(s) based on checkbox state
@@ -3677,6 +4960,8 @@ class MainWindow(QMainWindow):
                 self._start_fatigue_worker()
             self._ensure_belt_calibration()   # rPPG 運行時視勾選啟動背景校準
             self._sync_overlay_visibility()
+            self._update_preview_telemetry()
+            self._update_device_status()
             if self._chk_auto_record.isChecked() and not self._recording:
                 self._toggle_recording()
             self._emit_web_metrics(force=True)
@@ -3697,6 +4982,8 @@ class MainWindow(QMainWindow):
                 self._stop_belt_calibration()   # 停止前先存本次 session 校準版本
             self._stop_camera_worker()
             self._sync_overlay_visibility()
+            self._update_preview_telemetry()
+            self._update_device_status()
             self._append_log("■ 管線停止。")
             if self._recording:
                 self._recording = False
