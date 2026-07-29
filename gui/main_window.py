@@ -2395,20 +2395,10 @@ class MainWindow(QMainWindow):
 
         row3 = QHBoxLayout()
         self._cmb_backend = QComboBox()
-        self._cmb_backend.addItem("自動（平台預設）", "auto")
-        if sys.platform.startswith("linux"):
-            self._cmb_backend.addItem("V4L2（Linux）", "v4l2")
         self._cmb_backend.addItem("FFMPEG", "ffmpeg")
-        if sys.platform.startswith("win"):
-            self._cmb_backend.addItem("MSMF（Windows Media Foundation）", "msmf")
-            self._cmb_backend.addItem("DSHOW（DirectShow）", "dshow")
         self._cmb_backend.setCurrentIndex(0)
         self._cmb_backend.setToolTip(
-            "自動 — 依平台優先選擇可用後端\n"
-            "V4L2 — Linux 原生攝影機後端\n"
-            "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端\n"
-            "MSMF — Windows Media Foundation，可保留原生 MJPG\n"
-            "DSHOW — Windows DirectShow，部分虛擬相機較穩定"
+            "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端"
         )
         self._chk_horizontal_flip = QCheckBox("水平翻轉（鏡像校正）")
         self._chk_horizontal_flip.setChecked(True)
