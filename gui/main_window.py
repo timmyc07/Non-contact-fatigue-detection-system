@@ -68,7 +68,11 @@ from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
 from gui.belt_runtime import BeltRuntime
-from gui.personal_profile import PersonalBaselineCollector, PersonalProfileStore
+from gui.personal_profile import (
+    PersonalBaselineCollector,
+    PersonalProfileStore,
+    resolve_active_baseline,
+)
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
@@ -1299,11 +1303,6 @@ class MainWindow(QMainWindow):
 
         self._append_log("歡迎使用 NCFD System。變更選項僅寫入此視窗日誌。")
         self._start_camera_scan()
-
-        self._db_flush_timer = QTimer(self)
-        self._db_flush_timer.setInterval(2000)
-        self._db_flush_timer.timeout.connect(self._flush_recorder)
-        self._db_flush_timer.start()
 
         # 依當前主題同步 delegate 顏色與主題按鈕文字（app 級 QSS 由 main.py 套用）。
         self._sync_theme_widgets()
@@ -3377,13 +3376,6 @@ class MainWindow(QMainWindow):
         self._recording_video_path = None
         self._update_recording_routing()
 
-    def _flush_recorder(self) -> None:
-        if self._metrics_recorder is not None:
-            try:
-                self._metrics_recorder._flush()
-            except Exception:
-                pass
-
     def _build_record_payload(self) -> dict:
         r = self._latest_rppg_metrics
         f = self._latest_fatigue_metrics
@@ -4794,13 +4786,20 @@ class MainWindow(QMainWindow):
 
     def _finalize_auto_baseline(self, collector: PersonalBaselineCollector) -> None:
         prof = collector.finalize(source="auto")
-        # 自動基線只在「尚無 manual profile」時作為本 session 暫定值套用，不落檔。
-        if self._personal_profile is not None and self._personal_profile.source == "manual":
+        # 自動基線只在「尚無 valid manual profile」時作為本 session 暫定值套用，不落檔。
+        # 採用哪個 profile 的裁決唯一交給 resolve_active_baseline（manual 需 valid 才優先）。
+        manual = (
+            self._personal_profile
+            if self._personal_profile is not None and self._personal_profile.source == "manual"
+            else None
+        )
+        resolved = resolve_active_baseline(manual, prof)
+        if resolved is manual:
             return
-        if not prof.valid:
+        if resolved is None:
             self._set_profile_status("個人基線：自動校準樣本不足，沿用預設")
             return
-        self._hot_swap_profile(prof)
+        self._hot_swap_profile(resolved)
         self._set_profile_status("個人基線：自動（暫定，未儲存）")
         self._append_log("[基線] 自動清醒基線已建立（本 session 暫定，未落檔）")
 
