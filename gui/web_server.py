@@ -146,11 +146,6 @@ class MetricsBuffer:
         with self._lock:
             return list(self.data)
 
-    def clear(self) -> None:
-        with self._lock:
-            self.data.clear()
-
-
 class PlaybackManager:
     def __init__(self, recordings_dir: str | Path) -> None:
         self.recordings_dir = Path(recordings_dir)
@@ -824,11 +819,6 @@ def create_app(
         emit("metrics_history", payload)
         if latest is not None:
             emit("metrics_update", {"metrics": latest})
-
-    @socketio.on("clear_buffer")
-    def handle_clear_buffer():
-        metrics_buffer.clear()
-        emit("buffer_cleared", {"success": True})
 
     @app.post("/__server/shutdown")
     def shutdown_server():
