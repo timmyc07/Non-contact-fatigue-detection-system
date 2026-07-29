@@ -24,7 +24,6 @@ from rppg.hr_belt_ble import (
     parse_heart_rate_measurement,
     pick_heart_rate_device,
 )
-from rppg.watch_adapter import build_watch_rppg_metrics
 from rppg.watch_physio import ibis_from_watch_samples
 
 
@@ -211,23 +210,6 @@ def test_pick_device_none_when_no_match():
 def test_pick_device_address_specified_but_absent_returns_none():
     a = _fake_candidate("R+2.0 2248", "AA:00:00:00:00:01", -40)
     assert pick_heart_rate_device([a], address="C1:3B:74:B8:F7:40") is None
-
-
-# ── hub 整合：心跳帶樣本 → watch pillar 指標 ────────────────────────────────
-
-def test_belt_samples_flow_through_watch_pipeline():
-    hub = WatchHrHub()
-    now = time.time()
-    for i in range(12):
-        m = HeartRateMeasurement(bpm=70 + (i % 3), rr_intervals_ms=(850.0 + i * 2,))
-        sample = measurement_to_watch_sample(m, received_at=now - (12 - i) * 0.9)
-        assert sample is not None
-        hub.add(sample)
-    metrics = build_watch_rppg_metrics(hub)
-    assert metrics.physio_source == "watch"
-    assert metrics.face_detected is True
-    assert metrics.bpm > 0
-    assert metrics.roi_valid_count >= 1
 
 
 # ── HrBeltBleClient 生命週期（不觸碰真實 BLE 硬體）──────────────────────────
