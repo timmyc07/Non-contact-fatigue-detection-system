@@ -34,7 +34,7 @@ py -3 -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-開發／測試（跑 `pytest`、`compileall` 等）需另裝開發依賴：
+開發／測試（跑 `pytest`、`compileall` 等）與產生技術報告 PDF（`matplotlib`、`reportlab`）需另裝開發依賴：
 ```powershell
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 ```
@@ -44,7 +44,7 @@ Ubuntu:
 bash scripts/setup_ubuntu.sh
 ```
 
-`scripts/setup_ubuntu.sh` 只安裝 `requirements.txt`；開發／測試（跑 `pytest` 等）需另裝開發依賴：
+`scripts/setup_ubuntu.sh` 只安裝 `requirements.txt`；開發／測試（跑 `pytest` 等）與產生技術報告 PDF（`matplotlib`、`reportlab`）需另裝開發依賴：
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
 ```
