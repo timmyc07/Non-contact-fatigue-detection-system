@@ -28,6 +28,11 @@ _ws_connected_clients: set = set()
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _PLAYBACK_DEFAULT_LIMIT = 100
 _PLAYBACK_MAX_LIMIT = 1000
+# /api/playback/full 用：分段載入避免長錄製一次全量塞進記憶體。
+# 2000 筆約對應 66 秒錄製（30fps），單批 JSON payload 大小可控；
+# 5000 為上限，避免單一請求被要求撈出過大批次拖垮伺服器記憶體。
+_PLAYBACK_FULL_DEFAULT_LIMIT = 2000
+_PLAYBACK_FULL_MAX_LIMIT = 5000
 WEB_DASHBOARD_DEFAULT_PORT = 5000
 
 
@@ -104,9 +109,12 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
         return False
 
 
-def _parse_pagination_args() -> tuple[Optional[tuple[int, int]], Optional[Any]]:
+def _parse_pagination_args(
+    default_limit: int = _PLAYBACK_DEFAULT_LIMIT,
+    max_limit: int = _PLAYBACK_MAX_LIMIT,
+) -> tuple[Optional[tuple[int, int]], Optional[Any]]:
     raw_offset = request.args.get("offset", "0")
-    raw_limit = request.args.get("limit", str(_PLAYBACK_DEFAULT_LIMIT))
+    raw_limit = request.args.get("limit", str(default_limit))
     try:
         offset = int(raw_offset)
         limit = int(raw_limit)
@@ -115,11 +123,11 @@ def _parse_pagination_args() -> tuple[Optional[tuple[int, int]], Optional[Any]]:
 
     if offset < 0:
         return None, (jsonify({"success": False, "error": "offset must be >= 0"}), 400)
-    if limit < 1 or limit > _PLAYBACK_MAX_LIMIT:
+    if limit < 1 or limit > max_limit:
         return None, (
             jsonify({
                 "success": False,
-                "error": f"limit must be between 1 and {_PLAYBACK_MAX_LIMIT}",
+                "error": f"limit must be between 1 and {max_limit}",
             }),
             400,
         )
@@ -187,6 +195,31 @@ class PlaybackManager:
             )
         return None
 
+    @staticmethod
+    def _read_sidecar_meta(db_file: Path) -> Optional[tuple[int, Any, Any]]:
+        """讀取 db 對應的 ``<db路徑>.meta.json`` sidecar。
+
+        契約：``{"schema_version": 1, "rows": <int>, "ts_min": <float|null>, "ts_max": <float|null>}``。
+        命中且未過期（sidecar mtime >= db mtime）回傳 ``(rows, ts_min, ts_max)``；
+        不存在、格式不符或已過期一律回傳 None，由呼叫端回退現行 SQL 掃描。
+        """
+        meta_path = db_file.with_name(db_file.name + ".meta.json")
+        try:
+            if not meta_path.exists():
+                return None
+            if meta_path.stat().st_mtime < db_file.stat().st_mtime:
+                return None
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            if not isinstance(meta, dict) or meta.get("schema_version") != 1:
+                return None
+            rows = meta.get("rows")
+            if not isinstance(rows, int) or isinstance(rows, bool):
+                return None
+            return rows, meta.get("ts_min"), meta.get("ts_max")
+        except (OSError, ValueError, TypeError):
+            return None
+
     def list_recordings(self) -> list[dict]:
         now = time.time()
         dir_mtime = self._recordings_mtime_marker()
@@ -203,17 +236,21 @@ class PlaybackManager:
 
         for db_file in self._candidate_recording_dbs():
             try:
-                conn = sqlite3.connect(str(db_file))
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM metrics")
-                count = cursor.fetchone()[0]
-                cursor.execute("SELECT MIN(timestamp), MAX(timestamp) FROM metrics")
-                ts_row = cursor.fetchone()
-                if ts_row is None:
-                    min_ts_raw, max_ts_raw = None, None
+                sidecar = self._read_sidecar_meta(db_file)
+                if sidecar is not None:
+                    count, min_ts_raw, max_ts_raw = sidecar
                 else:
-                    min_ts_raw, max_ts_raw = ts_row
-                conn.close()
+                    conn = sqlite3.connect(str(db_file))
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM metrics")
+                    count = cursor.fetchone()[0]
+                    cursor.execute("SELECT MIN(timestamp), MAX(timestamp) FROM metrics")
+                    ts_row = cursor.fetchone()
+                    if ts_row is None:
+                        min_ts_raw, max_ts_raw = None, None
+                    else:
+                        min_ts_raw, max_ts_raw = ts_row
+                    conn.close()
 
                 if count > 0:
                     duration = max(_safe_float(max_ts_raw) - _safe_float(min_ts_raw), 0.0)
@@ -456,6 +493,14 @@ def create_app(
         if not db_path:
             return jsonify({"success": False, "error": "Missing db_path"}), 400
 
+        pagination, pagination_error = _parse_pagination_args(
+            _PLAYBACK_FULL_DEFAULT_LIMIT, _PLAYBACK_FULL_MAX_LIMIT
+        )
+        if pagination_error is not None:
+            return pagination_error
+        assert pagination is not None
+        offset, limit = pagination
+
         allowed_db_path = resolve_allowed_db_path(unquote(db_path))
         if allowed_db_path is None:
             return jsonify({"success": False, "error": "Invalid db_path"}), 403
@@ -468,7 +513,10 @@ def create_app(
                 columns = {str(item[1]) for item in cursor.fetchall()}
                 cursor.execute("SELECT COUNT(*) FROM metrics")
                 total = cursor.fetchone()[0]
-                cursor.execute("SELECT * FROM metrics ORDER BY timestamp ASC")
+                cursor.execute(
+                    "SELECT * FROM metrics ORDER BY timestamp ASC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
                 rows = cursor.fetchall()
 
             data = []
@@ -546,7 +594,7 @@ def create_app(
                 data.append(entry)
 
             payload = json.dumps(
-                {"success": True, "total": total, "data": data},
+                {"success": True, "total": total, "offset": offset, "limit": limit, "data": data},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")

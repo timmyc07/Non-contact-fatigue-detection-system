@@ -703,12 +703,47 @@ function renderRecordingList(list) {
     });
 }
 
+// 單批筆數，與後端 /api/playback/full 預設 limit 對齊（後端仍會 clamp，這裡僅為明確意圖）。
+const PLAYBACK_FULL_PAGE_SIZE = 2000;
+
+// 分段抓取 /api/playback/full，避免長錄製一次全量塞進記憶體/單一 response。
+// 迴圈依 total 累加 offset，直到取滿；onProgress(loaded, total) 供呼叫端更新載入提示。
+async function fetchPlaybackFull(dbPath, onProgress) {
+    let offset = 0;
+    let total = null;
+    let combined = [];
+    while (total === null || offset < total) {
+        const res = await dashboardFetch(
+            `/api/playback/full?db_path=${encodeURIComponent(dbPath)}&offset=${offset}&limit=${PLAYBACK_FULL_PAGE_SIZE}`
+        );
+        const json = await res.json();
+        if (!json.success) {
+            return json;
+        }
+        const chunk = json.data || [];
+        combined = combined.concat(chunk);
+        total = typeof json.total === 'number' ? json.total : combined.length;
+        if (typeof onProgress === 'function') {
+            onProgress(combined.length, total);
+        }
+        if (chunk.length === 0) break; // 保險：避免伺服器回空批次造成無窮迴圈
+        offset += chunk.length;
+    }
+    return { success: true, total, data: combined };
+}
+
+function _setPbLoadingText(containerId, text) {
+    const el = document.querySelector(`#${containerId} .pb-loading-text`);
+    if (el) el.textContent = text;
+}
+
 async function selectRecording(idx) {
     document.querySelectorAll('#recording-list .recording-item').forEach((el, i) => {
         el.classList.toggle('active', i === idx);
     });
     stopPlayback();
 
+    _setPbLoadingText('pb-loading', '正在載入錄製數據...');
     _pb['pb-loading'].style.display = 'block';
     _pb['pb-controls'].style.display = 'none';
     _pb['pb-data'].style.display = 'none';
@@ -770,8 +805,9 @@ async function selectRecording(idx) {
             return;
         }
 
-        const res = await dashboardFetch(`/api/playback/full?db_path=${encodeURIComponent(dbPath)}`);
-        const json = await res.json();
+        const json = await fetchPlaybackFull(dbPath, (loaded, total) => {
+            _setPbLoadingText('pb-loading', `正在載入錄製數據... (${loaded}/${total})`);
+        });
         if (!json.success || !json.data || json.data.length === 0) {
             throw new Error(json.error || '資料庫為空');
         }
@@ -1599,6 +1635,7 @@ async function selectCloudRecording(idx) {
 
     stopPlayback();
     const loadEl = document.getElementById('cloud-pb-loading');
+    _setPbLoadingText('cloud-pb-loading', '正在從雲端下載數據...');
     if (loadEl) loadEl.style.display = 'block';
     _pb['pb-controls'].style.display = 'none';
     _pb['pb-data'].style.display = 'none';
@@ -1650,8 +1687,9 @@ async function selectCloudRecording(idx) {
         }
 
         // 用現有回放引擎播放
-        const res  = await dashboardFetch(`/api/playback/full?db_path=${encodeURIComponent(cacheJson.db_path)}`);
-        const json = await res.json();
+        const json = await fetchPlaybackFull(cacheJson.db_path, (loaded, total) => {
+            _setPbLoadingText('cloud-pb-loading', `正在從雲端下載數據... (${loaded}/${total})`);
+        });
         if (!json.success || !json.data || json.data.length === 0) {
             throw new Error(json.error || '資料庫為空');
         }
