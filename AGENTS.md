@@ -1,5 +1,12 @@
 # AGENTS.md
 
+## Autonomous execution
+
+- For future requests, the agent owns technical decisions, sequencing, implementation, and verification without waiting for routine approval.
+- Proceed with the safest reversible option that preserves existing behavior and contracts.
+- Ask the user only when a decision cannot be inferred and would create material data loss, security exposure, legal risk, or an irreversible product commitment.
+- On ordinary blockers, investigate alternatives, implement the best compatible fallback, and report the limitation.
+
 本專案的代理工作規則與架構說明統一維護於 [`CLAUDE.md`](CLAUDE.md)，請以該檔為權威來源。以下是每次任務都必須執行的入口工作流；若與 `CLAUDE.md` 或全域規則衝突，以較高層規則為準。
 
 ## 每次任務工作流
