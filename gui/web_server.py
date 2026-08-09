@@ -464,6 +464,15 @@ def create_app(
             logger.exception("讀取錄製清單失敗")
             return jsonify({"success": False, "error": "internal error"}), 500
 
+    @app.route("/api/metrics")
+    def get_metrics_snapshot():
+        """Return the latest metrics packet for clients without Socket.IO support."""
+        latest = get_latest_metrics_packet()
+        if latest is None:
+            history = metrics_buffer.get_all()
+            latest = history[-1] if history else None
+        return jsonify({"success": True, "metrics": latest})
+
     @app.route("/api/playback")
     def playback_data():
         from urllib.parse import unquote

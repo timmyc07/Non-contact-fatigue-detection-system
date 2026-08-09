@@ -12,6 +12,11 @@ ENV/
 build/
 dist/
 *.egg-info/
+node_modules/
+
+# Tauri build outputs and generated capability schemas
+src-tauri/target/
+src-tauri/gen/
 
 # Test/coverage
 .pytest_cache/
