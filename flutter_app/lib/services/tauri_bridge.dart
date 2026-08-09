@@ -1,4 +1,7 @@
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
+
+@JS('window.__TAURI__.core.invoke')
+external JSPromise<JSAny?> _tauriInvoke(String command, JSAny? args);
 
 /// Thin interop layer for Flutter Web running inside Tauri v2.
 /// Browser development falls back with a clear error instead of crashing at startup.
@@ -8,16 +11,12 @@ class TauriBridge {
   static final TauriBridge instance = TauriBridge._();
 
   Future<dynamic> invoke(String command, [Map<String, dynamic>? args]) async {
-    final tauri = js_util.getProperty(js_util.globalThis, '__TAURI__');
-    if (tauri == null) {
-      throw StateError('Tauri bridge is unavailable; running in browser fallback mode.');
+    try {
+      final result = await _tauriInvoke(command, (args ?? <String, dynamic>{}).jsify()).toDart;
+      return result?.dartify();
+    } catch (error) {
+      throw StateError('Tauri bridge unavailable or command failed: $error');
     }
-    final core = js_util.getProperty(tauri, 'core');
-    final promise = js_util.callMethod(core, 'invoke', <dynamic>[
-      command,
-      args ?? <String, dynamic>{},
-    ]);
-    return js_util.promiseToFuture<dynamic>(promise);
   }
 
   Future<void> minimizeWindow() async {

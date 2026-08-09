@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -51,10 +53,18 @@ class _MonitorShellState extends State<MonitorShell> {
   final _backend = BackendService();
   final _bridge = TauriBridge.instance;
   StreamSubscription<Map<String, dynamic>>? _metricsSubscription;
+  StreamSubscription<String>? _frameSubscription;
+  Timer? _statePoller;
   Map<String, dynamic> _metrics = <String, dynamic>{};
+  Map<String, dynamic> _engineState = <String, dynamic>{};
   List<Map<String, dynamic>> _recordings = <Map<String, dynamic>>[];
+  Map<String, dynamic>? _selectedRecording;
+  List<Map<String, dynamic>> _playbackRows = <Map<String, dynamic>>[];
+  bool _playbackBusy = false;
+  Uint8List? _previewFrame;
   String? _error;
   bool _connected = false;
+  bool _commandBusy = false;
   bool _alwaysOnTop = false;
   int _selectedSection = 0;
 
@@ -74,7 +84,55 @@ class _MonitorShellState extends State<MonitorShell> {
         if (mounted) setState(() => _connected = false);
       },
     );
+    _frameSubscription = _backend.previewFrames.listen((frame) {
+      try {
+        final bytes = base64Decode(frame);
+        if (mounted) setState(() => _previewFrame = bytes);
+      } catch (_) {}
+    });
+    _refreshEngineState();
+    _statePoller = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _refreshEngineState(silent: true),
+    );
     _loadRecordings();
+  }
+
+  Future<void> _refreshEngineState({bool silent = false}) async {
+    try {
+      final state = await _backend.controlState();
+      if (!mounted) return;
+      setState(() {
+        _engineState = state;
+        _connected = true;
+        if (!silent) _error = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _connected = false;
+        if (!silent) _error = 'Python engine 尚未就緒：$error';
+      });
+    }
+  }
+
+  Future<void> _runCommand(
+    String command, [
+    Map<String, dynamic>? args,
+  ]) async {
+    if (_commandBusy) return;
+    setState(() {
+      _commandBusy = true;
+      _error = null;
+    });
+    try {
+      final state = await _backend.command(command, args);
+      if (mounted) setState(() => _engineState = state);
+    } catch (error) {
+      if (mounted) setState(() => _error = '操作失敗：$error');
+    } finally {
+      if (mounted) setState(() => _commandBusy = false);
+    }
   }
 
   Future<void> _loadRecordings() async {
@@ -86,9 +144,38 @@ class _MonitorShellState extends State<MonitorShell> {
     }
   }
 
+  Future<void> _openRecording(Map<String, dynamic> recording) async {
+    final path = recording['path']?.toString();
+    if (path == null || path.isEmpty) return;
+    setState(() {
+      _selectedRecording = recording;
+      _playbackRows = <Map<String, dynamic>>[];
+      _playbackBusy = true;
+    });
+    try {
+      final payload = await _backend.playback(path, limit: 200);
+      if (mounted) {
+        setState(() {
+          _playbackRows = (payload['data'] as List?)
+                  ?.whereType<Map>()
+                  .map((row) => Map<String, dynamic>.from(row))
+                  .toList() ??
+              <Map<String, dynamic>>[];
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = '無法讀取回放指標：$error');
+    } finally {
+      if (mounted) setState(() => _playbackBusy = false);
+    }
+  }
+
   @override
   void dispose() {
     _metricsSubscription?.cancel();
+    _frameSubscription?.cancel();
+    _statePoller?.cancel();
+    unawaited(_backend.dispose());
     super.dispose();
   }
 
@@ -149,13 +236,33 @@ class _MonitorShellState extends State<MonitorShell> {
   }
 
   Widget _content() {
-    if (_selectedSection == 1) return PlaybackView(recordings: _recordings, onRefresh: _loadRecordings);
-    if (_selectedSection == 2) return const SettingsView();
+    if (_selectedSection == 1) {
+      return PlaybackView(
+        recordings: _recordings,
+        selected: _selectedRecording,
+        rows: _playbackRows,
+        busy: _playbackBusy,
+        onRefresh: _loadRecordings,
+        onOpen: _openRecording,
+        onClose: () => setState(() => _selectedRecording = null),
+      );
+    }
+    if (_selectedSection == 2) {
+      return SettingsView(
+        state: _engineState,
+        busy: _commandBusy,
+        onCommand: _runCommand,
+      );
+    }
     return DashboardView(
       metrics: _metrics,
+      engineState: _engineState,
+      previewFrame: _previewFrame,
       connected: _connected,
+      busy: _commandBusy,
       error: _error,
-      onRetry: _loadRecordings,
+      onRetry: _refreshEngineState,
+      onCommand: _runCommand,
     );
   }
 }
@@ -179,16 +286,16 @@ class AppTitleBar extends StatelessWidget {
           height: 56,
           padding: const EdgeInsets.only(left: 20, right: 10),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(.25),
-            border: Border(bottom: BorderSide(color: Colors.white.withOpacity(.08))),
+            color: Colors.black.withValues(alpha: .25),
+            border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: .08))),
           ),
           child: Row(
             children: [
-              Container(width: 28, height: 28, decoration: BoxDecoration(color: const Color(0xff58c6a9).withOpacity(.16), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.visibility_outlined, size: 17, color: Color(0xff73ddbf))),
+              Container(width: 28, height: 28, decoration: BoxDecoration(color: const Color(0xff58c6a9).withValues(alpha: .16), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.visibility_outlined, size: 17, color: Color(0xff73ddbf))),
               const SizedBox(width: 12),
               const Text('疲勞監測操作台', style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: .2)),
               const SizedBox(width: 12),
-              Text('NON-CONTACT / LIVE', style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(.42), letterSpacing: 1.4)),
+              Text('NON-CONTACT / LIVE', style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: .42), letterSpacing: 1.4)),
               const Spacer(),
               WindowButton(icon: Icons.remove, tooltip: '最小化', onPressed: onMinimize),
               WindowButton(icon: Icons.crop_square, tooltip: '最大化或還原', onPressed: onMaximize),
@@ -226,7 +333,7 @@ class _WindowButtonState extends State<WindowButton> {
           duration: const Duration(milliseconds: 140),
           width: 42,
           height: 34,
-          decoration: BoxDecoration(color: _hovered ? (widget.isClose ? const Color(0xffd35f63).withOpacity(.8) : Colors.white.withOpacity(.1)) : Colors.transparent, borderRadius: BorderRadius.circular(7)),
+          decoration: BoxDecoration(color: _hovered ? (widget.isClose ? const Color(0xffd35f63).withValues(alpha: .8) : Colors.white.withValues(alpha: .1)) : Colors.transparent, borderRadius: BorderRadius.circular(7)),
           child: IconButton(onPressed: widget.onPressed, icon: Icon(widget.icon, size: 16), splashRadius: 18),
         ),
       ),
@@ -251,11 +358,11 @@ class NavigationRailPanel extends StatelessWidget {
     return Container(
       width: 222,
       padding: const EdgeInsets.fromLTRB(14, 20, 14, 16),
-      decoration: BoxDecoration(border: Border(right: BorderSide(color: Colors.white.withOpacity(.07)))),
+      decoration: BoxDecoration(border: Border(right: BorderSide(color: Colors.white.withValues(alpha: .07)))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('CONTROL ROOM', style: TextStyle(fontSize: 10, letterSpacing: 1.8, color: Colors.white.withOpacity(.35))),
+          Text('CONTROL ROOM', style: TextStyle(fontSize: 10, letterSpacing: 1.8, color: Colors.white.withValues(alpha: .35))),
           const SizedBox(height: 16),
           for (var index = 0; index < items.length; index++) ...[
             _NavItem(icon: items[index].$1, label: items[index].$2, selected: selectedIndex == index, onTap: () => onSelected(index)),
@@ -271,9 +378,9 @@ class NavigationRailPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          Text('ENGINE ONLINE', style: TextStyle(fontSize: 10, letterSpacing: 1.2, color: Colors.white.withOpacity(.3))),
+          Text('ENGINE ONLINE', style: TextStyle(fontSize: 10, letterSpacing: 1.2, color: Colors.white.withValues(alpha: .3))),
           const SizedBox(height: 6),
-          Row(children: [Container(width: 7, height: 7, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xff58c6a9))), const SizedBox(width: 7), Text('Python backend', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(.55)))]),
+          Row(children: [Container(width: 7, height: 7, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xff58c6a9))), const SizedBox(width: 7), Text('Python backend', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: .55)))]),
         ],
       ),
     );
@@ -290,7 +397,7 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? const Color(0xff58c6a9).withOpacity(.14) : Colors.transparent,
+      color: selected ? const Color(0xff58c6a9).withValues(alpha: .14) : Colors.transparent,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
@@ -302,11 +409,25 @@ class _NavItem extends StatelessWidget {
 }
 
 class DashboardView extends StatelessWidget {
-  const DashboardView({required this.metrics, required this.connected, required this.error, required this.onRetry, super.key});
+  const DashboardView({
+    required this.metrics,
+    required this.engineState,
+    required this.previewFrame,
+    required this.connected,
+    required this.busy,
+    required this.error,
+    required this.onRetry,
+    required this.onCommand,
+    super.key,
+  });
   final Map<String, dynamic> metrics;
+  final Map<String, dynamic> engineState;
+  final Uint8List? previewFrame;
   final bool connected;
+  final bool busy;
   final String? error;
   final Future<void> Function() onRetry;
+  final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
 
   double _number(String key, [double fallback = 0]) => (metrics[key] as num?)?.toDouble() ?? fallback;
   String _text(String key, [String fallback = '--']) => metrics[key]?.toString() ?? fallback;
@@ -319,16 +440,33 @@ class DashboardView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 34),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('即時監測', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)), const SizedBox(height: 7), Text('以臉部行為與 rPPG 訊號交叉檢視操作者狀態。', style: TextStyle(color: Colors.white.withOpacity(.5), fontSize: 13))])),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('即時監測', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)), const SizedBox(height: 7), Text('以臉部行為與 rPPG 訊號交叉檢視操作者狀態。', style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 13))])),
           _ConnectionPill(connected: connected),
         ]),
         if (error != null) Padding(padding: const EdgeInsets.only(top: 16), child: _InlineNotice(message: error!, onRetry: onRetry)),
         const SizedBox(height: 24),
-        Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Expanded(flex: 5, child: _StatusPanel(status: fatigue, color: fatigueColor, metrics: metrics)),
-          const SizedBox(width: 16),
-          Expanded(flex: 3, child: _SignalPanel(bpm: _number('stress_bpm'), sqi: _number('stress_sqi'), fps: _number('fps'))),
-        ]),
+        IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(flex: 5, child: CameraPreview(frame: previewFrame, running: engineState['pipeline_running'] == true)),
+            const SizedBox(width: 16),
+            Expanded(
+              flex: 3,
+              child: DesktopControlPanel(
+                state: engineState,
+                busy: busy,
+                onCommand: onCommand,
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 16),
+        IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(flex: 5, child: _StatusPanel(status: fatigue, color: fatigueColor, metrics: metrics)),
+            const SizedBox(width: 16),
+            Expanded(flex: 3, child: _SignalPanel(bpm: _number('stress_bpm'), sqi: _number('stress_sqi'), fps: _number('fps'))),
+          ]),
+        ),
         const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, children: [
           MetricTile(label: '眼瞼閉合 EAR', value: _number('ear').toStringAsFixed(2), suffix: 'ratio', icon: Icons.remove_red_eye_outlined),
@@ -345,6 +483,108 @@ class DashboardView extends StatelessWidget {
   }
 }
 
+class CameraPreview extends StatelessWidget {
+  const CameraPreview({required this.frame, required this.running, super.key});
+  final Uint8List? frame;
+  final bool running;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('LIVE CAMERA', style: TextStyle(color: Colors.white.withValues(alpha: .38), fontSize: 10, letterSpacing: 1.4)),
+          const Spacer(),
+          _ConnectionPill(connected: running),
+        ]),
+        const SizedBox(height: 14),
+        AspectRatio(
+          aspectRatio: 16 / 9,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: ColoredBox(
+              color: const Color(0xff06090b),
+              child: frame == null
+                  ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(running ? Icons.videocam_outlined : Icons.videocam_off_outlined, color: Colors.white24, size: 34), const SizedBox(height: 10), Text(running ? '等待影像串流' : '啟動管線後顯示即時畫面', style: TextStyle(color: Colors.white.withValues(alpha: .35), fontSize: 12))]))
+                  : Image.memory(frame!, fit: BoxFit.contain, gaplessPlayback: true),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class DesktopControlPanel extends StatelessWidget {
+  const DesktopControlPanel({required this.state, required this.busy, required this.onCommand, super.key});
+  final Map<String, dynamic> state;
+  final bool busy;
+  final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
+
+  @override
+  Widget build(BuildContext context) {
+    final running = state['pipeline_running'] == true;
+    final recording = state['recording'] == true;
+    final capturing = state['auto_capture_active'] == true;
+    final autoDuration = (state['auto_capture_seconds'] as num?)?.toInt() ?? 60;
+    final includeBelt = state['auto_capture_include_belt'] == true;
+    final cameraRows = (state['cameras'] as List?)?.whereType<Map>().toList() ?? <Map>[];
+    final cameraIndexes = cameraRows.map((row) => row['index']).whereType<int>().toSet();
+    final selectedRaw = state['selected_camera_index'];
+    final selected = selectedRaw is int && cameraIndexes.contains(selectedRaw) ? selectedRaw : null;
+    return GlassPanel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('SYSTEM CONTROL', style: TextStyle(color: Colors.white.withValues(alpha: .38), fontSize: 10, letterSpacing: 1.4)),
+        const SizedBox(height: 14),
+        DropdownButtonFormField<int>(
+          initialValue: selected,
+          decoration: const InputDecoration(labelText: '攝影機', border: OutlineInputBorder(), isDense: true),
+          items: cameraRows.map((row) => DropdownMenuItem<int>(value: row['index'] as int, child: Text(row['label']?.toString() ?? 'Camera ${row['index']}'))).toList(),
+          onChanged: busy || running ? null : (value) { if (value != null) onCommand('camera.select', <String, dynamic>{'index': value}); },
+        ),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: busy || (!running && selected == null) ? null : () => onCommand('pipeline.set', <String, dynamic>{'enabled': !running}),
+          icon: Icon(running ? Icons.stop_circle_outlined : Icons.play_arrow),
+          label: Text(running ? '停止監測' : '開始監測'),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44), backgroundColor: running ? const Color(0xffb75255) : const Color(0xff3fa98d)),
+        ),
+        const SizedBox(height: 9),
+        OutlinedButton.icon(
+          onPressed: busy || (!running && !recording) ? null : () => onCommand('recording.set', <String, dynamic>{'enabled': !recording}),
+          icon: Icon(recording ? Icons.stop : Icons.fiber_manual_record, color: recording ? const Color(0xffe77b78) : null),
+          label: Text(recording ? '停止記錄' : '開始記錄'),
+        ),
+        const SizedBox(height: 9),
+        DropdownButtonFormField<int>(
+          initialValue: <int>[30, 60, 120, 300, 600].contains(autoDuration) ? autoDuration : 60,
+          decoration: const InputDecoration(labelText: '自動採集秒數', border: OutlineInputBorder(), isDense: true),
+          items: const [30, 60, 120, 300, 600]
+              .map((seconds) => DropdownMenuItem<int>(value: seconds, child: Text('$seconds 秒')))
+              .toList(),
+          onChanged: busy || capturing ? null : (value) {
+            if (value != null) onCommand('auto_capture.configure', <String, dynamic>{'duration_seconds': value, 'include_belt': includeBelt});
+          },
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('同步心跳帶真值'),
+          value: includeBelt,
+          onChanged: busy || capturing ? null : (value) => onCommand('auto_capture.configure', <String, dynamic>{'duration_seconds': autoDuration, 'include_belt': value}),
+        ),
+        OutlinedButton.icon(
+          onPressed: busy ? null : () => onCommand('auto_capture.set', <String, dynamic>{'enabled': !capturing, 'duration_seconds': autoDuration, 'include_belt': includeBelt}),
+          icon: Icon(capturing ? Icons.timer_off_outlined : Icons.timer_outlined),
+          label: Text(capturing ? '停止自動採集' : '自動採集'),
+        ),
+        const SizedBox(height: 8),
+        TextButton.icon(onPressed: busy || running ? null : () => onCommand('camera.refresh'), icon: const Icon(Icons.refresh, size: 17), label: const Text('刷新攝影機')),
+      ]),
+    );
+  }
+}
+
 class _ConnectionPill extends StatelessWidget {
   const _ConnectionPill({required this.connected});
   final bool connected;
@@ -352,7 +592,7 @@ class _ConnectionPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = connected ? const Color(0xff58c6a9) : const Color(0xffe0a35d);
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7), decoration: BoxDecoration(color: color.withOpacity(.1), border: Border.all(color: color.withOpacity(.28)), borderRadius: BorderRadius.circular(20)), child: Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)), const SizedBox(width: 7), Text(connected ? '資料串流中' : '等待後端', style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700))]));
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7), decoration: BoxDecoration(color: color.withValues(alpha: .1), border: Border.all(color: color.withValues(alpha: .28)), borderRadius: BorderRadius.circular(20)), child: Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)), const SizedBox(width: 7), Text(connected ? '資料串流中' : '等待後端', style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700))]));
   }
 }
 
@@ -369,7 +609,7 @@ class _StatusPanel extends StatelessWidget {
       child: Row(children: [
         SizedBox(width: 118, height: 118, child: CustomPaint(painter: StatusRingPainter(color: color, progress: calibrated ? .84 : .22), child: Center(child: Icon(calibrated ? Icons.shield_outlined : Icons.hourglass_top, color: color, size: 34)))),
         const SizedBox(width: 24),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [Text('CURRENT STATE', style: TextStyle(color: Colors.white.withOpacity(.38), fontSize: 10, letterSpacing: 1.5)), const SizedBox(height: 8), Text(status, style: TextStyle(color: color, fontSize: 26, fontWeight: FontWeight.w800)), const SizedBox(height: 9), Text(calibrated ? '臉部追蹤與個人基線已就緒' : '正在等待臉部與校準資料', style: TextStyle(color: Colors.white.withOpacity(.55), fontSize: 12))])),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [Text('CURRENT STATE', style: TextStyle(color: Colors.white.withValues(alpha: .38), fontSize: 10, letterSpacing: 1.5)), const SizedBox(height: 8), Text(status, style: TextStyle(color: color, fontSize: 26, fontWeight: FontWeight.w800)), const SizedBox(height: 9), Text(calibrated ? '臉部追蹤與個人基線已就緒' : '正在等待臉部與校準資料', style: TextStyle(color: Colors.white.withValues(alpha: .55), fontSize: 12))])),
       ]),
     );
   }
@@ -383,7 +623,26 @@ class _SignalPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('PHYSIOLOGY / rPPG', style: TextStyle(color: Colors.white.withOpacity(.38), fontSize: 10, letterSpacing: 1.4)), const Spacer(), Row(crossAxisAlignment: CrossAxisAlignment.end, children: [Text(bpm > 0 ? bpm.toStringAsFixed(0) : '--', style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800)), const SizedBox(width: 8), Padding(padding: const EdgeInsets.only(bottom: 7), child: Text('BPM', style: TextStyle(color: Colors.white.withOpacity(.45), fontSize: 12)))]), const SizedBox(height: 10), Row(children: [Text('SQI ${(sqi * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Color(0xff73ddbf), fontSize: 12)), const Spacer(), Text('${fps.toStringAsFixed(1)} FPS', style: TextStyle(color: Colors.white.withOpacity(.45), fontSize: 11))])])));
+    return GlassPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('PHYSIOLOGY / rPPG', style: TextStyle(color: Colors.white.withValues(alpha: .38), fontSize: 10, letterSpacing: 1.4)),
+          const Spacer(),
+          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(bpm > 0 ? bpm.toStringAsFixed(0) : '--', style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 8),
+            Padding(padding: const EdgeInsets.only(bottom: 7), child: Text('BPM', style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 12))),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Text('SQI ${(sqi * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Color(0xff73ddbf), fontSize: 12)),
+            const Spacer(),
+            Text('${fps.toStringAsFixed(1)} FPS', style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 11)),
+          ]),
+        ],
+      ),
+    );
   }
 }
 
@@ -403,7 +662,36 @@ class _MetricTileState extends State<MetricTile> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(onEnter: (_) => setState(() => _hovered = true), onExit: (_) => setState(() => _hovered = false), child: AnimatedContainer(duration: const Duration(milliseconds: 160), width: 218, padding: const EdgeInsets.all(17), transform: Matrix4.translationValues(0, _hovered ? -3 : 0, 0), decoration: BoxDecoration(color: _hovered ? const Color(0xff1a282b) : const Color(0xff121b1f), border: Border.all(color: _hovered ? const Color(0xff58c6a9).withOpacity(.45) : Colors.white.withOpacity(.07)), borderRadius: BorderRadius.circular(10), boxShadow: _hovered ? [BoxShadow(color: const Color(0xff58c6a9).withOpacity(.1), blurRadius: 22)] : []), child: Row(children: [Icon(widget.icon, size: 20, color: const Color(0xff73ddbf)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(widget.label, style: TextStyle(color: Colors.white.withOpacity(.5), fontSize: 11)), const SizedBox(height: 6), Row(crossAxisAlignment: CrossAxisAlignment.end, children: [Text(widget.value, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800)), const SizedBox(width: 5), Padding(padding: const EdgeInsets.only(bottom: 3), child: Text(widget.suffix, style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(.35)))])]))]));
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        width: 218,
+        padding: const EdgeInsets.all(17),
+        transform: Matrix4.translationValues(0, _hovered ? -3 : 0, 0),
+        decoration: BoxDecoration(
+          color: _hovered ? const Color(0xff1a282b) : const Color(0xff121b1f),
+          border: Border.all(color: _hovered ? const Color(0xff58c6a9).withValues(alpha: .45) : Colors.white.withValues(alpha: .07)),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: _hovered ? [BoxShadow(color: const Color(0xff58c6a9).withValues(alpha: .1), blurRadius: 22)] : [],
+        ),
+        child: Row(children: [
+          Icon(widget.icon, size: 20, color: const Color(0xff73ddbf)),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.label, style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 11)),
+            const SizedBox(height: 6),
+            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text(widget.value, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
+              const SizedBox(width: 5),
+              Padding(padding: const EdgeInsets.only(bottom: 3), child: Text(widget.suffix, style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: .35))),
+              ),
+            ]),
+          ])),
+        ]),
+      ),
+    );
   }
 }
 
@@ -414,27 +702,207 @@ class _QualityStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = <String, double>{'臉部追蹤': ((metrics['fatigue_quality_score'] as num?)?.toDouble() ?? 0), 'rPPG 訊號': ((metrics['stress_quality_score'] as num?)?.toDouble() ?? 0), 'ROI 穩定度': ((metrics['stress_roi_area_stability'] as num?)?.toDouble() ?? 0)};
-    return GlassPanel(child: Column(children: items.entries.map((entry) => Padding(padding: const EdgeInsets.symmetric(vertical: 7), child: Row(children: [SizedBox(width: 85, child: Text(entry.key, style: TextStyle(color: Colors.white.withOpacity(.62), fontSize: 12))), Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: entry.value.clamp(0, 1), minHeight: 7, backgroundColor: Colors.white.withOpacity(.07), color: const Color(0xff58c6a9)))), const SizedBox(width: 12), SizedBox(width: 44, child: Text('${(entry.value * 100).toStringAsFixed(0)}%', textAlign: TextAlign.right, style: const TextStyle(color: Color(0xff73ddbf), fontSize: 12)))]))).toList()));
+    return GlassPanel(child: Column(children: items.entries.map((entry) => Padding(padding: const EdgeInsets.symmetric(vertical: 7), child: Row(children: [SizedBox(width: 85, child: Text(entry.key, style: TextStyle(color: Colors.white.withValues(alpha: .62), fontSize: 12))), Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: entry.value.clamp(0, 1), minHeight: 7, backgroundColor: Colors.white.withValues(alpha: .07), color: const Color(0xff58c6a9)))), const SizedBox(width: 12), SizedBox(width: 44, child: Text('${(entry.value * 100).toStringAsFixed(0)}%', textAlign: TextAlign.right, style: const TextStyle(color: Color(0xff73ddbf), fontSize: 12)))]))).toList()));
   }
 }
 
 class PlaybackView extends StatelessWidget {
-  const PlaybackView({required this.recordings, required this.onRefresh, super.key});
+  const PlaybackView({required this.recordings, required this.selected, required this.rows, required this.busy, required this.onRefresh, required this.onOpen, required this.onClose, super.key});
   final List<Map<String, dynamic>> recordings;
+  final Map<String, dynamic>? selected;
+  final List<Map<String, dynamic>> rows;
+  final bool busy;
   final Future<void> Function() onRefresh;
+  final Future<void> Function(Map<String, dynamic>) onOpen;
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(padding: const EdgeInsets.fromLTRB(30, 28, 30, 30), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Expanded(child: Text('歷史回放', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800))), IconButton(onPressed: onRefresh, tooltip: '重新整理', icon: const Icon(Icons.refresh))]), const SizedBox(height: 7), Text('選擇一段錄影檢視完整指標與事件時間線。', style: TextStyle(color: Colors.white.withOpacity(.5), fontSize: 13)), const SizedBox(height: 24), Expanded(child: recordings.isEmpty ? const EmptyState(icon: Icons.inbox_outlined, title: '尚無回放資料', message: '啟動一次監測工作階段後，錄影與指標會出現在這裡。') : ListView.separated(itemCount: recordings.length, separatorBuilder: (_, __) => const SizedBox(height: 9), itemBuilder: (_, index) { final item = recordings[index]; return GlassPanel(child: ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.movie_outlined, color: Color(0xff73ddbf)), title: Text(item['session_name']?.toString() ?? '未命名工作階段'), subtitle: Text('${item['duration_str'] ?? '--'}  •  ${item['record_count'] ?? 0} 筆指標', style: TextStyle(color: Colors.white.withOpacity(.45))), trailing: const Icon(Icons.chevron_right, color: Colors.white38))); }))]));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(30, 28, 30, 30),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text('歷史回放', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800))),
+          IconButton(onPressed: onRefresh, tooltip: '重新整理', icon: const Icon(Icons.refresh)),
+        ]),
+        const SizedBox(height: 7),
+        Text('選擇一段錄影檢視完整指標與事件時間線。', style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 13)),
+        const SizedBox(height: 24),
+        Expanded(
+          child: selected == null
+              ? (recordings.isEmpty
+                  ? const EmptyState(icon: Icons.inbox_outlined, title: '尚無回放資料', message: '啟動一次監測工作階段後，錄影與指標會出現在這裡。')
+                  : ListView.separated(
+                      itemCount: recordings.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 9),
+                      itemBuilder: (_, index) {
+                        final item = recordings[index];
+                        return GlassPanel(
+                          child: ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.movie_outlined, color: Color(0xff73ddbf)),
+                            title: Text(item['session_name']?.toString() ?? '未命名工作階段'),
+                            subtitle: Text('${item['duration_str'] ?? '--'}  •  ${item['record_count'] ?? 0} 筆指標', style: TextStyle(color: Colors.white.withValues(alpha: .45))),
+                            trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                            onTap: () => onOpen(item),
+                          ),
+                        );
+                      },
+                    ))
+              : _PlaybackDetail(recording: selected!, rows: rows, busy: busy, onClose: onClose),
+        ),
+      ]),
+    );
+  }
+}
+
+class _PlaybackDetail extends StatelessWidget {
+  const _PlaybackDetail({required this.recording, required this.rows, required this.busy, required this.onClose});
+  final Map<String, dynamic> recording;
+  final List<Map<String, dynamic>> rows;
+  final bool busy;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        IconButton(onPressed: onClose, tooltip: '返回回放清單', icon: const Icon(Icons.arrow_back)),
+        Expanded(child: Text(recording['session_name']?.toString() ?? '回放指標', style: Theme.of(context).textTheme.titleLarge)),
+        Text('${recording['duration_str'] ?? '--'}  /  ${recording['record_count'] ?? 0} 筆', style: TextStyle(color: Colors.white.withValues(alpha: .5))),
+      ]),
+      const SizedBox(height: 12),
+      if (busy) const LinearProgressIndicator(minHeight: 2),
+      const SizedBox(height: 12),
+      Expanded(
+        child: rows.isEmpty && !busy
+            ? const EmptyState(icon: Icons.query_stats, title: '沒有可顯示的指標', message: '這段錄影尚未產生可用的 metrics 資料。')
+            : ListView.separated(
+                itemCount: rows.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (_, index) {
+                  final row = rows[index];
+                  return GlassPanel(
+                    child: Row(children: [
+                      SizedBox(width: 90, child: Text('${((row['timestamp'] as num?)?.toDouble() ?? 0).toStringAsFixed(1)} s', style: TextStyle(color: Colors.white.withValues(alpha: .5)))),
+                      Expanded(child: Text('狀態 ${row['status'] ?? '--'}  •  EAR ${((row['ear'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}  •  BPM ${((row['bpm'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.w600))),
+                      Text('PERCLOS ${(((row['perclos'] as num?)?.toDouble() ?? 0) * 100).toStringAsFixed(1)}%', style: TextStyle(color: Colors.white.withValues(alpha: .55))),
+                    ]),
+                  );
+                },
+              ),
+      ),
+    ]);
   }
 }
 
 class SettingsView extends StatelessWidget {
-  const SettingsView({super.key});
+  const SettingsView({required this.state, required this.busy, required this.onCommand, super.key});
+
+  final Map<String, dynamic> state;
+  final bool busy;
+  final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(padding: const EdgeInsets.fromLTRB(30, 28, 30, 30), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('系統設定', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)), const SizedBox(height: 7), Text('演算法與裝置設定仍由 Python 主程式管理。', style: TextStyle(color: Colors.white.withOpacity(.5), fontSize: 13)), const SizedBox(height: 24), GlassPanel(child: Column(children: const [ListTile(contentPadding: EdgeInsets.zero, leading: Icon(Icons.memory_outlined, color: Color(0xff73ddbf)), title: Text('分析引擎'), subtitle: Text('MediaPipe Face Landmarker + rPPG')), Divider(color: Colors.white12), ListTile(contentPadding: EdgeInsets.zero, leading: Icon(Icons.wifi_tethering, color: Color(0xff73ddbf)), title: Text('資料服務'), subtitle: Text('本機 Flask / Socket.IO，預設 127.0.0.1:5000'))]))]));
+    final running = state['pipeline_running'] == true;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(30, 28, 30, 30),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('系統設定', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 7),
+        Text('設定由 Flutter 主面板送往 Python engine，分析中可安全熱切換的項目會立即生效。', style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 13)),
+        const SizedBox(height: 24),
+        GlassPanel(child: Column(children: [
+          _SettingSwitch(
+            title: '行為警覺分析',
+            subtitle: '頭部姿態、眨眼、哈欠、注視與疲勞融合',
+            value: state['behavior_enabled'] == true,
+            enabled: !busy && (state['rppg_enabled'] == true || state['behavior_enabled'] != true),
+            onChanged: (value) => onCommand('analysis.configure', <String, dynamic>{'behavior_enabled': value}),
+          ),
+          const Divider(color: Colors.white12),
+          _SettingSwitch(
+            title: 'rPPG / HRV 分析',
+            subtitle: '非接觸式心率、HRV 與訊號品質',
+            value: state['rppg_enabled'] == true,
+            enabled: !busy && (state['behavior_enabled'] == true || state['rppg_enabled'] != true),
+            onChanged: (value) => onCommand('analysis.configure', <String, dynamic>{'rppg_enabled': value}),
+          ),
+          const Divider(color: Colors.white12),
+          _SettingSwitch(title: '啟動時自動記錄', subtitle: '監測管線啟動後同步建立指標與影片記錄', value: state['auto_record'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'auto_record': value})),
+          const Divider(color: Colors.white12),
+          _SettingSwitch(title: '心跳帶真值校準', subtitle: '僅校正 rPPG，不直接改變疲勞融合權重', value: state['belt_calibration'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'belt_calibration': value})),
+        ])),
+        const SizedBox(height: 14),
+        GlassPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('攝影機擷取', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(child: _SettingDropdown(label: '解析度', value: state['resolution']?.toString(), values: const ['640×480', '800×600', '1280×720（720p）', '1280×800', '1920×1080（1080p）'], enabled: !busy && !running, onChanged: (value) => onCommand('camera.configure', <String, dynamic>{'resolution': value}))),
+            const SizedBox(width: 12),
+            Expanded(child: _SettingDropdown(label: '目標 FPS', value: state['fps']?.toString(), values: const ['15', '24', '30', '60'], enabled: !busy && !running, onChanged: (value) => onCommand('camera.configure', <String, dynamic>{'fps': value}))),
+          ]),
+          const SizedBox(height: 4),
+          _SettingSwitch(title: '水平翻轉', subtitle: '修正鏡像攝影機方向', value: state['horizontal_flip'] == true, enabled: !busy && !running, onChanged: (value) => onCommand('camera.configure', <String, dynamic>{'horizontal_flip': value})),
+        ])),
+        const SizedBox(height: 14),
+        GlassPanel(child: Column(children: [
+          _SettingSwitch(title: '桌面鏡頭 Overlay', subtitle: '在 Tauri 視窗外顯示即時鏡頭疊圖', value: state['overlay_preview'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'overlay_preview': value})),
+          const Divider(color: Colors.white12),
+          _SettingSwitch(title: '桌面數值 Overlay', subtitle: '顯示疲勞與生理訊號即時指標', value: state['overlay_metrics'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'overlay_metrics': value})),
+          const Divider(color: Colors.white12),
+          _SettingSwitch(title: 'Overlay 點擊穿透', subtitle: '鎖定後不攔截桌面滑鼠操作', value: state['overlay_locked'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'overlay_locked': value})),
+        ])),
+        const SizedBox(height: 18),
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          FilledButton.icon(onPressed: busy ? null : () => onCommand('settings.save'), icon: const Icon(Icons.save_outlined), label: const Text('儲存設定')),
+          OutlinedButton.icon(onPressed: busy || !running ? null : () => onCommand('baseline.start'), icon: const Icon(Icons.person_search_outlined), label: const Text('記錄清醒基線')),
+          OutlinedButton.icon(onPressed: busy ? null : () => onCommand('legacy.show'), icon: const Icon(Icons.open_in_new), label: const Text('開啟進階工具面板')),
+        ]),
+        if (running) Padding(padding: const EdgeInsets.only(top: 14), child: Text('監測運作中：攝影機解析度、FPS 與 backend 需停止管線後調整。', style: TextStyle(color: const Color(0xffe0a35d).withValues(alpha: .9), fontSize: 12))),
+      ]),
+    );
+  }
+}
+
+class _SettingDropdown extends StatelessWidget {
+  const _SettingDropdown({required this.label, required this.value, required this.values, required this.enabled, required this.onChanged});
+  final String label;
+  final String? value;
+  final List<String> values;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = value != null && values.contains(value) ? value : null;
+    return DropdownButtonFormField<String>(
+      initialValue: selected,
+      decoration: InputDecoration(labelText: label, border: const OutlineInputBorder(), isDense: true),
+      items: values.map((item) => DropdownMenuItem<String>(value: item, child: Text(item))).toList(),
+      onChanged: enabled ? (item) { if (item != null) onChanged(item); } : null,
+    );
+  }
+}
+
+class _SettingSwitch extends StatelessWidget {
+  const _SettingSwitch({required this.title, required this.subtitle, required this.value, required this.enabled, required this.onChanged});
+  final String title;
+  final String subtitle;
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+      subtitle: Text(subtitle, style: TextStyle(color: Colors.white.withValues(alpha: .42), fontSize: 11)),
+      value: value,
+      onChanged: enabled ? onChanged : null,
+    );
   }
 }
 
@@ -452,8 +920,8 @@ class GlassPanel extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(.045),
-            border: Border.all(color: Colors.white.withOpacity(.09)),
+            color: Colors.white.withValues(alpha: .045),
+            border: Border.all(color: Colors.white.withValues(alpha: .09)),
             borderRadius: radius,
           ),
           child: child,
@@ -470,7 +938,7 @@ class _InlineNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11), decoration: BoxDecoration(color: const Color(0xffb46d4d).withOpacity(.12), border: Border.all(color: const Color(0xffb46d4d).withOpacity(.35)), borderRadius: BorderRadius.circular(9)), child: Row(children: [const Icon(Icons.info_outline, size: 17, color: Color(0xffe0a35d)), const SizedBox(width: 10), Expanded(child: Text(message, style: const TextStyle(fontSize: 12))), TextButton(onPressed: onRetry, child: const Text('重試'))]));
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11), decoration: BoxDecoration(color: const Color(0xffb46d4d).withValues(alpha: .12), border: Border.all(color: const Color(0xffb46d4d).withValues(alpha: .35)), borderRadius: BorderRadius.circular(9)), child: Row(children: [const Icon(Icons.info_outline, size: 17, color: Color(0xffe0a35d)), const SizedBox(width: 10), Expanded(child: Text(message, style: const TextStyle(fontSize: 12))), TextButton(onPressed: onRetry, child: const Text('重試'))]));
   }
 }
 
@@ -481,7 +949,7 @@ class EmptyState extends StatelessWidget {
   final String message;
 
   @override
-  Widget build(BuildContext context) => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 42, color: Colors.white24), const SizedBox(height: 14), Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)), const SizedBox(height: 7), Text(message, textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withOpacity(.45), fontSize: 12))]));
+  Widget build(BuildContext context) => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 42, color: Colors.white24), const SizedBox(height: 14), Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)), const SizedBox(height: 7), Text(message, textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 12))]));
 }
 
 class StatusRingPainter extends CustomPainter {
@@ -493,7 +961,7 @@ class StatusRingPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
     final radius = size.shortestSide / 2 - 8;
-    final base = Paint()..style = PaintingStyle.stroke..strokeWidth = 7..color = Colors.white.withOpacity(.08);
+    final base = Paint()..style = PaintingStyle.stroke..strokeWidth = 7..color = Colors.white.withValues(alpha: .08);
     final arc = Paint()..style = PaintingStyle.stroke..strokeCap = StrokeCap.round..strokeWidth = 7..color = color;
     canvas.drawCircle(center, radius, base);
     canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -1.57, 6.28 * progress, false, arc);

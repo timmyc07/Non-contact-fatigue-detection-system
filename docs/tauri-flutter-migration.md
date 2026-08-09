@@ -37,7 +37,7 @@ This boundary is deliberately additive. The numeric paths in `rppg/`, `gui/fatig
 
 ## Build prerequisites
 
-This repository currently has Node and Rust, but no Flutter/Dart SDK. Once Flutter is installed:
+Development requires Node, Rust, and Flutter/Dart. The Python engine remains a separate runtime and must be present beside the source tree (or configured explicitly) when running a packaged shell:
 
 ```powershell
 Set-Location flutter_app
@@ -45,13 +45,15 @@ flutter pub get
 flutter build web --release
 Set-Location ..
 npm install --save-dev @tauri-apps/cli
-npx tauri dev
+npm run desktop
 ```
+
+For an installed Tauri build, set `NCFD_ENGINE_ROOT` to the directory containing `main.py`, `gui/`, `rppg/`, `models/`, and the Python environment, and optionally set `NCFD_ENGINE_PYTHON` to its interpreter. The shell also searches install-relative directories for `main.py`; it never relies on a developer machine path when those variables are provided. Set `NCFD_BACKEND_PORT` consistently and pass `--dart-define=NCFD_BACKEND_URL=http://127.0.0.1:<port>` when using a non-default port.
 
 The Dart bridge uses the Tauri global API exposed by `withGlobalTauri`, so a JavaScript `@tauri-apps/api` import is not required for the Flutter Web build.
 
-The existing Python service must be running before the Flutter UI can display live packets. `flutter build web --release` is invoked by Tauri's `beforeBuildCommand`.
+`npm run desktop` starts the Python engine automatically through Tauri. For browser-only Flutter work, start `.venv\Scripts\python main.py --engine` separately. `flutter build web --release` is invoked by Tauri's `beforeBuildCommand`.
 
 ## Rollout
 
-The original Flask dashboard remains available at `http://127.0.0.1:5000` as a fallback. The next migration slices should move one workflow at a time (live monitoring, playback controls, then device/settings actions) and compare the new UI against the existing Socket.IO event contract before retiring the fallback.
+The original Flask dashboard remains available at `http://127.0.0.1:5000` as a diagnostics fallback. The Flutter panel now owns live monitoring, camera selection, pipeline/recording controls, analysis modes, calibration toggles, settings, and camera preview. Advanced batch replay tools remain reachable through the legacy panel command until their Flutter workflows are migrated.

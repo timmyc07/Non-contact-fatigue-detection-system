@@ -64,6 +64,7 @@ from gui.alarm_player import FatigueAlarmController
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.combined_worker import CombinedWorker
 from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserProfileDialog
+from gui.desktop_control import DesktopCommandBroker
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
@@ -926,8 +927,9 @@ class _PreviewPanel(QFrame):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, engine_mode: bool = False) -> None:
         super().__init__()
+        self._engine_mode = bool(engine_mode)
         self.setWindowTitle("NCFD System — 非接觸式疲勞監測系統 V2")
         self.resize(1420, 900)
         self.setMinimumSize(1080, 620)
@@ -980,6 +982,7 @@ class MainWindow(QMainWindow):
         self._pending_camera_index: int | None = None
         self._web_metrics_buffer = MetricsBuffer(maxsize=300)
         self._web_server: WebServerThread | None = None
+        self._desktop_control_broker = DesktopCommandBroker(timeout_seconds=10.0)
         self._web_emit_interval = 0.25
         self._web_frame_interval = 1.0 / WEB_PREVIEW_TARGET_FPS
         self._web_last_emit = 0.0
@@ -1043,6 +1046,11 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._build_central()
+
+        self._desktop_control_timer = QTimer(self)
+        self._desktop_control_timer.setInterval(20)
+        self._desktop_control_timer.timeout.connect(self._drain_desktop_commands)
+        self._desktop_control_timer.start()
 
         self._load_settings()
         self._alarm_controller = FatigueAlarmController(self._alarm_config, self)
@@ -3106,6 +3114,7 @@ class MainWindow(QMainWindow):
                 get_latest_packet=self._build_web_metrics,
                 host=host,
                 port=WEB_DASHBOARD_DEFAULT_PORT,
+                control_handler=self._desktop_control_broker.submit,
             )
             self._web_server.start()
             self._emit_web_metrics(force=True)
@@ -3272,6 +3281,183 @@ class MainWindow(QMainWindow):
             "dl_confidence": 0.0,
             "dl_status": "",
         }
+
+    def _drain_desktop_commands(self) -> None:
+        self._desktop_control_broker.process_pending(self._handle_desktop_command)
+
+    @staticmethod
+    def _require_bool(args: dict[str, Any], key: str) -> bool:
+        value = args.get(key)
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} must be a boolean")
+        return value
+
+    def _desktop_control_state(self) -> dict[str, Any]:
+        cameras = [
+            {
+                "index": int(self._cmb_camera.itemData(i)),
+                "label": str(self._cmb_camera.itemText(i)),
+            }
+            for i in range(self._cmb_camera.count())
+            if self._cmb_camera.itemData(i) is not None
+        ]
+        return {
+            "engine_mode": self._engine_mode,
+            "pipeline_running": bool(self._pipeline_running),
+            "recording": bool(self._recording),
+            "recording_path": str(self._recording_db_path or ""),
+            "auto_capture_active": self._auto_capture_timer is not None,
+            "auto_capture_seconds": int(self._spn_auto_capture_seconds.value()),
+            "auto_capture_include_belt": self._chk_auto_capture_belt.isChecked(),
+            "selected_camera_index": self.selected_camera_index,
+            "cameras": cameras,
+            "behavior_enabled": self._chk_behavior.isChecked(),
+            "rppg_enabled": self._chk_stress.isChecked(),
+            "auto_record": self._chk_auto_record.isChecked(),
+            "belt_calibration": self._chk_belt_calib.isChecked(),
+            "horizontal_flip": self._chk_horizontal_flip.isChecked(),
+            "overlay_preview": self._chk_preview.isChecked(),
+            "overlay_metrics": self._chk_metrics.isChecked(),
+            "overlay_locked": self._chk_lock.isChecked(),
+            "resolution": str(self._cmb_resolution.currentText()),
+            "fps": str(self._cmb_fps.currentText()),
+            "backend": str(self._cmb_backend.currentData() or "auto"),
+            "legacy_panel_visible": self.isVisible(),
+        }
+
+    def _set_combo_value(self, combo: QComboBox, value: object, *, by_data: bool = False) -> None:
+        wanted = str(value)
+        for index in range(combo.count()):
+            current = combo.itemData(index) if by_data else combo.itemText(index)
+            if str(current) == wanted:
+                combo.setCurrentIndex(index)
+                return
+        raise ValueError(f"Unsupported option: {wanted}")
+
+    def _handle_desktop_command(self, command: str, args: dict[str, Any]) -> dict[str, Any]:
+        if command == "state.get":
+            return self._desktop_control_state()
+
+        if command == "pipeline.set":
+            enabled = self._require_bool(args, "enabled")
+            if enabled and self.selected_camera_index is None:
+                raise ValueError("Select a camera before starting the pipeline")
+            if enabled != self._pipeline_running:
+                self._toggle_pipeline()
+
+        elif command == "recording.set":
+            enabled = self._require_bool(args, "enabled")
+            if enabled and not self._pipeline_running:
+                raise ValueError("Start the pipeline before recording")
+            if enabled != self._recording:
+                self._toggle_recording()
+
+        elif command == "camera.select":
+            if self._pipeline_running:
+                raise ValueError("Stop the pipeline before changing camera")
+            raw_index = args.get("index")
+            if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+                raise ValueError("index must be an integer")
+            if not self._select_camera_by_index(raw_index):
+                raise ValueError(f"Camera index is unavailable: {raw_index}")
+
+        elif command == "camera.refresh":
+            if self._pipeline_running:
+                raise ValueError("Stop the pipeline before refreshing cameras")
+            self._start_camera_scan()
+
+        elif command == "camera.configure":
+            if self._pipeline_running:
+                raise ValueError("Stop the pipeline before changing camera settings")
+            if "resolution" in args:
+                self._set_combo_value(self._cmb_resolution, args["resolution"])
+            if "fps" in args:
+                self._set_combo_value(self._cmb_fps, args["fps"])
+            if "backend" in args:
+                self._set_combo_value(self._cmb_backend, args["backend"], by_data=True)
+            if "horizontal_flip" in args:
+                self._chk_horizontal_flip.setChecked(self._require_bool(args, "horizontal_flip"))
+
+        elif command == "analysis.configure":
+            behavior_enabled = (
+                self._require_bool(args, "behavior_enabled")
+                if "behavior_enabled" in args
+                else self._chk_behavior.isChecked()
+            )
+            rppg_enabled = (
+                self._require_bool(args, "rppg_enabled")
+                if "rppg_enabled" in args
+                else self._chk_stress.isChecked()
+            )
+            if not behavior_enabled and not rppg_enabled:
+                raise ValueError("At least one analysis mode must remain enabled")
+            self._chk_behavior.setChecked(behavior_enabled)
+            self._chk_stress.setChecked(rppg_enabled)
+
+        elif command == "preferences.configure":
+            checkbox_keys = {
+                "auto_record": self._chk_auto_record,
+                "belt_calibration": self._chk_belt_calib,
+                "overlay_preview": self._chk_preview,
+                "overlay_metrics": self._chk_metrics,
+                "overlay_locked": self._chk_lock,
+            }
+            for key, checkbox in checkbox_keys.items():
+                if key in args:
+                    checkbox.setChecked(self._require_bool(args, key))
+
+        elif command == "auto_capture.set":
+            enabled = self._require_bool(args, "enabled")
+            if enabled:
+                duration = args.get("duration_seconds", self._spn_auto_capture_seconds.value())
+                if isinstance(duration, bool) or not isinstance(duration, int) or not 10 <= duration <= 600:
+                    raise ValueError("duration_seconds must be between 10 and 600")
+                if self._auto_capture_timer is None:
+                    self._spn_auto_capture_seconds.setValue(duration)
+                    include_belt = bool(args.get("include_belt", False))
+                    self._chk_auto_capture_belt.setChecked(include_belt)
+                    self._on_auto_capture_clicked()
+            elif self._auto_capture_timer is not None:
+                self._on_auto_capture_clicked()
+
+        elif command == "auto_capture.configure":
+            duration = args.get("duration_seconds", self._spn_auto_capture_seconds.value())
+            if isinstance(duration, bool) or not isinstance(duration, int) or not 10 <= duration <= 600:
+                raise ValueError("duration_seconds must be between 10 and 600")
+            self._spn_auto_capture_seconds.setValue(duration)
+            if "include_belt" in args:
+                self._chk_auto_capture_belt.setChecked(self._require_bool(args, "include_belt"))
+
+        elif command == "baseline.start":
+            if not self._pipeline_running or not self._chk_behavior.isChecked():
+                raise ValueError("Behavior analysis must be running before baseline capture")
+            self._on_record_baseline_clicked()
+
+        elif command == "settings.save":
+            self._save_settings()
+
+        elif command == "legacy.show":
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+        elif command == "legacy.hide":
+            self.hide()
+
+        elif command == "app.shutdown":
+            QTimer.singleShot(0, self._shutdown_engine)
+
+        else:
+            raise ValueError(f"Unsupported desktop command: {command}")
+
+        return self._desktop_control_state()
+
+    def _shutdown_engine(self) -> None:
+        self.close()
+        if self._engine_mode:
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
 
     def _emit_web_metrics(self, *, force: bool = False) -> None:
         if self._web_server is None:
@@ -4908,6 +5094,8 @@ class MainWindow(QMainWindow):
         self._sync_overlay_visibility()
         self._update_device_status()
         self._emit_web_metrics(force=True)
+        if self._engine_mode and not self.isVisible():
+            return
         dlg = QMessageBox(self)
         dlg.setWindowTitle("攝影機錯誤")
         dlg.setIcon(QMessageBox.Icon.Warning)

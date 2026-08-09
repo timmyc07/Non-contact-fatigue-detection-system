@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 from ctypes.util import find_library
 from pathlib import Path
@@ -76,18 +78,53 @@ _prefer_pyside6_qt_plugins()
 from gui.main_window import MainWindow, application_stylesheet
 
 
+def _should_launch_tauri() -> bool:
+    return (
+        "--engine" not in sys.argv
+        and "--legacy-ui" not in sys.argv
+        and os.environ.get("NCFD_LEGACY_UI") != "1"
+    )
+
+
+def _launch_tauri() -> int | None:
+    npx = shutil.which("npx")
+    flutter = shutil.which("flutter")
+    root = Path(__file__).resolve().parent
+    if npx is None or flutter is None or not (root / "src-tauri" / "tauri.conf.json").exists():
+        print(
+            "[Launcher] Flutter/Tauri toolchain unavailable; falling back to the legacy Qt panel. "
+            "Install Flutter and use `python main.py --legacy-ui` to select Qt explicitly."
+        )
+        return None
+    try:
+        return subprocess.call([npx, "tauri", "dev"], cwd=root)
+    except OSError as exc:
+        print(f"[Launcher] Unable to start Tauri: {exc}; falling back to the legacy Qt panel.")
+        return None
+
+
 def main() -> int:
+    if _should_launch_tauri():
+        tauri_result = _launch_tauri()
+        if tauri_result is not None:
+            return tauri_result
     _prefer_pyside6_qt_plugins()
     missing_packages = _missing_linux_qt_runtime_libraries()
     if missing_packages:
         _print_linux_qt_runtime_help(missing_packages)
         return 78
 
-    app = QApplication(sys.argv)
+    engine_mode = "--engine" in sys.argv
+    qt_args = [arg for arg in sys.argv if arg != "--engine"]
+    app = QApplication(qt_args)
+    app.setQuitOnLastWindowClosed(not engine_mode)
     app.setStyle("Fusion")
     app.setStyleSheet(application_stylesheet())
-    win = MainWindow()
-    win.show()
+    win = MainWindow(engine_mode=engine_mode)
+    if not engine_mode:
+        win.show()
+    else:
+        print("[Engine] Desktop control backend listening on http://127.0.0.1:5000")
     return app.exec()
 
 

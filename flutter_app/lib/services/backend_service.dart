@@ -4,12 +4,31 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
+const _backendBaseUrl = String.fromEnvironment(
+  'NCFD_BACKEND_URL',
+  defaultValue: 'http://127.0.0.1:5000',
+);
+
 class BackendService {
-  BackendService({this.baseUrl = 'http://127.0.0.1:5000'});
+  BackendService({this.baseUrl = _backendBaseUrl});
 
   final String baseUrl;
   io.Socket? _socket;
   Timer? _poller;
+  final StreamController<String> _previewFrames = StreamController<String>.broadcast();
+
+  Stream<String> get previewFrames => _previewFrames.stream;
+
+  Future<void> dispose() async {
+    _poller?.cancel();
+    _poller = null;
+    _socket?.disconnect();
+    _socket?.dispose();
+    _socket = null;
+    if (!_previewFrames.isClosed) {
+      await _previewFrames.close();
+    }
+  }
 
   Stream<Map<String, dynamic>> connectMetrics() {
     final controller = StreamController<Map<String, dynamic>>.broadcast(
@@ -33,6 +52,12 @@ class BackendService {
         final packet = _packet(payload);
         if (packet != null && !controller.isClosed) controller.add(packet);
       });
+      socket.on('frame_update', (dynamic payload) {
+        final frame = payload is Map ? payload['frame'] : null;
+        if (frame is String && frame.isNotEmpty && !_previewFrames.isClosed) {
+          _previewFrames.add(frame);
+        }
+      });
       socket.on('connect', (_) => socket.emit('request_metrics'));
       socket.on('connect_error', (_) => _startPolling(controller));
     } catch (_) {
@@ -50,6 +75,62 @@ class BackendService {
     final data = body is Map ? body['data'] : null;
     if (data is! List) return <Map<String, dynamic>>[];
     return data.whereType<Map>().map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<Map<String, dynamic>> playback(String dbPath, {int limit = 100}) async {
+    final uri = Uri.parse('$baseUrl/api/playback').replace(
+      queryParameters: <String, String>{
+        'db_path': dbPath,
+        'limit': limit.toString(),
+      },
+    );
+    final response = await http.get(uri);
+    final payload = jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300 || payload is! Map) {
+      final error = payload is Map ? payload['error'] : null;
+      throw StateError(error?.toString() ?? 'Backend returned HTTP ${response.statusCode}.');
+    }
+    return Map<String, dynamic>.from(payload);
+  }
+
+  Future<Map<String, dynamic>> controlState() async {
+    return _controlRequest('GET', '/api/control/state');
+  }
+
+  Future<Map<String, dynamic>> command(
+    String command, [
+    Map<String, dynamic>? args,
+  ]) async {
+    return _controlRequest(
+      'POST',
+      '/api/control/command',
+      body: <String, dynamic>{
+        'command': command,
+        'args': args ?? <String, dynamic>{},
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>> _controlRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final uri = Uri.parse('$baseUrl$path');
+    final response = method == 'POST'
+        ? await http.post(
+            uri,
+            headers: const <String, String>{'Content-Type': 'application/json'},
+            body: jsonEncode(body),
+          )
+        : await http.get(uri);
+    final payload = jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300 || payload is! Map) {
+      final error = payload is Map ? payload['error'] : null;
+      throw StateError(error?.toString() ?? 'Backend returned HTTP ${response.statusCode}.');
+    }
+    final data = payload['data'];
+    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
   void _startPolling(StreamController<Map<String, dynamic>> controller) {

@@ -56,12 +56,15 @@ If the virtual environment already exists, reinstall/update Python dependencies 
 
 ## Run
 ```bash
-python main.py
+npm run desktop
+
+# 舊版 PySide6 面板（進階工具 fallback）
+python main.py --legacy-ui
 ```
 
 Ubuntu:
 ```bash
-.venv/bin/python main.py
+.venv/bin/python main.py --legacy-ui
 ```
 
 Ubuntu GUI 若出現 `Could not load the Qt platform plugin "xcb"`，先重新執行 setup 補齊 Qt xcb runtime：
@@ -73,10 +76,10 @@ bash scripts/setup_ubuntu.sh
 若仍需追蹤 Qt plugin 載入路徑，可用：
 
 ```bash
-QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py
+QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py --legacy-ui
 ```
 
-本專案 GUI 使用 PySide6。程式啟動時會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
+正式主面板使用 Tauri v2 + Flutter Web；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。舊版 PySide6 面板仍可用 `python main.py --legacy-ui` 開啟，作為進階 replay 與診斷 fallback。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
 
 Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機、分析端或 Qt 預覽訊號累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，讓分析 worker 永遠取最新幀，並限制預覽影像訊號輸出避免主執行緒堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 GUI 後端手動切換比較穩定性。
 

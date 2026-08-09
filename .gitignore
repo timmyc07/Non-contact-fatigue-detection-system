@@ -13,6 +13,7 @@ build/
 dist/
 *.egg-info/
 node_modules/
+.dart_tool/
 
 # Tauri build outputs and generated capability schemas
 src-tauri/target/

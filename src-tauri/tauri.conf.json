@@ -4,9 +4,17 @@
   "version": "0.1.0",
   "identifier": "tw.fatigue-monitor.desktop",
   "build": {
-    "beforeDevCommand": "flutter run -d web-server --web-port 1420",
+    "beforeDevCommand": {
+      "script": "flutter run -d web-server --web-port 1420 --web-hostname 127.0.0.1",
+      "cwd": "../flutter_app",
+      "wait": false
+    },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "flutter build web --release",
+    "beforeBuildCommand": {
+      "script": "flutter build web --release",
+      "cwd": "../flutter_app",
+      "wait": true
+    },
     "frontendDist": "../flutter_app/build/web"
   },
   "app": {

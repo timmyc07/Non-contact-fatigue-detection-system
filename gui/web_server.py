@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import socket
 import threading
@@ -26,6 +27,13 @@ logger = logging.getLogger(__name__)
 _ws_connected_clients: set = set()
 
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_DESKTOP_UI_ORIGINS = {
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+}
 _PLAYBACK_DEFAULT_LIMIT = 100
 _PLAYBACK_MAX_LIMIT = 1000
 # /api/playback/full 用：分段載入避免長錄製一次全量塞進記憶體。
@@ -33,7 +41,15 @@ _PLAYBACK_MAX_LIMIT = 1000
 # 5000 為上限，避免單一請求被要求撈出過大批次拖垮伺服器記憶體。
 _PLAYBACK_FULL_DEFAULT_LIMIT = 2000
 _PLAYBACK_FULL_MAX_LIMIT = 5000
-WEB_DASHBOARD_DEFAULT_PORT = 5000
+def _configured_port() -> int:
+    try:
+        port = int(os.environ.get("NCFD_BACKEND_PORT", "5000"))
+    except ValueError:
+        return 5000
+    return port if 1 <= port <= 65535 else 5000
+
+
+WEB_DASHBOARD_DEFAULT_PORT = _configured_port()
 
 
 def get_lan_ipv4_addresses() -> list[str]:
@@ -86,6 +102,7 @@ def _build_allowed_origins(host: str, port: int) -> list[str]:
     origins = [
         f"http://127.0.0.1:{port}",
         f"http://localhost:{port}",
+        *_DESKTOP_UI_ORIGINS,
     ]
     if host not in ("127.0.0.1", "localhost", ""):
         origins.extend(f"http://{ip}:{port}" for ip in get_lan_ipv4_addresses())
@@ -356,6 +373,7 @@ def create_app(
     shutdown_token: Optional[str] = None,
     allowed_origins: Optional[list[str]] = None,
     access_token: Optional[str] = None,
+    control_handler: Optional[Callable[[str, dict[str, Any]], dict[str, Any]]] = None,
 ) -> tuple[Flask, SocketIO]:
     _fb_client = FileBrowserClient()
     _fb_lock = threading.Lock()
@@ -393,6 +411,16 @@ def create_app(
         ping_interval=25,
         max_http_buffer_size=10_000_000,
     )
+
+    @app.after_request
+    def _add_desktop_cors_headers(response: Response) -> Response:
+        origin = request.headers.get("Origin", "")
+        if origin in _DESKTOP_UI_ORIGINS:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Dashboard-Token"
+        return response
 
     def _ensure_lan_endpoint_allowed() -> Optional[Response]:
         """LAN 模式（伺服器綁定非 loopback）下驗證 dashboard access token。
@@ -472,6 +500,45 @@ def create_app(
             history = metrics_buffer.get_all()
             latest = history[-1] if history else None
         return jsonify({"success": True, "metrics": latest})
+
+    def _invoke_control(command: str, args: dict[str, Any]) -> tuple[Any, int]:
+        if control_handler is None:
+            return jsonify({"success": False, "error": "desktop control unavailable"}), 503
+        try:
+            result = control_handler(command, args)
+        except TimeoutError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 504
+        except (TypeError, ValueError) as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        except Exception:
+            logger.exception("Desktop control command failed: %s", command)
+            return jsonify({"success": False, "error": "command failed"}), 409
+        return jsonify({"success": True, "data": result}), 200
+
+    @app.route("/api/control/state", methods=["GET", "OPTIONS"])
+    def get_control_state():
+        if not _is_local_request():
+            abort(403)
+        if request.method == "OPTIONS":
+            return Response(status=204)
+        return _invoke_control("state.get", {})
+
+    @app.route("/api/control/command", methods=["POST", "OPTIONS"])
+    def run_control_command():
+        if not _is_local_request():
+            abort(403)
+        if request.method == "OPTIONS":
+            return Response(status=204)
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"success": False, "error": "JSON object required"}), 400
+        command = payload.get("command")
+        args = payload.get("args", {})
+        if not isinstance(command, str) or not command.strip():
+            return jsonify({"success": False, "error": "command is required"}), 400
+        if not isinstance(args, dict):
+            return jsonify({"success": False, "error": "args must be an object"}), 400
+        return _invoke_control(command.strip(), dict(args))
 
     @app.route("/api/playback")
     def playback_data():
@@ -911,6 +978,7 @@ class WebServerThread(threading.Thread):
         port: int = 5000,
         debug: bool = False,
         access_token: Optional[str] = None,
+        control_handler: Optional[Callable[[str, dict[str, Any]], dict[str, Any]]] = None,
     ):
         super().__init__(daemon=True, name="WebServerThread")
         self.metrics_buffer = metrics_buffer
@@ -937,6 +1005,7 @@ class WebServerThread(threading.Thread):
             shutdown_token=self._shutdown_token,
             allowed_origins=_build_allowed_origins(host, port),
             access_token=self.access_token,
+            control_handler=control_handler,
         )
         self._stop_flag = threading.Event()
         self._stopped_event = threading.Event()
