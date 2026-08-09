@@ -40,9 +40,9 @@ This boundary is deliberately additive. The numeric paths in `rppg/`, `gui/fatig
 This repository currently has Node and Rust, but no Flutter/Dart SDK. Once Flutter is installed:
 
 ```powershell
-flutter create flutter_app
 Set-Location flutter_app
 flutter pub get
+flutter build web --release
 Set-Location ..
 npm install --save-dev @tauri-apps/cli
 npx tauri dev
