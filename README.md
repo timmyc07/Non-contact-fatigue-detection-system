@@ -62,6 +62,17 @@ npm run desktop
 python main.py --legacy-ui
 ```
 
+Windows 一鍵啟動（會自動設定 Flutter PATH、檢查 Python engine 並啟動 Tauri）：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
+```
+
+產生 Windows NSIS 安裝包：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
+```
+輸出位於 `src-tauri\target\release\bundle\nsis\`。安裝包包含 Tauri/Flutter 外殼；Python engine 仍需與安裝包一起部署，或透過 `NCFD_ENGINE_ROOT` 和 `NCFD_ENGINE_PYTHON` 指向包含 `.venv`、`main.py`、`models` 的 engine 目錄。
+
 Ubuntu:
 ```bash
 .venv/bin/python main.py --legacy-ui
