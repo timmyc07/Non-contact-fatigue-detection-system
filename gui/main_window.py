@@ -109,38 +109,38 @@ FONT_MONO = '"JetBrains Mono", "Consolas", "Cascadia Mono", monospace'
 _PALETTES: dict[str, dict[str, str]] = {
     "dark": {
         "DESK": "#0b0d0f",       # 視窗最外層底
-        "BG": "#15181b",         # 內容底
-        "SIDEBAR": "#171b1e",    # 側邊導航底（微抬升）
-        "CARD": "#1b1f23",       # 卡片 / GroupBox
-        "INPUT": "#22272c",      # 輸入元件底
-        "VIDEO": "#0e1114",      # 影片 / Log 深底
-        "TEXT": "#e6e9ec",
-        "TEXT_MUTED": "rgba(230,233,236,0.62)",
-        "TEXT_FAINT": "rgba(230,233,236,0.42)",
+        "BG": "#0d1113",         # 內容底
+        "SIDEBAR": "#101719",    # 側邊導航底
+        "CARD": "#172023",       # 卡片 / GroupBox
+        "INPUT": "#202c2f",      # 輸入元件底
+        "VIDEO": "#0a0e10",      # 影片 / Log 深底
+        "TEXT": "#e5eeed",
+        "TEXT_MUTED": "rgba(229,238,237,0.64)",
+        "TEXT_FAINT": "rgba(229,238,237,0.44)",
         # VIDEO 深底始終為深色（兩主題皆然），其上文字固定用淺色，不隨主題翻轉。
         "TEXT_ON_VIDEO": "rgba(255,255,255,0.82)",
         "TEXT_ON_VIDEO_MUTED": "rgba(255,255,255,0.5)",
-        "ACCENT": "#7ea6cd",
-        "ACCENT_HOVER": "#94bce3",
-        "ACCENT_PRESSED": "#6a90b8",
-        "ON_ACCENT": "#15181b",  # accent 填色上的文字
-        "DIVIDER": "rgba(230,233,236,0.16)",
-        "DIVIDER_STRONG": "rgba(230,233,236,0.28)",
-        "HOVER": "rgba(230,233,236,0.07)",
-        "PRESSED": "rgba(230,233,236,0.14)",
-        "NAV_HOVER": "rgba(126,166,205,0.12)",
-        "BAD": "#d9836c",
-        "BAD_TEXT": "#d9836c",
-        "BAD_BG": "rgba(217,131,108,0.14)",
-        "MENUBAR_BG": "#1f2429",
+        "ACCENT": "#7ce2cf",
+        "ACCENT_HOVER": "#9aefdf",
+        "ACCENT_PRESSED": "#55b9a8",
+        "ON_ACCENT": "#062c27",  # accent 填色上的文字
+        "DIVIDER": "rgba(229,238,237,0.16)",
+        "DIVIDER_STRONG": "rgba(229,238,237,0.28)",
+        "HOVER": "rgba(229,238,237,0.07)",
+        "PRESSED": "rgba(229,238,237,0.14)",
+        "NAV_HOVER": "rgba(124,226,207,0.12)",
+        "BAD": "#ff9f93",
+        "BAD_TEXT": "#ff9f93",
+        "BAD_BG": "rgba(255,159,147,0.14)",
+        "MENUBAR_BG": "#131f21",
         # 綜合疲勞大卡（hero）：accent 10% 疊在 BG 上的近似值 + accent 邊框。
-        "HERO_BG": "#1b2530",
+        "HERO_BG": "#132a27",
         # 預覽面板 blueprint 網格線（深底上的淺色細線）。
         "GRID_LINE": "rgba(255,255,255,0.06)",
         # DEVICE STATUS / 預覽 tag 的狀態圓點語意色（非疲勞等級語意）。
-        "STATUS_OK": "#6fb891",
-        "STATUS_WARN": "#d6b56a",
-        "STATUS_OFF": "rgba(230,233,236,0.30)",
+        "STATUS_OK": "#7ce2cf",
+        "STATUS_WARN": "#edc46e",
+        "STATUS_OFF": "rgba(229,238,237,0.30)",
     },
     "light": {
         "DESK": "#d4d4d7",
@@ -202,7 +202,7 @@ _QSS_TEMPLATE = Template(
         font-weight: 600;
         font-size: 15px;
         border: 1px solid $DIVIDER;
-        border-radius: 12px;
+        border-radius: 8px;
         margin-top: 14px;
         padding: 18px 16px 16px 16px;
         background-color: $CARD;
@@ -253,7 +253,7 @@ _QSS_TEMPLATE = Template(
     QComboBox, QSpinBox, QDoubleSpinBox {
         background-color: $INPUT;
         border: 1px solid $DIVIDER;
-        border-radius: 10px;
+        border-radius: 7px;
         padding: 6px 10px;
         min-height: 22px;
         font-size: 13px;
@@ -273,7 +273,7 @@ _QSS_TEMPLATE = Template(
     QPushButton {
         background-color: transparent;
         border: 1px solid $DIVIDER;
-        border-radius: 10px;
+        border-radius: 7px;
         padding: 8px 16px;
         min-height: 20px;
         font-family: """

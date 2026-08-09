@@ -710,10 +710,103 @@
             .playback-controls { flex-direction: column; gap: 12px; }
             .playback-controls-left { width: 100%; justify-content: center; }
         }
+        /* Pavise-inspired shell: persistent navigation and dense operator panels. */
+        :root {
+            --md-sys-color-primary: #7ce2cf;
+            --md-sys-color-on-primary: #062c27;
+            --md-sys-color-primary-container: #164d46;
+            --md-sys-color-on-primary-container: #b6f5e8;
+            --md-sys-color-secondary-container: #294943;
+            --md-sys-color-surface: #0d1113;
+            --md-sys-color-surface-container: #172023;
+            --md-sys-color-surface-container-high: #1d292c;
+            --md-sys-color-surface-container-highest: #253236;
+            --md-sys-color-on-surface: #e5eeed;
+            --md-sys-color-on-surface-variant: #9eafad;
+            --md-sys-color-outline: #617572;
+            --md-sys-color-outline-variant: #324346;
+            --md-sys-color-tertiary: #e2bc76;
+            --color-info: #81c8ff;
+            --color-success: #7ce2cf;
+            --color-warning: #edc46e;
+            --color-danger: #ff9f93;
+            --color-heart: #ff9fa9;
+        }
+        body { padding: 0; background: #0a0e10; }
+        .app-shell { min-height: 100vh; display: flex; }
+        .pavise-sidebar {
+            width: 236px; flex: 0 0 236px; padding: 22px 14px 18px;
+            background: #101719; border-right: 1px solid #263538;
+            display: flex; flex-direction: column; gap: 18px;
+        }
+        .brand-lockup { display: flex; align-items: center; gap: 11px; padding: 4px 10px 14px; }
+        .brand-mark { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; color: #062c27; background: var(--md-sys-color-primary); font-size: 18px; }
+        .brand-name { color: #eff8f6; font-weight: 700; letter-spacing: .04em; font-size: .95rem; }
+        .brand-caption { color: #718683; font-size: .68rem; margin-top: 2px; }
+        .nav-section-label { color: #718683; font-size: .65rem; letter-spacing: .12em; text-transform: uppercase; padding: 0 12px 5px; }
+        .tabs { width: auto; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; background: transparent; }
+        .tab-btn { width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: 7px; justify-content: flex-start; color: #9eafad; font-size: .82rem; gap: 11px; }
+        .tab-btn:hover { background: #1a282a; color: #e5eeed; }
+        .tab-btn.active { background: #1e3735; border-color: #2d5b54; color: #b6f5e8; }
+        .sidebar-foot { margin-top: auto; padding: 12px; border-top: 1px solid #263538; color: #718683; font-size: .72rem; line-height: 1.55; }
+        .sidebar-foot strong { color: #d8e5e2; font-weight: 600; display: block; margin-bottom: 3px; }
+        .workspace { flex: 1; min-width: 0; }
+        .workspace > .container { max-width: none; margin: 0; padding: 28px 34px 42px; }
+        .workspace > .container > .tabs { display: none; }
+        .header { margin: 0 0 21px; padding: 0 0 18px; border-bottom: 1px solid #263538; }
+        .header-icon { width: 42px; height: 42px; border-radius: 8px; background: #173f3a; }
+        .header h1 { font-size: 1.5rem; letter-spacing: 0; }
+        .header p { color: #8da19d; }
+        #live-time { background: #131f21; border: 1px solid #2a3e40; padding: 7px 10px; border-radius: 6px; }
+        .tab-content > .system-status-bar { border: 1px solid #2b4747; background: #132321; border-radius: 7px; }
+        .card, .waveform-container, .video-playback-section { border: 1px solid #28393c; border-radius: 8px; background: #172023; }
+        .card { padding: 19px; }
+        .card-title { margin-bottom: 15px; }
+        .metric-item { border-radius: 6px; background: #202c2f; }
+        .metric-value { font-size: 1.35rem; }
+        .preview-card { border-color: #28393c; border-radius: 8px; background: #172023; }
+        .preview-frame-container, .video-container { border-radius: 6px; }
+        .connection-status { right: 22px; bottom: 18px; border-radius: 6px; }
+        @media (max-width: 900px) {
+            .pavise-sidebar { width: 76px; flex-basis: 76px; padding: 18px 9px; }
+            .brand-lockup { justify-content: center; padding-left: 0; padding-right: 0; }
+            .brand-copy, .nav-section-label, .sidebar-foot { display: none; }
+            .tab-btn { justify-content: center; padding: 12px 8px; }
+            .tab-btn span:last-child { display: none; }
+            .workspace > .container { padding: 22px 20px 34px; }
+        }
+        @media (max-width: 600px) {
+            .app-shell { display: block; }
+            .pavise-sidebar { width: 100%; height: auto; padding: 9px 12px; border-right: 0; border-bottom: 1px solid #263538; flex-direction: row; align-items: center; gap: 10px; }
+            .brand-lockup { padding: 0; }
+            .tabs { flex-direction: row; flex: 1; }
+            .tab-btn { justify-content: center; padding: 9px 8px; }
+            .tab-btn span:last-child { display: inline; }
+            .workspace > .container { padding: 18px 14px 30px; }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="app-shell">
+        <aside class="pavise-sidebar" aria-label="系統導覽">
+            <div class="brand-lockup">
+                <div class="brand-mark"><span class="material-symbols-outlined">shield</span></div>
+                <div class="brand-copy"><div class="brand-name">NCFD / PAVISE</div><div class="brand-caption">OPERATOR CONSOLE</div></div>
+            </div>
+            <div class="nav-section-label">Workspace</div>
+            <nav class="tabs">
+                <button class="tab-btn active" onclick="switchTab('dashboard', event)">
+                    <span class="material-symbols-outlined" style="font-size:20px;">monitoring</span><span>即時監測</span>
+                </button>
+                <button class="tab-btn" onclick="switchTab('playback', event)">
+                    <span class="material-symbols-outlined" style="font-size:20px;">history</span><span>歷史回放</span>
+                </button>
+            </nav>
+            <div class="nav-section-label">System</div>
+            <div class="sidebar-foot"><strong>Non-contact fatigue detection</strong>MediaPipe + rPPG<br>運行狀態由下方連線指示器提供</div>
+        </aside>
+        <section class="workspace">
+        <div class="container">
         <header class="header">
             <div class="header-left">
                 <div class="header-icon">
@@ -1261,6 +1354,8 @@
             </div>
 
         </main>
+        </div>
+        </section>
     </div>
 
     <div class="connection-status disconnected" id="connection-status">
