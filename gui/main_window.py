@@ -3338,6 +3338,8 @@ class MainWindow(QMainWindow):
             "auto_capture_active": self._auto_capture_timer is not None,
             "auto_capture_seconds": int(self._spn_auto_capture_seconds.value()),
             "auto_capture_include_belt": self._chk_auto_capture_belt.isChecked(),
+            "benchmark_active": bool(self._benchmark_active),
+            "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
             "selected_camera_index": self.selected_camera_index,
             "cameras": cameras,
             "behavior_enabled": self._chk_behavior.isChecked(),
@@ -3348,10 +3350,31 @@ class MainWindow(QMainWindow):
             "overlay_preview": self._chk_preview.isChecked(),
             "overlay_metrics": self._chk_metrics.isChecked(),
             "overlay_locked": self._chk_lock.isChecked(),
+            "overlay_all": self._chk_all.isChecked(),
+            "overlay_opacity": int(self._sld_opacity.value()),
             "resolution": str(self._cmb_resolution.currentText()),
             "fps": str(self._cmb_fps.currentText()),
             "backend": str(self._cmb_backend.currentData() or "auto"),
             "legacy_panel_visible": self.isVisible(),
+            "web_allow_lan": self._act_web_allow_lan.isChecked(),
+            "profile_loaded": self._personal_profile is not None,
+            "replay_running": self._replay_thread is not None,
+            "replay_stopping": bool(self._replay_stopping),
+            "replay_dataset_dir": str(self._replay_dataset_dir or ""),
+            "replay_jobs": int(self._spn_replay_jobs.value()),
+            "replay_annotated": self._chk_replay_annotated.isChecked(),
+            "replay_mode": str(self._replay_mode_label),
+            "replay_total": int(self._replay_total_count),
+            "replay_done": int(self._replay_done_count),
+            "replay_current": self._lbl_replay_current.text(),
+            "replay_result": self._lbl_replay_result.text(),
+            "replay_parallel_status": self._lbl_replay_parallel_status.text(),
+            "belt_config": {
+                "name_prefix": self._belt_cfg.name_prefix if self._belt_cfg else "",
+                "address": self._belt_cfg.address if self._belt_cfg else "",
+                "rppg_param_tuning_enabled": bool(self._belt_cfg.rppg_param_tuning_enabled) if self._belt_cfg else False,
+                "capture_enabled": bool(self._belt_cfg.capture_enabled) if self._belt_cfg else False,
+            },
         }
 
     def _set_combo_value(self, combo: QComboBox, value: object, *, by_data: bool = False) -> None:
@@ -3456,6 +3479,83 @@ class MainWindow(QMainWindow):
             self._spn_auto_capture_seconds.setValue(duration)
             if "include_belt" in args:
                 self._chk_auto_capture_belt.setChecked(self._require_bool(args, "include_belt"))
+
+        elif command == "benchmark.set":
+            enabled = self._require_bool(args, "enabled")
+            if enabled and not self._pipeline_running:
+                raise ValueError("Start the pipeline before running the benchmark")
+            if enabled != self._benchmark_active:
+                self._toggle_benchmark()
+
+        elif command == "monitor.layout":
+            self._set_monitor_layout(self._require_bool(args, "focus"))
+
+        elif command == "overlay.configure":
+            if "all" in args:
+                self._chk_all.setChecked(self._require_bool(args, "all"))
+            if "opacity" in args:
+                opacity = args["opacity"]
+                if isinstance(opacity, bool) or not isinstance(opacity, int) or not 0 <= opacity <= 100:
+                    raise ValueError("opacity must be between 0 and 100")
+                self._sld_opacity.setValue(opacity)
+
+        elif command == "replay.choose":
+            self._choose_replay_dir()
+
+        elif command == "replay.configure":
+            if self._replay_thread is not None:
+                raise ValueError("Stop the replay before changing replay settings")
+            if "path" in args:
+                raw_path = args.get("path")
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    raise ValueError("path must be a non-empty string")
+                selected = Path(raw_path).expanduser()
+                if not selected.exists() or not selected.is_dir():
+                    raise ValueError(f"Replay folder is unavailable: {selected}")
+                self._replay_dataset_dir = selected
+                self._lbl_replay_dir.setText(str(selected))
+            if "jobs" in args:
+                jobs = args.get("jobs")
+                if isinstance(jobs, bool) or not isinstance(jobs, int) or not 1 <= jobs <= 4:
+                    raise ValueError("jobs must be between 1 and 4")
+                self._spn_replay_jobs.setValue(jobs)
+            if "annotated" in args:
+                self._chk_replay_annotated.setChecked(self._require_bool(args, "annotated"))
+
+        elif command == "replay.set":
+            enabled = self._require_bool(args, "enabled")
+            if not enabled:
+                self._stop_replay()
+            elif self._replay_thread is None:
+                if self._pipeline_running or self._recording:
+                    raise ValueError("Stop the live pipeline and recording before replay")
+                if self._replay_dataset_dir is None:
+                    raise ValueError("Choose a replay folder before starting replay")
+                mode = str(args.get("mode", "single"))
+                if mode == "parallel":
+                    self._start_replay_parallel(notify=False)
+                elif mode == "single":
+                    self._start_replay()
+                else:
+                    raise ValueError("mode must be single or parallel")
+
+        elif command == "settings.action":
+            action = str(args.get("action", ""))
+            actions = {
+                "hotkeys": self._on_hotkeys,
+                "profile": self._on_user_profile,
+                "alarm": self._on_alarm_settings,
+                "recordings": self._open_recordings_dir,
+                "save": self._on_save_layout,
+                "reset": self._on_reset_layout,
+                "web": self._on_web_info,
+            }
+            if action == "web_lan":
+                self._act_web_allow_lan.setChecked(self._require_bool(args, "enabled"))
+            elif action in actions:
+                actions[action]()
+            else:
+                raise ValueError(f"Unsupported settings action: {action}")
 
         elif command == "baseline.start":
             if not self._pipeline_running or not self._chk_behavior.isChecked():
@@ -3774,7 +3874,7 @@ class MainWindow(QMainWindow):
     def _start_replay(self) -> None:
         self._start_replay_run(jobs=1, preview_enabled=True, mode_label="回放中")
 
-    def _start_replay_parallel(self) -> None:
+    def _start_replay_parallel(self, *, notify: bool = True) -> None:
         jobs = max(1, int(self._spn_replay_jobs.value()))
         if jobs > 4:
             jobs = 4
@@ -3783,12 +3883,13 @@ class MainWindow(QMainWindow):
         if self._chk_replay_annotated.isChecked():
             self._chk_replay_annotated.setChecked(False)
             self._append_log("[影片回測] 平行驗證已自動關閉輸出標註影片；需要標註畫面請用「開始批次」單工模式")
-            QMessageBox.information(
-                self,
-                "影片回測平行驗證",
-                "平行驗證會同時啟動多個 MediaPipe/影片解碼流程。為避免子行程崩潰，已自動關閉「輸出標註影片」。\n\n"
-                "需要標註影片時，請改用「開始批次」單工模式。正式大量驗證建議平行數 2-4。",
-            )
+            if notify:
+                QMessageBox.information(
+                    self,
+                    "影片回測平行驗證",
+                    "平行驗證會同時啟動多個 MediaPipe/影片解碼流程。為避免子行程崩潰，已自動關閉「輸出標註影片」。\n\n"
+                    "需要標註影片時，請改用「開始批次」單工模式。正式大量驗證建議平行數 2-4。",
+                )
         self._start_replay_run(jobs=jobs, preview_enabled=False, mode_label=f"平行驗證中 x{jobs}")
 
     def _start_replay_run(self, *, jobs: int, preview_enabled: bool, mode_label: str) -> None:

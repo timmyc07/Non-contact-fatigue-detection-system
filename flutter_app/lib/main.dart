@@ -237,17 +237,27 @@ class _MonitorShellState extends State<MonitorShell> {
 
   Widget _content() {
     if (_selectedSection == 1) {
+      return ChestBeltView(
+        metrics: _metrics,
+        state: _engineState,
+        busy: _commandBusy,
+        onCommand: _runCommand,
+      );
+    }
+    if (_selectedSection == 2) {
       return PlaybackView(
         recordings: _recordings,
         selected: _selectedRecording,
         rows: _playbackRows,
         busy: _playbackBusy,
+        state: _engineState,
+        onCommand: _runCommand,
         onRefresh: _loadRecordings,
         onOpen: _openRecording,
         onClose: () => setState(() => _selectedRecording = null),
       );
     }
-    if (_selectedSection == 2) {
+    if (_selectedSection == 3) {
       return SettingsView(
         state: _engineState,
         busy: _commandBusy,
@@ -352,6 +362,7 @@ class NavigationRailPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     const items = [
       (Icons.radar_outlined, '即時監測'),
+      (Icons.favorite_outline, '心跳帶'),
       (Icons.history, '歷史回放'),
       (Icons.tune, '系統設定'),
     ];
@@ -527,6 +538,8 @@ class DesktopControlPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
     final recording = state['recording'] == true;
+    final benchmark = state['benchmark_active'] == true;
+    final focus = state['monitor_focus'] == true;
     final capturing = state['auto_capture_active'] == true;
     final autoDuration = (state['auto_capture_seconds'] as num?)?.toInt() ?? 60;
     final includeBelt = state['auto_capture_include_belt'] == true;
@@ -551,6 +564,12 @@ class DesktopControlPanel extends StatelessWidget {
           label: Text(running ? '停止監測' : '開始監測'),
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44), backgroundColor: running ? const Color(0xffb75255) : const Color(0xff3fa98d)),
         ),
+        const SizedBox(height: 9),
+        Row(children: [
+          Expanded(child: OutlinedButton.icon(onPressed: busy || !running ? null : () => onCommand('benchmark.set', <String, dynamic>{'enabled': !benchmark}), icon: Icon(benchmark ? Icons.stop_circle_outlined : Icons.speed_outlined), label: Text(benchmark ? '停止基準測試' : 'DL 基準測試（120s）'))),
+          const SizedBox(width: 8),
+          Tooltip(message: '切換右側數值欄顯示', child: SegmentedButton<bool>(segments: const [ButtonSegment<bool>(value: false, label: Text('分割')), ButtonSegment<bool>(value: true, label: Text('專注'))], selected: <bool>{focus}, onSelectionChanged: busy ? null : (values) => onCommand('monitor.layout', <String, dynamic>{'focus': values.first}))),
+        ]),
         const SizedBox(height: 9),
         OutlinedButton.icon(
           onPressed: busy || (!running && !recording) ? null : () => onCommand('recording.set', <String, dynamic>{'enabled': !recording}),
@@ -646,6 +665,70 @@ class _SignalPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+class ChestBeltView extends StatelessWidget {
+  const ChestBeltView({required this.metrics, required this.state, required this.busy, required this.onCommand, super.key});
+  final Map<String, dynamic> metrics;
+  final Map<String, dynamic> state;
+  final bool busy;
+  final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
+
+  String _text(String key, [String fallback = '--']) {
+    final value = metrics[key]?.toString();
+    return value == null || value.isEmpty ? fallback : value;
+  }
+
+  double _number(String key) => (metrics[key] as num?)?.toDouble() ?? 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final config = state['belt_config'] is Map ? Map<String, dynamic>.from(state['belt_config'] as Map) : <String, dynamic>{};
+    final enabled = state['belt_calibration'] == true;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(30, 28, 30, 34),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('心跳帶設備', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)), const SizedBox(height: 7), Text('BLE 真值只用於 rPPG 校準與訊號檢視，不進入疲勞融合分數。', style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 13))])),
+          _BeltStatusPill(label: enabled ? (_text('belt_state', 'idle') == 'connected' ? '已連線' : '啟動中') : '未啟用', color: enabled ? const Color(0xff58c6a9) : const Color(0xffe0a35d)),
+        ]),
+        const SizedBox(height: 20),
+        HeartRateBeltPanel(metrics: metrics, engineState: state, busy: busy, onCommand: onCommand),
+        const SizedBox(height: 14),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: GlassPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('rPPG 校準 / CALIBRATION', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            _BeltDetailRow(label: 'Offset', value: '${_number('calib_offset_bpm').toStringAsFixed(1)} BPM'),
+            _BeltDetailRow(label: '原始殘差', value: '${_number('calib_raw_residual_bpm').toStringAsFixed(1)} BPM'),
+            _BeltDetailRow(label: '校正後殘差', value: '${_number('calib_residual_bpm').toStringAsFixed(1)} BPM'),
+            _BeltDetailRow(label: '信心 / 狀態', value: '${_text('calib_confidence')} / ${metrics['calib_converged'] == true ? '已收斂' : '暖機中'}'),
+            _BeltDetailRow(label: '配對數', value: _text('calib_pairs_used', '0')),
+          ]))),
+          const SizedBox(width: 14),
+          Expanded(child: GlassPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('設備設定 / PREFERENCES', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            _BeltDetailRow(label: '名稱前綴', value: config['name_prefix']?.toString().isNotEmpty == true ? config['name_prefix'].toString() : '未指定'),
+            _BeltDetailRow(label: '指定位址', value: config['address']?.toString().isNotEmpty == true ? config['address'].toString() : '自動掃描'),
+            _BeltDetailRow(label: '參數自適應', value: config['rppg_param_tuning_enabled'] == true ? '開啟' : '關閉'),
+            _BeltDetailRow(label: '同步錄製', value: config['capture_enabled'] == true ? '開啟' : '關閉'),
+            const SizedBox(height: 8),
+            Text('若要變更設備前綴、位址或同步錄製，請編輯 config/hr_belt.json 後重新啟動。', style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 11)),
+          ]))),
+        ]),
+      ]),
+    );
+  }
+}
+
+class _BeltDetailRow extends StatelessWidget {
+  const _BeltDetailRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [SizedBox(width: 94, child: Text(label, style: TextStyle(color: Colors.white.withValues(alpha: .48), fontSize: 11))), Expanded(child: Text(value, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))]));
 }
 
 class HeartRateBeltPanel extends StatelessWidget {
@@ -836,11 +919,13 @@ class _QualityStrip extends StatelessWidget {
 }
 
 class PlaybackView extends StatelessWidget {
-  const PlaybackView({required this.recordings, required this.selected, required this.rows, required this.busy, required this.onRefresh, required this.onOpen, required this.onClose, super.key});
+  const PlaybackView({required this.recordings, required this.selected, required this.rows, required this.busy, required this.state, required this.onCommand, required this.onRefresh, required this.onOpen, required this.onClose, super.key});
   final List<Map<String, dynamic>> recordings;
   final Map<String, dynamic>? selected;
   final List<Map<String, dynamic>> rows;
   final bool busy;
+  final Map<String, dynamic> state;
+  final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
   final Future<void> Function() onRefresh;
   final Future<void> Function(Map<String, dynamic>) onOpen;
   final VoidCallback onClose;
@@ -857,6 +942,8 @@ class PlaybackView extends StatelessWidget {
         const SizedBox(height: 7),
         Text('選擇一段錄影檢視完整指標與事件時間線。', style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 13)),
         const SizedBox(height: 24),
+        _ReplayControlPanel(state: state, busy: busy, onCommand: onCommand),
+        const SizedBox(height: 16),
         Expanded(
           child: selected == null
               ? (recordings.isEmpty
@@ -880,6 +967,89 @@ class PlaybackView extends StatelessWidget {
                     ))
               : _PlaybackDetail(recording: selected!, rows: rows, busy: busy, onClose: onClose),
         ),
+      ]),
+    );
+  }
+}
+
+class _ReplayControlPanel extends StatefulWidget {
+  const _ReplayControlPanel({required this.state, required this.busy, required this.onCommand});
+  final Map<String, dynamic> state;
+  final bool busy;
+  final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
+
+  @override
+  State<_ReplayControlPanel> createState() => _ReplayControlPanelState();
+}
+
+class _ReplayControlPanelState extends State<_ReplayControlPanel> {
+  late final TextEditingController _pathController;
+  late final FocusNode _pathFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _pathController = TextEditingController(text: widget.state['replay_dataset_dir']?.toString() ?? '');
+    _pathFocusNode = FocusNode();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReplayControlPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final path = widget.state['replay_dataset_dir']?.toString() ?? '';
+    if (_pathController.text != path && !_pathFocusNode.hasFocus) {
+      _pathController.text = path;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pathController.dispose();
+    _pathFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final running = widget.state['replay_running'] == true;
+    final stopping = widget.state['replay_stopping'] == true;
+    final jobs = (widget.state['replay_jobs'] as num?)?.toInt() ?? 2;
+    final annotated = widget.state['replay_annotated'] == true;
+    final total = (widget.state['replay_total'] as num?)?.toInt() ?? 0;
+    final done = (widget.state['replay_done'] as num?)?.toInt() ?? 0;
+    return GlassPanel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('批次回測控制', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const Spacer(),
+          if (running) Text('$done / ${total > 0 ? total : '--'}', style: const TextStyle(color: Color(0xff73ddbf), fontWeight: FontWeight.w700)),
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: TextField(controller: _pathController, focusNode: _pathFocusNode, enabled: !running && !widget.busy, decoration: const InputDecoration(labelText: '影片資料夾', hintText: '輸入資料夾路徑', border: OutlineInputBorder(), isDense: true))),
+          const SizedBox(width: 9),
+          IconButton(onPressed: running || widget.busy ? null : () => widget.onCommand('replay.choose'), tooltip: '選擇資料夾', icon: const Icon(Icons.folder_open_outlined)),
+          IconButton(onPressed: running || widget.busy ? null : () => widget.onCommand('replay.configure', <String, dynamic>{'path': _pathController.text}), tooltip: '套用路徑', icon: const Icon(Icons.check_circle_outline)),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          const Text('平行數'),
+          const SizedBox(width: 10),
+          DropdownButton<int>(value: <int>[1, 2, 3, 4].contains(jobs) ? jobs : 2, items: const [1, 2, 3, 4].map((value) => DropdownMenuItem<int>(value: value, child: Text('$value'))).toList(), onChanged: running || widget.busy ? null : (value) { if (value != null) widget.onCommand('replay.configure', <String, dynamic>{'jobs': value}); }),
+          const SizedBox(width: 20),
+          Expanded(child: SwitchListTile.adaptive(contentPadding: EdgeInsets.zero, dense: true, title: const Text('輸出標註影片'), value: annotated, onChanged: running || widget.busy ? null : (value) => widget.onCommand('replay.configure', <String, dynamic>{'annotated': value}))),
+        ]),
+        Row(children: [
+          FilledButton.icon(onPressed: running || widget.busy ? null : () => widget.onCommand('replay.set', <String, dynamic>{'enabled': true, 'mode': 'single'}), icon: const Icon(Icons.play_arrow), label: const Text('開始批次')),
+          const SizedBox(width: 9),
+          OutlinedButton.icon(onPressed: running || widget.busy ? null : () => widget.onCommand('replay.set', <String, dynamic>{'enabled': true, 'mode': 'parallel'}), icon: const Icon(Icons.speed_outlined), label: const Text('平行驗證')),
+          const SizedBox(width: 9),
+          OutlinedButton.icon(onPressed: !running || stopping || widget.busy ? null : () => widget.onCommand('replay.set', <String, dynamic>{'enabled': false}), icon: const Icon(Icons.stop), label: Text(stopping ? '停止中' : '停止')),
+        ]),
+        const SizedBox(height: 9),
+        Text(widget.state['replay_current']?.toString() ?? '目前影片：--', style: TextStyle(color: Colors.white.withValues(alpha: .55), fontSize: 11)),
+        if ((widget.state['replay_parallel_status']?.toString() ?? '').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 4), child: Text(widget.state['replay_parallel_status'].toString(), style: TextStyle(color: Colors.white.withValues(alpha: .42), fontSize: 10), maxLines: 2, overflow: TextOverflow.ellipsis)),
+        if ((widget.state['replay_result']?.toString() ?? '').isNotEmpty && widget.state['replay_result'] != '摘要檔：--') Padding(padding: const EdgeInsets.only(top: 5), child: Text(widget.state['replay_result'].toString(), style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 10), maxLines: 3, overflow: TextOverflow.ellipsis)),
       ]),
     );
   }
@@ -935,6 +1105,7 @@ class SettingsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
+    final opacity = (state['overlay_opacity'] as num?)?.toDouble() ?? 55;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(30, 28, 30, 30),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -973,22 +1144,34 @@ class SettingsView extends StatelessWidget {
             Expanded(child: _SettingDropdown(label: '目標 FPS', value: state['fps']?.toString(), values: const ['15', '24', '30', '60'], enabled: !busy && !running, onChanged: (value) => onCommand('camera.configure', <String, dynamic>{'fps': value}))),
           ]),
           const SizedBox(height: 4),
+          _SettingDropdown(label: '影像後端', value: state['backend']?.toString(), values: const ['ffmpeg'], enabled: !busy && !running, onChanged: (value) => onCommand('camera.configure', <String, dynamic>{'backend': value})),
+          const SizedBox(height: 4),
           _SettingSwitch(title: '水平翻轉', subtitle: '修正鏡像攝影機方向', value: state['horizontal_flip'] == true, enabled: !busy && !running, onChanged: (value) => onCommand('camera.configure', <String, dynamic>{'horizontal_flip': value})),
         ])),
         const SizedBox(height: 14),
         GlassPanel(child: Column(children: [
+          _SettingSwitch(title: '全部 Overlay', subtitle: '同步顯示或隱藏鏡頭與數值 Overlay', value: state['overlay_all'] == true, enabled: !busy, onChanged: (value) => onCommand('overlay.configure', <String, dynamic>{'all': value})),
+          const Divider(color: Colors.white12),
           _SettingSwitch(title: '桌面鏡頭 Overlay', subtitle: '在 Tauri 視窗外顯示即時鏡頭疊圖', value: state['overlay_preview'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'overlay_preview': value})),
           const Divider(color: Colors.white12),
           _SettingSwitch(title: '桌面數值 Overlay', subtitle: '顯示疲勞與生理訊號即時指標', value: state['overlay_metrics'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'overlay_metrics': value})),
           const Divider(color: Colors.white12),
           _SettingSwitch(title: 'Overlay 點擊穿透', subtitle: '鎖定後不攔截桌面滑鼠操作', value: state['overlay_locked'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'overlay_locked': value})),
+          const SizedBox(height: 6),
+          Row(children: [const SizedBox(width: 102, child: Text('透明度', style: TextStyle(fontSize: 12))), Expanded(child: Slider(value: opacity.clamp(0, 100).toDouble(), min: 0, max: 100, divisions: 100, label: '${opacity.toStringAsFixed(0)}%', onChanged: busy ? null : (value) => onCommand('overlay.configure', <String, dynamic>{'opacity': value.round()}))), SizedBox(width: 42, child: Text('${opacity.toStringAsFixed(0)}%', textAlign: TextAlign.right))]),
         ])),
         const SizedBox(height: 18),
         Wrap(spacing: 10, runSpacing: 10, children: [
           FilledButton.icon(onPressed: busy ? null : () => onCommand('settings.save'), icon: const Icon(Icons.save_outlined), label: const Text('儲存設定')),
           OutlinedButton.icon(onPressed: busy || !running ? null : () => onCommand('baseline.start'), icon: const Icon(Icons.person_search_outlined), label: const Text('記錄清醒基線')),
-          OutlinedButton.icon(onPressed: busy ? null : () => onCommand('legacy.show'), icon: const Icon(Icons.open_in_new), label: const Text('開啟進階工具面板')),
+          OutlinedButton.icon(onPressed: busy ? null : () => onCommand('settings.action', <String, dynamic>{'action': 'recordings'}), icon: const Icon(Icons.folder_open_outlined), label: const Text('開啟記錄目錄')),
+          OutlinedButton.icon(onPressed: busy ? null : () => onCommand('settings.action', <String, dynamic>{'action': 'hotkeys'}), icon: const Icon(Icons.keyboard_outlined), label: const Text('快捷鍵')),
+          OutlinedButton.icon(onPressed: busy ? null : () => onCommand('settings.action', <String, dynamic>{'action': 'profile'}), icon: const Icon(Icons.badge_outlined), label: const Text('使用者資料')),
+          OutlinedButton.icon(onPressed: busy ? null : () => onCommand('settings.action', <String, dynamic>{'action': 'alarm'}), icon: const Icon(Icons.notifications_active_outlined), label: const Text('警報器')),
+          OutlinedButton.icon(onPressed: busy ? null : () => onCommand('settings.action', <String, dynamic>{'action': 'web'}), icon: const Icon(Icons.open_in_browser_outlined), label: const Text('Web 儀表板')),
         ]),
+        const SizedBox(height: 10),
+        _SettingSwitch(title: '允許區域網存取 Web 儀表板', subtitle: '僅在受信任網路啟用未加密 LAN 廣播', value: state['web_allow_lan'] == true, enabled: !busy, onChanged: (value) => onCommand('settings.action', <String, dynamic>{'action': 'web_lan', 'enabled': value})),
         if (running) Padding(padding: const EdgeInsets.only(top: 14), child: Text('監測運作中：攝影機解析度、FPS 與 backend 需停止管線後調整。', style: TextStyle(color: const Color(0xffe0a35d).withValues(alpha: .9), fontSize: 12))),
       ]),
     );
