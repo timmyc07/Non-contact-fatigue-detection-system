@@ -42,6 +42,9 @@
   "bundle": {
     "active": true,
     "icon": ["icons/icon.ico"],
+    "resources": {
+      "../dist/ncfd-engine/": "engine/"
+    },
     "targets": ["nsis"],
     "createUpdaterArtifacts": false
   }

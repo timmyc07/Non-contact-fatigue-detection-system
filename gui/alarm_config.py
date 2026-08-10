@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from gui.runtime_paths import resource_path, resource_root
+
 ALARM_SCENARIO_KEYS: tuple[str, ...] = (
     "low_vigilance",
     "drowsy",
@@ -45,11 +47,11 @@ SUPPORTED_SOUND_SUFFIXES: tuple[str, ...] = (".wav", ".mp3", ".ogg", ".flac")
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return resource_root()
 
 
 def default_alerts_dir() -> Path:
-    return project_root() / "assets" / "alerts"
+    return resource_path("assets", "alerts")
 
 
 def default_sound_path(scenario: str) -> str:

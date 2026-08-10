@@ -98,6 +98,7 @@ from gui.personal_profile import (
     PersonalProfileStore,
     resolve_active_baseline,
 )
+from gui.runtime_paths import data_path
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
@@ -3208,8 +3209,7 @@ class MainWindow(QMainWindow):
         act.trigger()
 
     def _settings_path(self) -> Path:
-        root = Path(__file__).resolve().parents[1]
-        return root / "settings.json"
+        return data_path("settings.json")
 
     @staticmethod
     def _encode_bytes(data: QByteArray) -> str:
@@ -3448,6 +3448,7 @@ class MainWindow(QMainWindow):
         }
         temp_path: Path | None = None
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -3540,9 +3541,8 @@ class MainWindow(QMainWindow):
         self._register_global_hotkeys()
 
     def _recordings_dir(self) -> Path:
-        root = Path(__file__).resolve().parents[1]
-        rec = root / "recordings"
-        rec.mkdir(exist_ok=True)
+        rec = data_path("recordings")
+        rec.mkdir(parents=True, exist_ok=True)
         return rec
 
     def _web_allow_lan_enabled(self) -> bool:
@@ -6223,9 +6223,7 @@ class MainWindow(QMainWindow):
         return self._engine_controller.camera_snapshot().selected_index
 
     def _open_recordings_dir(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        rec = root / "recordings"
-        rec.mkdir(exist_ok=True)
+        rec = self._recordings_dir()
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(rec)))
 
     def _on_save_layout(self) -> None:

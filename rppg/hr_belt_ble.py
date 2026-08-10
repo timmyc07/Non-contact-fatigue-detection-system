@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from gui.runtime_paths import data_path
 from rppg.calibration_watch import WatchHrHub, WatchSample
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ _RR_MIN_MS = 200.0
 _RR_MAX_MS = 3000.0
 
 # 心跳帶裝置設定檔（機器特定，不納入版控；不存在時使用預設值）。
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "hr_belt.json"
+DEFAULT_CONFIG_PATH = data_path("config", "hr_belt.json")
 
 # 連線中超過此秒數沒有有效心率樣本即視為資料停滯（GUI / dashboard 顯示警告）。
 HR_STALE_AFTER_SEC = 5.0

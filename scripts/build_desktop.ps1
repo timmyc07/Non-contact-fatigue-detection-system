@@ -20,6 +20,10 @@ if (Test-Path $pythonPath) {
 
 Push-Location $repoRoot
 try {
+    powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts\build_engine_sidecar.ps1')
+    if ($LASTEXITCODE -ne 0) {
+        throw "Engine sidecar build failed with exit code $LASTEXITCODE"
+    }
     npm run desktop:build
 } finally {
     Pop-Location

@@ -32,6 +32,7 @@ from gui.fatigue_engine import FatigueEngine, FatigueParams
 from gui.fatigue_scorer import FatigueFuser
 from gui.fatigue_worker import draw_fatigue_annotations
 from gui.mediapipe_tuning import load_mediapipe_tuning
+from gui.runtime_paths import data_path
 from gui.metrics_recorder import MetricsRecorder
 from rppg.rppg_worker import (
     RppgEngine,
@@ -1449,7 +1450,7 @@ def run_replay_batch(
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if output_dir is None:
         run_subdir = "utarldd_runs" if labeled else "replay_runs"
-        output_dir = Path(__file__).resolve().parents[1] / "recordings" / run_subdir / run_stamp
+        output_dir = data_path("recordings", run_subdir, run_stamp)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if labeled:

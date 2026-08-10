@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from gui.runtime_paths import data_path, resource_path, resource_root
+
 log = logging.getLogger(__name__)
 
 
-ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = ROOT / "config" / "mediapipe_tuning.json"
-CALIBRATION_PATH = ROOT / "config" / "mediapipe_calibration.json"
+ROOT = resource_root()
+CONFIG_PATH = resource_path("config", "mediapipe_tuning.json")
+CALIBRATION_PATH = data_path("config", "mediapipe_calibration.json")
 
 
 @dataclass
@@ -91,6 +95,7 @@ def _deep_update(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_mediapipe_tuning(path: Path | None = None) -> MediaPipeTuning:
+    using_default_path = path is None
     path = path or CONFIG_PATH
     default_data = asdict(MediaPipeTuning())
     if path.exists():
@@ -101,14 +106,20 @@ def load_mediapipe_tuning(path: Path | None = None) -> MediaPipeTuning:
         except Exception as exc:
             log.warning("MediaPipe tuning 設定讀取失敗，使用預設值：%s", exc)
     else:
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(default_data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            log.warning("MediaPipe tuning 預設設定寫入失敗：%s", exc)
+        packaged = bool(getattr(sys, "frozen", False)) or bool(
+            os.environ.get("NCFD_RESOURCE_ROOT")
+        )
+        if using_default_path and not packaged:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps(default_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                log.warning("MediaPipe tuning 預設設定寫入失敗：%s", exc)
+        else:
+            log.warning("MediaPipe tuning 設定不存在，使用預設值：%s", path)
     active_profile = str(default_data.get("active_profile", "default") or "default")
     profiles = default_data.get("profiles", {})
     if active_profile != "default" and isinstance(profiles, dict):

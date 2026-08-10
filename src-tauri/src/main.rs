@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -225,6 +226,26 @@ fn python_executable(root: &Path) -> PathBuf {
     }
 }
 
+fn bundled_engine_path(resource_dir: &Path) -> Option<PathBuf> {
+    let executable = if cfg!(windows) {
+        "ncfd-engine.exe"
+    } else {
+        "ncfd-engine"
+    };
+    let candidate = resource_dir.join("engine").join(executable);
+    candidate.is_file().then_some(candidate)
+}
+
+fn bundled_resource_root(engine_path: &Path) -> PathBuf {
+    let engine_dir = engine_path.parent().unwrap_or(engine_path);
+    let internal = engine_dir.join("_internal");
+    if internal.is_dir() {
+        internal
+    } else {
+        engine_dir.to_path_buf()
+    }
+}
+
 #[cfg(windows)]
 fn hide_backend_console(command: &mut Command) {
     use std::os::windows::process::CommandExt;
@@ -234,7 +255,7 @@ fn hide_backend_console(command: &mut Command) {
 #[cfg(not(windows))]
 fn hide_backend_console(_command: &mut Command) {}
 
-fn spawn_backend() -> Result<Option<Child>, String> {
+fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
     if backend_available() {
         if backend_api_compatible() {
             return Ok(None);
@@ -251,12 +272,37 @@ fn spawn_backend() -> Result<Option<Child>, String> {
             );
         }
     }
-    let root = project_root();
-    let mut command = Command::new(python_executable(&root));
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("failed to resolve resource directory: {error}"))?;
+    let mut command = if let Some(engine_path) = bundled_engine_path(&resource_dir) {
+        let engine_dir = engine_path
+            .parent()
+            .ok_or_else(|| "bundled engine has no parent directory".to_owned())?;
+        let data_root = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
+        fs::create_dir_all(&data_root)
+            .map_err(|error| format!("failed to create app data directory: {error}"))?;
+        let resource_root = bundled_resource_root(&engine_path);
+        let mut command = Command::new(&engine_path);
+        command.arg("--engine").current_dir(engine_dir);
+        command
+            .env("NCFD_RESOURCE_ROOT", resource_root)
+            .env("NCFD_DATA_ROOT", data_root);
+        command
+    } else {
+        let root = project_root();
+        let mut command = Command::new(python_executable(&root));
+        command
+            .arg(root.join("main.py"))
+            .arg("--engine")
+            .current_dir(&root);
+        command
+    };
     command
-        .arg(root.join("main.py"))
-        .arg("--engine")
-        .current_dir(&root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -323,7 +369,7 @@ fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendProcess(Mutex::new(None)))
         .setup(|app: &mut tauri::App| {
-            let child = spawn_backend().map_err(std::io::Error::other)?;
+            let child = spawn_backend(app.handle()).map_err(std::io::Error::other)?;
             *app.state::<BackendProcess>()
                 .0
                 .lock()
@@ -363,8 +409,23 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{backend_api_version_from_response, path_to_frontend_string};
+    use super::{
+        backend_api_version_from_response, bundled_engine_path, bundled_resource_root,
+        path_to_frontend_string,
+    };
+    use std::fs;
     use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_resource_dir() -> std::path::PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ncfd-tauri-test-{stamp}"));
+        fs::create_dir_all(&path).expect("temporary resource directory");
+        path
+    }
 
     #[test]
     fn parses_desktop_api_version_from_control_state() {
@@ -388,5 +449,34 @@ mod tests {
             path_to_frontend_string(path),
             Ok(r"C:\datasets\UTA-RLDD".to_owned())
         );
+    }
+
+    #[test]
+    fn finds_bundled_engine_under_resource_directory() {
+        let directory = temp_resource_dir();
+        let engine_dir = directory.join("engine");
+        fs::create_dir_all(&engine_dir).expect("engine directory");
+        let name = if cfg!(windows) { "ncfd-engine.exe" } else { "ncfd-engine" };
+        let engine = engine_dir.join(name);
+        fs::write(&engine, b"test").expect("engine marker");
+
+        assert_eq!(bundled_engine_path(&directory), Some(engine));
+        fs::remove_dir_all(directory).expect("temporary resource cleanup");
+    }
+
+    #[test]
+    fn uses_pyinstaller_internal_directory_for_resources() {
+        let directory = temp_resource_dir();
+        let engine_dir = directory.join("engine");
+        let internal = engine_dir.join("_internal");
+        fs::create_dir_all(&internal).expect("internal directory");
+        let engine = engine_dir.join(if cfg!(windows) {
+            "ncfd-engine.exe"
+        } else {
+            "ncfd-engine"
+        });
+
+        assert_eq!(bundled_resource_root(&engine), internal);
+        fs::remove_dir_all(directory).expect("temporary resource cleanup");
     }
 }

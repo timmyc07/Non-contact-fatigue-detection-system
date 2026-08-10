@@ -26,6 +26,8 @@ from gui.video_replay import ReplayVideoSummary  # noqa: E402
 
 
 _REGISTER_GLOBAL_HOTKEYS = MainWindow._register_global_hotkeys
+_SETTINGS_PATH = MainWindow._settings_path
+_RECORDINGS_DIR = MainWindow._recordings_dir
 
 
 @pytest.fixture(scope="module")
@@ -608,6 +610,27 @@ def test_settings_save_persists_atomically_and_clears_dirty(
         "path": str(settings_path),
     }
     assert list(settings_path.parent.glob(f".{settings_path.name}.*.tmp")) == []
+
+
+def test_settings_and_recordings_use_configured_data_root(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "runtime-data"
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(data_root))
+    monkeypatch.setattr(
+        settings_window,
+        "_settings_path",
+        lambda: _SETTINGS_PATH(settings_window),
+    )
+
+    settings_window._handle_desktop_command("settings.save", {})
+    recordings = _RECORDINGS_DIR(settings_window)
+
+    assert (data_root / "settings.json").exists()
+    assert recordings == data_root / "recordings"
+    assert recordings.is_dir()
 
 
 def test_settings_save_replace_failure_preserves_old_file_and_dirty_state(

@@ -16,8 +16,12 @@ from rppg.calibration import (
     apply_bpm_calibration,
     apply_calibration_to_metrics,
     effective_bpm,
+    is_live_feed_enabled,
     origin_version,
+    read_live_feed,
     rppg_sample_quality_ok,
+    set_live_feed_enabled,
+    write_live_feed,
 )
 from rppg.rppg_worker import RppgMetrics
 
@@ -109,6 +113,32 @@ def test_version_store_save_and_switch(tmp_path: Path):
 
     manifest = json.loads((tmp_path / "rppg_calibration" / "manifest.json").read_text(encoding="utf-8"))
     assert len(manifest["versions"]) >= 2
+
+
+def test_default_store_and_live_feed_use_configured_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "runtime-data"
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(data_root))
+
+    store = CalibrationVersionStore()
+    assert store.root == data_root / "config" / "rppg_calibration"
+    assert store.manifest_path.exists()
+    assert (store.versions_dir / f"{ORIGIN_VERSION_ID}.json").exists()
+
+    set_live_feed_enabled(True)
+    assert is_live_feed_enabled() is True
+    flag = data_root / "config" / "rppg_calibration_feed.enabled"
+    assert flag.read_text(encoding="utf-8") == "enabled\n"
+
+    metrics = RppgMetrics(bpm=72.0, raw_bpm=71.0, face_detected=True)
+    write_live_feed(metrics)
+    feed_path = data_root / "config" / "rppg_live_feed.json"
+    assert feed_path.exists()
+    assert read_live_feed() is not None
+
+    set_live_feed_enabled(False)
+    assert is_live_feed_enabled() is False
 
 
 # ── P6：rppg_params 向後相容擴充 ───────────────────────────────────────────

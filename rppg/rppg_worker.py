@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import queue
+import sys
 import time
 import urllib.request
 from collections import deque
@@ -39,6 +41,7 @@ from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 
 from gui.frame_queue import get_latest
 from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
+from gui.runtime_paths import data_path, resource_path
 from rppg.adaptive_calibration import recompute_raw_bpm_from_roi_windows
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
 from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rppg
@@ -262,7 +265,7 @@ MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"
 )
-_MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
+_MODELS_DIR = resource_path("models")
 
 
 # ── Metrics dataclass ────────────────────────────────────────────────────────
@@ -1105,10 +1108,22 @@ def ensure_face_model(
     models_dir: Path,
     status_cb: Optional[Callable[[str], None]] = None,
 ) -> Path:
-    models_dir.mkdir(parents=True, exist_ok=True)
     target = models_dir / "face_landmarker.task"
     if target.exists() and target.stat().st_size > 1_000_000:
         return target
+    packaged = bool(getattr(sys, "frozen", False)) or bool(
+        os.environ.get("NCFD_RESOURCE_ROOT")
+    )
+    if packaged:
+        if not os.environ.get("NCFD_DATA_ROOT"):
+            raise FileNotFoundError(
+                f"MediaPipe face model is missing from the read-only resource bundle: {target}"
+            )
+        models_dir = data_path("models")
+        target = models_dir / "face_landmarker.task"
+        if target.exists() and target.stat().st_size > 1_000_000:
+            return target
+    models_dir.mkdir(parents=True, exist_ok=True)
     if status_cb:
         status_cb("正在下載 MediaPipe 臉部模型…（首次執行約 20-30 MB）")
     urllib.request.urlretrieve(MODEL_URL, target)

@@ -22,6 +22,7 @@ import sqlite3
 
 from gui.file_browser_client import FileBrowserClient
 from gui.desktop_control import DesktopControlError
+from gui.runtime_paths import resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -390,9 +391,8 @@ def create_app(
             return candidate
         return None
 
-    app_dir = Path(__file__).parent
-    template_dir = app_dir / "web_ui" / "templates"
-    static_dir = app_dir / "web_ui" / "static"
+    template_dir = resource_path("gui", "web_ui", "templates")
+    static_dir = resource_path("gui", "web_ui", "static")
 
     app = Flask(
         __name__,

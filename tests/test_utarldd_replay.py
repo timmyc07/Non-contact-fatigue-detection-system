@@ -569,10 +569,16 @@ def test_run_replay_batch_labeled_true_uses_utarldd_discovery_and_output_dir(
     monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_utarldd_discover)
     monkeypatch.setattr("gui.video_replay.discover_replay_videos", fake_generic_discover)
     monkeypatch.setattr("gui.video_replay.run_replay_video", fake_replay)
+    data_root = tmp_path / "runtime-data"
+    monkeypatch.setattr(
+        "gui.video_replay.data_path",
+        lambda *parts: data_root.joinpath(*parts),
+    )
 
     result = run_replay_batch(tmp_path / "dataset")
 
     assert calls == {"utarldd": 1, "generic": 0}
+    assert result.output_dir.is_relative_to(data_root / "recordings")
     assert result.output_dir.parent.name == "utarldd_runs"
     assert result.summary_csv.name.startswith("utarldd_summary_")
     assert result.validation_report_csv.exists()
@@ -605,10 +611,16 @@ def test_run_replay_batch_labeled_false_uses_generic_discovery_and_skips_validat
     monkeypatch.setattr("gui.video_replay.discover_utarldd_videos", fake_utarldd_discover)
     monkeypatch.setattr("gui.video_replay.discover_replay_videos", fake_generic_discover)
     monkeypatch.setattr("gui.video_replay.run_replay_video", fake_replay)
+    data_root = tmp_path / "runtime-data"
+    monkeypatch.setattr(
+        "gui.video_replay.data_path",
+        lambda *parts: data_root.joinpath(*parts),
+    )
 
     result = run_replay_batch(tmp_path / "dataset", labeled=False)
 
     assert calls == {"utarldd": 0, "generic": 1}
+    assert result.output_dir.is_relative_to(data_root / "recordings")
     assert result.output_dir.parent.name == "replay_runs"
     assert result.summary_csv.name.startswith("replay_summary_")
     assert not result.validation_report_csv.exists()

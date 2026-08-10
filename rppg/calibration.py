@@ -15,14 +15,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-ROOT = Path(__file__).resolve().parents[1]
-CALIBRATION_DIR = ROOT / "config" / "rppg_calibration"
-VERSIONS_DIR = CALIBRATION_DIR / "versions"
-MANIFEST_PATH = CALIBRATION_DIR / "manifest.json"
-LIVE_FEED_PATH = ROOT / "config" / "rppg_live_feed.json"
-FEED_ENABLED_FLAG = ROOT / "config" / "rppg_calibration_feed.enabled"
+from gui.runtime_paths import data_path, data_root
 
 ORIGIN_VERSION_ID = "v000_origin"
+
+# 保留既有公開路徑常數供外部整合使用；實際讀寫函式仍動態解析 data root，
+# 確保 Tauri 在啟動前注入的使用者資料目錄生效。
+ROOT = data_root()
+CALIBRATION_DIR = data_path("config", "rppg_calibration")
+VERSIONS_DIR = CALIBRATION_DIR / "versions"
+MANIFEST_PATH = CALIBRATION_DIR / "manifest.json"
+LIVE_FEED_PATH = data_path("config", "rppg_live_feed.json")
+FEED_ENABLED_FLAG = data_path("config", "rppg_calibration_feed.enabled")
 
 DEFAULT_QUALITY_GATES = {
     "min_sqi": 0.45,
@@ -337,7 +341,7 @@ class CalibrationVersionStore:
     """Persistent versioned BPM calibration profiles."""
 
     def __init__(self, root: Path | None = None) -> None:
-        self.root = root or CALIBRATION_DIR
+        self.root = root if root is not None else data_path("config", "rppg_calibration")
         self.versions_dir = self.root / "versions"
         self.manifest_path = self.root / "manifest.json"
         self._manifest_mtime: float = 0.0
@@ -505,15 +509,17 @@ def write_live_feed(metrics: Any, *, enabled: bool | None = None) -> None:
         "bpm_guard_reason": str(getattr(metrics, "bpm_guard_reason", "") or ""),
         "face_detected": bool(getattr(metrics, "face_detected", False)),
     }
-    LIVE_FEED_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LIVE_FEED_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    path = data_path("config", "rppg_live_feed.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def read_live_feed(max_age_sec: float = 5.0) -> dict[str, Any] | None:
-    if not LIVE_FEED_PATH.exists():
+    path = data_path("config", "rppg_live_feed.json")
+    if not path.exists():
         return None
     try:
-        data = json.loads(LIVE_FEED_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
     if not isinstance(data, dict):
@@ -525,15 +531,16 @@ def read_live_feed(max_age_sec: float = 5.0) -> dict[str, Any] | None:
 
 
 def set_live_feed_enabled(enabled: bool) -> None:
-    FEED_ENABLED_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    path = data_path("config", "rppg_calibration_feed.enabled")
+    path.parent.mkdir(parents=True, exist_ok=True)
     if enabled:
-        FEED_ENABLED_FLAG.write_text("enabled\n", encoding="utf-8")
-    elif FEED_ENABLED_FLAG.exists():
-        FEED_ENABLED_FLAG.unlink()
+        path.write_text("enabled\n", encoding="utf-8")
+    elif path.exists():
+        path.unlink()
 
 
 def is_live_feed_enabled() -> bool:
-    return FEED_ENABLED_FLAG.exists()
+    return data_path("config", "rppg_calibration_feed.enabled").exists()
 
 
 def metrics_to_feed_dict(metrics: Any) -> dict[str, Any]:

@@ -19,15 +19,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from gui.runtime_paths import data_path, resource_root
+
 if TYPE_CHECKING:  # 僅型別檢查用，避免與 fatigue_engine 循環匯入
     from gui.fatigue_engine import FatigueMetrics
 
 log = logging.getLogger(__name__)
 
 
-ROOT = Path(__file__).resolve().parents[1]
-PERSONAL_PROFILE_PATH = ROOT / "config" / "personal_profile" / "active.json"
-
+ROOT = resource_root()
+PERSONAL_PROFILE_PATH = data_path("config", "personal_profile", "active.json")
 SCHEMA_VERSION = 1
 
 # ── 門檻推導常數（把清醒基線映射到門檻；對「典型清醒者」會還原成現行預設值） ──
@@ -218,7 +219,9 @@ class PersonalProfileStore:
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or PERSONAL_PROFILE_PATH
+        self.path = path if path is not None else data_path(
+            "config", "personal_profile", "active.json"
+        )
 
     def load(self) -> Optional[PersonalProfile]:
         if not self.path.exists():

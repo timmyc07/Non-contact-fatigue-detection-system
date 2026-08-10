@@ -39,13 +39,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
+from gui.runtime_paths import data_path
+
 logger = logging.getLogger(__name__)
 
 CAPTURE_FORMAT_VERSION = 1
 
 # 錄製檔預設輸出根目錄（沿用 scripts/video_replay.py 的 recordings/ 慣例）。
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CAPTURE_DIR = _REPO_ROOT / "recordings" / "belt_truth_capture"
+DEFAULT_CAPTURE_DIR = data_path("recordings", "belt_truth_capture")
 
 
 @dataclass(frozen=True)

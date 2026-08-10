@@ -8,6 +8,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
@@ -226,6 +228,21 @@ def test_store_round_trip(tmp_path: Path) -> None:
     loaded = store.load()
     assert loaded is not None
     assert loaded.to_dict() == prof.to_dict()
+
+
+def test_default_store_uses_configured_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "runtime-data"
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(data_root))
+    store = PersonalProfileStore()
+    profile = PersonalProfile(valid=True, source="manual")
+
+    store.save(profile)
+
+    assert store.path == data_root / "config" / "personal_profile" / "active.json"
+    assert store.path.exists()
+    assert store.load() == profile
 
 
 def test_store_factory_reset(tmp_path: Path) -> None:
