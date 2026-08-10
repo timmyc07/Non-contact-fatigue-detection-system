@@ -173,6 +173,63 @@ def test_headless_replay_preview_and_queue_are_engine_safe(
     settings_window._refresh_monitor_metrics()
 
 
+@pytest.mark.parametrize(
+    ("failure_handler", "stop_method", "behavior", "rppg", "expected"),
+    [
+        (
+            "_on_combined_failed",
+            "_stop_combined_worker",
+            True,
+            True,
+            [("rppg", False), ("behavior", False)],
+        ),
+        (
+            "_on_rppg_failed",
+            "_stop_rppg_worker",
+            False,
+            True,
+            [("rppg", False)],
+        ),
+        (
+            "_on_fatigue_failed",
+            "_stop_fatigue_worker",
+            True,
+            False,
+            [("behavior", False)],
+        ),
+    ],
+)
+def test_headless_worker_failure_applies_analysis_cleanup(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_handler: str,
+    stop_method: str,
+    behavior: bool,
+    rppg: bool,
+    expected: list[tuple[str, bool]],
+) -> None:
+    calls: list[tuple[str, bool]] = []
+    settings_window._chk_behavior.setChecked(behavior)
+    settings_window._chk_stress.setChecked(rppg)
+    monkeypatch.setattr(settings_window, stop_method, lambda: None)
+    monkeypatch.setattr(settings_window, "_append_log", lambda _message: None)
+    monkeypatch.setattr(settings_window, "_notify_user", lambda _title, _message: None)
+    monkeypatch.setattr(
+        settings_window,
+        "_on_behavior_toggled",
+        lambda checked: calls.append(("behavior", checked)),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_on_stress_toggled",
+        lambda checked: calls.append(("rppg", checked)),
+    )
+
+    getattr(settings_window, failure_handler)("boom")
+
+    assert calls == expected
+
+
 def test_hotkeys_configure_replaces_all_shortcuts(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:

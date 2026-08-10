@@ -5603,8 +5603,12 @@ class MainWindow(QMainWindow):
     def _on_combined_failed(self, msg: str) -> None:
         self._append_log(f"✗ 合併引擎錯誤：{msg}")
         self._stop_combined_worker()
-        self._chk_stress.setChecked(False)
-        self._chk_behavior.setChecked(False)
+        self._set_engine_checkbox(
+            self._chk_stress, False, self._on_stress_toggled
+        )
+        self._set_engine_checkbox(
+            self._chk_behavior, False, self._on_behavior_toggled
+        )
         self._notify_user("引擎錯誤", msg)
 
     # ── rPPG worker (solo — only when fatigue is OFF) ─────────────────────────
@@ -5697,7 +5701,9 @@ class MainWindow(QMainWindow):
     def _on_rppg_failed(self, msg: str) -> None:
         self._append_log(f"✗ rPPG 錯誤：{msg}")
         self._stop_rppg_worker()
-        self._chk_stress.setChecked(False)
+        self._set_engine_checkbox(
+            self._chk_stress, False, self._on_stress_toggled
+        )
         self._notify_user("rPPG 錯誤", msg)
 
     # ── Fatigue / Behaviour Alertness worker ──────────────────────────────────
@@ -5862,7 +5868,9 @@ class MainWindow(QMainWindow):
     def _on_fatigue_failed(self, msg: str) -> None:
         self._append_log(f"✗ 行為警覺錯誤：{msg}")
         self._stop_fatigue_worker()
-        self._chk_behavior.setChecked(False)
+        self._set_engine_checkbox(
+            self._chk_behavior, False, self._on_behavior_toggled
+        )
         self._notify_user("行為警覺錯誤", msg)
 
     def _on_camera_info(self, codec: str, w: int, h: int, fps: float) -> None:
