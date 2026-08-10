@@ -9,17 +9,17 @@ import 'services/backend_service.dart';
 import 'services/tauri_bridge.dart';
 
 // Shared visual tokens keep the monitoring surfaces consistent across views.
-const kAccent = Color(0xff9b7bff);
-const kAccentBright = Color(0xffc4b5fd);
-const kAccentDeep = Color(0xff6d4aff);
-const kInk = Color(0xfff7f5ff);
-const kMutedInk = Color(0xffb9b1c9);
-const kBackground = Color(0xff0d0a14);
-const kBackgroundDeep = Color(0xff090711);
-const kSurface = Color(0xff151020);
-const kSurfaceElevated = Color(0xff1d162b);
-const kLine = Color(0x22ffffff);
-const kAccentLine = Color(0x4dc4b5fd);
+const kAccent = Color(0xffa98bff);
+const kAccentBright = Color(0xffded5ff);
+const kAccentDeep = Color(0xff7d5cff);
+const kInk = Color(0xfffffaff);
+const kMutedInk = Color(0xffd2c9df);
+const kBackground = Color(0xff140d22);
+const kBackgroundDeep = Color(0xff0d0918);
+const kSurface = Color(0xff1f1534);
+const kSurfaceElevated = Color(0xff2b1d46);
+const kLine = Color(0x36ffffff);
+const kAccentLine = Color(0x70ded5ff);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -314,7 +314,7 @@ class AppTitleBar extends StatelessWidget {
           height: 56,
           padding: const EdgeInsets.only(left: 20, right: 10),
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: .25),
+            color: kSurface.withValues(alpha: .84),
             border: const Border(bottom: BorderSide(color: kAccentLine)),
           ),
           child: Row(
