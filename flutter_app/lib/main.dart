@@ -468,6 +468,8 @@ class DashboardView extends StatelessWidget {
           ]),
         ),
         const SizedBox(height: 16),
+        HeartRateBeltPanel(metrics: metrics, engineState: engineState, busy: busy, onCommand: onCommand),
+        const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, children: [
           MetricTile(label: '眼瞼閉合 EAR', value: _number('ear').toStringAsFixed(2), suffix: 'ratio', icon: Icons.remove_red_eye_outlined),
           MetricTile(label: 'PERCLOS', value: _number('perclos').toStringAsFixed(1), suffix: '%', icon: Icons.timer_outlined),
@@ -644,6 +646,133 @@ class _SignalPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+class HeartRateBeltPanel extends StatelessWidget {
+  const HeartRateBeltPanel({required this.metrics, required this.engineState, required this.busy, required this.onCommand, super.key});
+  final Map<String, dynamic> metrics;
+  final Map<String, dynamic> engineState;
+  final bool busy;
+  final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
+
+  double _number(String key, [double fallback = 0]) => (metrics[key] as num?)?.toDouble() ?? fallback;
+  String _text(String key, [String fallback = '--']) {
+    final value = metrics[key]?.toString();
+    return value == null || value.isEmpty ? fallback : value;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final calibrationEnabled = engineState['belt_calibration'] == true;
+    final beltEnabled = metrics['belt_enabled'] == true || calibrationEnabled;
+    final beltState = _text('belt_state', 'idle');
+    final stale = metrics['belt_stale'] == true;
+    final connected = beltState == 'connected' && !stale;
+    final stateLabel = stale
+        ? '訊號停滯'
+        : switch (beltState) {
+            'connected' => '已連線',
+            'scanning' => '掃描裝置',
+            'connecting' => '連線中',
+            'reconnecting' => '重新連線',
+            'error' => '連線錯誤',
+            'stopped' => '已停止',
+            _ => beltEnabled ? '等待裝置' : '未啟用',
+          };
+    final stateColor = stale || beltState == 'error'
+        ? const Color(0xffe77b78)
+        : connected
+            ? const Color(0xff58c6a9)
+            : const Color(0xffe0a35d);
+    final canEnable = engineState['pipeline_running'] == true && engineState['rppg_enabled'] == true;
+    final contactSupported = metrics['belt_contact_supported'] == true;
+    final contactDetected = metrics['belt_contact_detected'] == true;
+    final contact = contactSupported ? (contactDetected ? '已接觸' : '未接觸') : '未提供';
+    final battery = _number('belt_battery', -1);
+    final rssi = _number('belt_rssi');
+    final signalAge = _number('belt_signal_age_sec', -1);
+    final connectedFor = _number('belt_connected_duration_sec', -1);
+    final hrv = 'HRV  RMSSD ${_number('belt_hrv_rmssd') > 0 ? _number('belt_hrv_rmssd').toStringAsFixed(1) : '--'} ms   SDNN ${_number('belt_hrv_sdnn') > 0 ? _number('belt_hrv_sdnn').toStringAsFixed(1) : '--'} ms   LF/HF ${_number('belt_hrv_lf_hf') > 0 ? _number('belt_hrv_lf_hf').toStringAsFixed(2) : '--'}';
+
+    return GlassPanel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('HEART RATE BELT / BLE', style: TextStyle(color: Colors.white.withValues(alpha: .38), fontSize: 10, letterSpacing: 1.4)),
+            const SizedBox(height: 7),
+            Text(_text('belt_device_name', '未偵測到心跳帶'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 4),
+            Text('${_text('belt_device_address')}  ·  ${_text('belt_sensor_location', '位置未知')}', style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 11), overflow: TextOverflow.ellipsis),
+          ])),
+          _BeltStatusPill(label: stateLabel, color: stateColor),
+        ]),
+        const SizedBox(height: 18),
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          _BeltReadout(label: '心率', value: _number('belt_bpm') > 0 ? _number('belt_bpm').toStringAsFixed(0) : '--', suffix: 'BPM', icon: Icons.favorite_outline, accent: stateColor),
+          _BeltReadout(label: '擷取訊號', value: signalAge >= 0 ? signalAge.toStringAsFixed(1) : '--', suffix: '秒前', icon: Icons.graphic_eq_outlined, accent: connected ? const Color(0xff73ddbf) : Colors.white38),
+          _BeltReadout(label: '感測器接觸', value: contact, suffix: '', icon: Icons.sensors_outlined, accent: contact == '未接觸' ? const Color(0xffe77b78) : const Color(0xff73ddbf)),
+          _BeltReadout(label: '電量', value: battery >= 0 ? battery.toStringAsFixed(0) : '--', suffix: battery >= 0 ? '%' : '', icon: Icons.battery_5_bar_outlined, accent: const Color(0xff73ddbf)),
+          _BeltReadout(label: 'RSSI', value: rssi != 0 ? rssi.toStringAsFixed(0) : '--', suffix: 'dBm', icon: Icons.wifi_tethering_outlined, accent: const Color(0xff73ddbf)),
+          _BeltReadout(label: 'RR 樣本', value: _text('belt_rr_count', '0'), suffix: '筆', icon: Icons.timeline_outlined, accent: const Color(0xff73ddbf)),
+          _BeltReadout(label: '通知封包', value: _text('belt_notifications', '0'), suffix: '筆', icon: Icons.sync_alt_outlined, accent: const Color(0xff73ddbf)),
+          _BeltReadout(label: '連線時長', value: connectedFor >= 0 ? (connectedFor / 60).toStringAsFixed(1) : '--', suffix: '分鐘', icon: Icons.timer_outlined, accent: const Color(0xff73ddbf)),
+        ]),
+        const SizedBox(height: 16),
+        Row(children: [
+          Expanded(child: Text(hrv, style: TextStyle(color: Colors.white.withValues(alpha: .55), fontSize: 11), overflow: TextOverflow.ellipsis)),
+          const SizedBox(width: 12),
+          FilledButton.tonalIcon(
+            onPressed: busy || (!calibrationEnabled && !canEnable) ? null : () => onCommand('preferences.configure', <String, dynamic>{'belt_calibration': !calibrationEnabled}),
+            icon: Icon(calibrationEnabled ? Icons.link_off_outlined : Icons.link_outlined, size: 17),
+            label: Text(calibrationEnabled ? '停用心跳帶' : '啟用心跳帶'),
+          ),
+        ]),
+        if (_text('belt_last_error', '').isNotEmpty) ...[
+          const SizedBox(height: 9),
+          Text('錯誤：${_text('belt_last_error')}', style: const TextStyle(color: Color(0xffe77b78), fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+        ],
+      ]),
+    );
+  }
+}
+
+class _BeltStatusPill extends StatelessWidget {
+  const _BeltStatusPill({required this.label, required this.color});
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7), decoration: BoxDecoration(color: color.withValues(alpha: .1), border: Border.all(color: color.withValues(alpha: .28)), borderRadius: BorderRadius.circular(20)), child: Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)), const SizedBox(width: 7), Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700))]));
+}
+
+class _BeltReadout extends StatelessWidget {
+  const _BeltReadout({required this.label, required this.value, required this.suffix, required this.icon, required this.accent});
+  final String label;
+  final String value;
+  final String suffix;
+  final IconData icon;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 152,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.black.withValues(alpha: .12), border: Border.all(color: Colors.white.withValues(alpha: .06)), borderRadius: BorderRadius.circular(8)),
+          child: Row(children: [
+            Icon(icon, size: 17, color: accent),
+            const SizedBox(width: 9),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label, style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 10), overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 4),
+              Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Flexible(child: Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
+                if (suffix.isNotEmpty) ...[const SizedBox(width: 4), Text(suffix, style: TextStyle(color: Colors.white.withValues(alpha: .35), fontSize: 9))],
+              ]),
+            ])),
+          ]),
+        ),
+      );
 }
 
 class MetricTile extends StatefulWidget {

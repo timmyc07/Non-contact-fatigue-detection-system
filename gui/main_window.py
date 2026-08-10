@@ -3162,6 +3162,22 @@ class MainWindow(QMainWindow):
         # 校準資訊僅在心跳帶已連線時視為 active（與 GUI 狀態列一致，避免掃描中
         # 就顯示「校正 +0.0｜0 配對」）。
         belt_connected = belt_st is not None and belt_st.state == "connected"
+        belt_signal_age = (
+            max(0.0, time.time() - float(belt_st.last_sample_at))
+            if belt_st is not None and belt_st.last_sample_at is not None
+            else -1.0
+        )
+        belt_connected_duration = (
+            max(0.0, time.time() - float(belt_st.connected_since))
+            if belt_st is not None and belt_st.connected_since is not None
+            else -1.0
+        )
+        belt_physio = None
+        if belt_st is not None:
+            try:
+                belt_physio = compute_watch_physio(self._belt_runtime.hub.snapshot())
+            except Exception:
+                belt_physio = None
         calib = (
             self._belt_calibrator.state()
             if self._belt_calibrator is not None and belt_connected
@@ -3233,14 +3249,27 @@ class MainWindow(QMainWindow):
             "belt_enabled": belt_st is not None,
             "belt_state": str(belt_st.state) if belt_st else "",
             "belt_device_name": str(belt_st.device_name) if belt_st else "",
+            "belt_device_address": str(belt_st.device_address) if belt_st else "",
+            "belt_rssi": float(belt_st.rssi) if belt_st else 0.0,
             "belt_battery": int(belt_st.battery_level) if belt_st and belt_st.battery_level is not None else -1,
             "belt_bpm": int(belt_st.bpm) if belt_st else 0,
             "belt_rr_count": int(belt_st.rr_count) if belt_st else 0,
+            "belt_notifications": int(belt_st.notifications) if belt_st else 0,
             "belt_sensor_location": str(belt_st.sensor_location) if belt_st else "",
+            "belt_contact_supported": bool(belt_st.sensor_contact_supported) if belt_st else False,
+            "belt_contact_detected": bool(belt_st.sensor_contact_detected) if belt_st else False,
             "belt_contact_ok": bool(
                 belt_st.sensor_contact_detected or not belt_st.sensor_contact_supported
             ) if belt_st else False,
             "belt_stale": bool(hr_is_stale(belt_st)) if belt_st else False,
+            "belt_signal_age_sec": belt_signal_age,
+            "belt_connected_duration_sec": belt_connected_duration,
+            "belt_last_error": str(belt_st.last_error) if belt_st else "",
+            "belt_hrv_rmssd": float(getattr(belt_physio, "rmssd", 0.0) or 0.0),
+            "belt_hrv_sdnn": float(getattr(belt_physio, "sdnn", 0.0) or 0.0),
+            "belt_hrv_lf_hf": float(getattr(belt_physio, "lf_hf", 0.0) or 0.0),
+            "belt_hrv_confidence": str(getattr(belt_physio, "hrv_confidence", "") or ""),
+            "belt_hrv_warmup": float(getattr(belt_physio, "warmup_progress", 0.0) or 0.0),
             "calib_active": calib is not None,
             "calib_offset_bpm": float(calib.offset_bpm) if calib else 0.0,
             "calib_raw_residual_bpm": float(calib.raw_residual_bpm) if calib else 0.0,
