@@ -8,6 +8,19 @@ import 'package:flutter/material.dart';
 import 'services/backend_service.dart';
 import 'services/tauri_bridge.dart';
 
+// Shared visual tokens keep the monitoring surfaces consistent across views.
+const kAccent = Color(0xff9b7bff);
+const kAccentBright = Color(0xffc4b5fd);
+const kAccentDeep = Color(0xff6d4aff);
+const kInk = Color(0xfff7f5ff);
+const kMutedInk = Color(0xffb9b1c9);
+const kBackground = Color(0xff0d0a14);
+const kBackgroundDeep = Color(0xff090711);
+const kSurface = Color(0xff151020);
+const kSurfaceElevated = Color(0xff1d162b);
+const kLine = Color(0x22ffffff);
+const kAccentLine = Color(0x4dc4b5fd);
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const FatigueMonitorApp());
@@ -18,7 +31,7 @@ class FatigueMonitorApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const ink = Color(0xffe7edf2);
+    const ink = kInk;
     return MaterialApp(
       title: '疲勞監測操作台',
       debugShowCheckedModeBanner: false,
@@ -27,9 +40,14 @@ class FatigueMonitorApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.transparent,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff58c6a9),
+          seedColor: kAccent,
           brightness: Brightness.dark,
-          surface: const Color(0xff10171b),
+          surface: kSurface,
+        ),
+        dividerColor: kLine,
+        inputDecorationTheme: const InputDecorationTheme(
+          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: kLine)),
+          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: kAccentLine, width: 1.2)),
         ),
         fontFamily: 'Segoe UI',
         textTheme: const TextTheme(
@@ -193,11 +211,11 @@ class _MonitorShellState extends State<MonitorShell> {
       backgroundColor: Colors.transparent,
       body: DecoratedBox(
         decoration: const BoxDecoration(
-          color: Color(0xff0a0f13),
+          color: kBackground,
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xff111a1e), Color(0xff080c0f)],
+            colors: [kSurface, kBackgroundDeep],
           ),
         ),
         child: SafeArea(
@@ -297,11 +315,11 @@ class AppTitleBar extends StatelessWidget {
           padding: const EdgeInsets.only(left: 20, right: 10),
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: .25),
-            border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: .08))),
+            border: const Border(bottom: BorderSide(color: kAccentLine)),
           ),
           child: Row(
             children: [
-              Container(width: 28, height: 28, decoration: BoxDecoration(color: const Color(0xff58c6a9).withValues(alpha: .16), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.visibility_outlined, size: 17, color: Color(0xff73ddbf))),
+              Container(width: 28, height: 28, decoration: BoxDecoration(color: kAccent.withValues(alpha: .16), border: Border.all(color: kAccentLine), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.visibility_outlined, size: 17, color: kAccentBright)),
               const SizedBox(width: 12),
               const Text('疲勞監測操作台', style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: .2)),
               const SizedBox(width: 12),
@@ -343,7 +361,7 @@ class _WindowButtonState extends State<WindowButton> {
           duration: const Duration(milliseconds: 140),
           width: 42,
           height: 34,
-          decoration: BoxDecoration(color: _hovered ? (widget.isClose ? const Color(0xffd35f63).withValues(alpha: .8) : Colors.white.withValues(alpha: .1)) : Colors.transparent, borderRadius: BorderRadius.circular(7)),
+          decoration: BoxDecoration(color: _hovered ? (widget.isClose ? const Color(0xffd35f63).withValues(alpha: .8) : kAccent.withValues(alpha: .14)) : Colors.transparent, border: _hovered && !widget.isClose ? Border.all(color: kAccentLine) : null, borderRadius: BorderRadius.circular(7)),
           child: IconButton(onPressed: widget.onPressed, icon: Icon(widget.icon, size: 16), splashRadius: 18),
         ),
       ),
@@ -369,7 +387,7 @@ class NavigationRailPanel extends StatelessWidget {
     return Container(
       width: 222,
       padding: const EdgeInsets.fromLTRB(14, 20, 14, 16),
-      decoration: BoxDecoration(border: Border(right: BorderSide(color: Colors.white.withValues(alpha: .07)))),
+      decoration: const BoxDecoration(border: Border(right: BorderSide(color: kLine))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -385,13 +403,13 @@ class NavigationRailPanel extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              child: Row(children: [Icon(alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined, size: 17, color: alwaysOnTop ? const Color(0xff58c6a9) : Colors.white54), const SizedBox(width: 10), Text('固定在最上層', style: TextStyle(fontSize: 12, color: alwaysOnTop ? Colors.white : Colors.white54))]),
+              child: Row(children: [Icon(alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined, size: 17, color: alwaysOnTop ? kAccentBright : Colors.white54), const SizedBox(width: 10), Text('固定在最上層', style: TextStyle(fontSize: 12, color: alwaysOnTop ? kInk : Colors.white54))]),
             ),
           ),
           const SizedBox(height: 14),
           Text('ENGINE ONLINE', style: TextStyle(fontSize: 10, letterSpacing: 1.2, color: Colors.white.withValues(alpha: .3))),
           const SizedBox(height: 6),
-          Row(children: [Container(width: 7, height: 7, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xff58c6a9))), const SizedBox(width: 7), Text('Python backend', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: .55)))]),
+          Row(children: [Container(width: 7, height: 7, decoration: const BoxDecoration(shape: BoxShape.circle, color: kAccent)), const SizedBox(width: 7), Text('Python backend', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: .55)))]),
         ],
       ),
     );
@@ -407,13 +425,20 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: selected ? const Color(0xff58c6a9).withValues(alpha: .14) : Colors.transparent,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        onTap: onTap,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: selected ? kAccent.withValues(alpha: .14) : Colors.transparent,
+        border: selected ? Border.all(color: kAccentLine) : null,
         borderRadius: BorderRadius.circular(8),
-        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12), child: Row(children: [Icon(icon, size: 18, color: selected ? const Color(0xff73ddbf) : Colors.white54), const SizedBox(width: 11), Text(label, style: TextStyle(fontSize: 13, fontWeight: selected ? FontWeight.w700 : FontWeight.w500, color: selected ? Colors.white : Colors.white60))])),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12), child: Row(children: [Icon(icon, size: 18, color: selected ? kAccentBright : Colors.white54), const SizedBox(width: 11), Text(label, style: TextStyle(fontSize: 13, fontWeight: selected ? FontWeight.w700 : FontWeight.w500, color: selected ? kInk : Colors.white60))])),
+        ),
       ),
     );
   }
@@ -446,7 +471,7 @@ class DashboardView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fatigue = _text('status', connected ? '等待資料' : '尚未連線');
-    final fatigueColor = fatigue.contains('警') || fatigue.contains('疲') ? const Color(0xffe77b78) : const Color(0xff58c6a9);
+    final fatigueColor = fatigue.contains('警') || fatigue.contains('疲') ? const Color(0xffe77b78) : kAccent;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 34),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -516,7 +541,7 @@ class CameraPreview extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: ColoredBox(
-              color: const Color(0xff06090b),
+              color: kBackgroundDeep,
               child: frame == null
                   ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(running ? Icons.videocam_outlined : Icons.videocam_off_outlined, color: Colors.white24, size: 34), const SizedBox(height: 10), Text(running ? '等待影像串流' : '啟動管線後顯示即時畫面', style: TextStyle(color: Colors.white.withValues(alpha: .35), fontSize: 12))]))
                   : Image.memory(frame!, fit: BoxFit.contain, gaplessPlayback: true),
@@ -562,7 +587,7 @@ class DesktopControlPanel extends StatelessWidget {
           onPressed: busy || (!running && selected == null) ? null : () => onCommand('pipeline.set', <String, dynamic>{'enabled': !running}),
           icon: Icon(running ? Icons.stop_circle_outlined : Icons.play_arrow),
           label: Text(running ? '停止監測' : '開始監測'),
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44), backgroundColor: running ? const Color(0xffb75255) : const Color(0xff3fa98d)),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44), backgroundColor: running ? const Color(0xffb75255) : kAccentDeep),
         ),
         const SizedBox(height: 9),
         Row(children: [
@@ -612,7 +637,7 @@ class _ConnectionPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = connected ? const Color(0xff58c6a9) : const Color(0xffe0a35d);
+    final color = connected ? kAccent : const Color(0xffe0a35d);
     return Container(padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7), decoration: BoxDecoration(color: color.withValues(alpha: .1), border: Border.all(color: color.withValues(alpha: .28)), borderRadius: BorderRadius.circular(20)), child: Row(mainAxisSize: MainAxisSize.min, children: [Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)), const SizedBox(width: 7), Text(connected ? '資料串流中' : '等待後端', style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700))]));
   }
 }
@@ -657,7 +682,7 @@ class _SignalPanel extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           Row(children: [
-            Text('SQI ${(sqi * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Color(0xff73ddbf), fontSize: 12)),
+            Text('SQI ${(sqi * 100).toStringAsFixed(0)}%', style: const TextStyle(color: kAccentBright, fontSize: 12)),
             const Spacer(),
             Text('${fps.toStringAsFixed(1)} FPS', style: TextStyle(color: Colors.white.withValues(alpha: .45), fontSize: 11)),
           ]),
@@ -690,7 +715,7 @@ class ChestBeltView extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('心跳帶設備', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)), const SizedBox(height: 7), Text('BLE 真值只用於 rPPG 校準與訊號檢視，不進入疲勞融合分數。', style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 13))])),
-          _BeltStatusPill(label: enabled ? (_text('belt_state', 'idle') == 'connected' ? '已連線' : '啟動中') : '未啟用', color: enabled ? const Color(0xff58c6a9) : const Color(0xffe0a35d)),
+          _BeltStatusPill(label: enabled ? (_text('belt_state', 'idle') == 'connected' ? '已連線' : '啟動中') : '未啟用', color: enabled ? kAccent : const Color(0xffe0a35d)),
         ]),
         const SizedBox(height: 20),
         HeartRateBeltPanel(metrics: metrics, engineState: state, busy: busy, onCommand: onCommand),
@@ -765,7 +790,7 @@ class HeartRateBeltPanel extends StatelessWidget {
     final stateColor = stale || beltState == 'error'
         ? const Color(0xffe77b78)
         : connected
-            ? const Color(0xff58c6a9)
+            ? kAccent
             : const Color(0xffe0a35d);
     final canEnable = engineState['pipeline_running'] == true && engineState['rppg_enabled'] == true;
     final contactSupported = metrics['belt_contact_supported'] == true;
@@ -792,13 +817,13 @@ class HeartRateBeltPanel extends StatelessWidget {
         const SizedBox(height: 18),
         Wrap(spacing: 10, runSpacing: 10, children: [
           _BeltReadout(label: '心率', value: _number('belt_bpm') > 0 ? _number('belt_bpm').toStringAsFixed(0) : '--', suffix: 'BPM', icon: Icons.favorite_outline, accent: stateColor),
-          _BeltReadout(label: '擷取訊號', value: signalAge >= 0 ? signalAge.toStringAsFixed(1) : '--', suffix: '秒前', icon: Icons.graphic_eq_outlined, accent: connected ? const Color(0xff73ddbf) : Colors.white38),
-          _BeltReadout(label: '感測器接觸', value: contact, suffix: '', icon: Icons.sensors_outlined, accent: contact == '未接觸' ? const Color(0xffe77b78) : const Color(0xff73ddbf)),
-          _BeltReadout(label: '電量', value: battery >= 0 ? battery.toStringAsFixed(0) : '--', suffix: battery >= 0 ? '%' : '', icon: Icons.battery_5_bar_outlined, accent: const Color(0xff73ddbf)),
-          _BeltReadout(label: 'RSSI', value: rssi != 0 ? rssi.toStringAsFixed(0) : '--', suffix: 'dBm', icon: Icons.wifi_tethering_outlined, accent: const Color(0xff73ddbf)),
-          _BeltReadout(label: 'RR 樣本', value: _text('belt_rr_count', '0'), suffix: '筆', icon: Icons.timeline_outlined, accent: const Color(0xff73ddbf)),
-          _BeltReadout(label: '通知封包', value: _text('belt_notifications', '0'), suffix: '筆', icon: Icons.sync_alt_outlined, accent: const Color(0xff73ddbf)),
-          _BeltReadout(label: '連線時長', value: connectedFor >= 0 ? (connectedFor / 60).toStringAsFixed(1) : '--', suffix: '分鐘', icon: Icons.timer_outlined, accent: const Color(0xff73ddbf)),
+          _BeltReadout(label: '擷取訊號', value: signalAge >= 0 ? signalAge.toStringAsFixed(1) : '--', suffix: '秒前', icon: Icons.graphic_eq_outlined, accent: connected ? kAccentBright : Colors.white38),
+          _BeltReadout(label: '感測器接觸', value: contact, suffix: '', icon: Icons.sensors_outlined, accent: contact == '未接觸' ? const Color(0xffe77b78) : kAccentBright),
+          _BeltReadout(label: '電量', value: battery >= 0 ? battery.toStringAsFixed(0) : '--', suffix: battery >= 0 ? '%' : '', icon: Icons.battery_5_bar_outlined, accent: kAccentBright),
+          _BeltReadout(label: 'RSSI', value: rssi != 0 ? rssi.toStringAsFixed(0) : '--', suffix: 'dBm', icon: Icons.wifi_tethering_outlined, accent: kAccentBright),
+          _BeltReadout(label: 'RR 樣本', value: _text('belt_rr_count', '0'), suffix: '筆', icon: Icons.timeline_outlined, accent: kAccentBright),
+          _BeltReadout(label: '通知封包', value: _text('belt_notifications', '0'), suffix: '筆', icon: Icons.sync_alt_outlined, accent: kAccentBright),
+          _BeltReadout(label: '連線時長', value: connectedFor >= 0 ? (connectedFor / 60).toStringAsFixed(1) : '--', suffix: '分鐘', icon: Icons.timer_outlined, accent: kAccentBright),
         ]),
         const SizedBox(height: 16),
         Row(children: [
@@ -841,7 +866,7 @@ class _BeltReadout extends StatelessWidget {
         width: 152,
         child: Container(
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: Colors.black.withValues(alpha: .12), border: Border.all(color: Colors.white.withValues(alpha: .06)), borderRadius: BorderRadius.circular(8)),
+          decoration: const BoxDecoration(color: kBackgroundDeep, border: Border(top: BorderSide(color: kAccentLine), left: BorderSide(color: kLine), right: BorderSide(color: kLine), bottom: BorderSide(color: kLine))),
           child: Row(children: [
             Icon(icon, size: 17, color: accent),
             const SizedBox(width: 9),
@@ -883,13 +908,13 @@ class _MetricTileState extends State<MetricTile> {
         padding: const EdgeInsets.all(17),
         transform: Matrix4.translationValues(0, _hovered ? -3 : 0, 0),
         decoration: BoxDecoration(
-          color: _hovered ? const Color(0xff1a282b) : const Color(0xff121b1f),
-          border: Border.all(color: _hovered ? const Color(0xff58c6a9).withValues(alpha: .45) : Colors.white.withValues(alpha: .07)),
+          color: _hovered ? kSurfaceElevated : kSurface,
+          border: Border.all(color: _hovered ? kAccentLine : kLine),
           borderRadius: BorderRadius.circular(10),
-          boxShadow: _hovered ? [BoxShadow(color: const Color(0xff58c6a9).withValues(alpha: .1), blurRadius: 22)] : [],
+          boxShadow: _hovered ? [BoxShadow(color: kAccent.withValues(alpha: .1), blurRadius: 22)] : [],
         ),
         child: Row(children: [
-          Icon(widget.icon, size: 20, color: const Color(0xff73ddbf)),
+          Icon(widget.icon, size: 20, color: kAccentBright),
           const SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(widget.label, style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 11)),
@@ -914,7 +939,7 @@ class _QualityStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = <String, double>{'臉部追蹤': ((metrics['fatigue_quality_score'] as num?)?.toDouble() ?? 0), 'rPPG 訊號': ((metrics['stress_quality_score'] as num?)?.toDouble() ?? 0), 'ROI 穩定度': ((metrics['stress_roi_area_stability'] as num?)?.toDouble() ?? 0)};
-    return GlassPanel(child: Column(children: items.entries.map((entry) => Padding(padding: const EdgeInsets.symmetric(vertical: 7), child: Row(children: [SizedBox(width: 85, child: Text(entry.key, style: TextStyle(color: Colors.white.withValues(alpha: .62), fontSize: 12))), Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: entry.value.clamp(0, 1), minHeight: 7, backgroundColor: Colors.white.withValues(alpha: .07), color: const Color(0xff58c6a9)))), const SizedBox(width: 12), SizedBox(width: 44, child: Text('${(entry.value * 100).toStringAsFixed(0)}%', textAlign: TextAlign.right, style: const TextStyle(color: Color(0xff73ddbf), fontSize: 12)))]))).toList()));
+    return GlassPanel(child: Column(children: items.entries.map((entry) => Padding(padding: const EdgeInsets.symmetric(vertical: 7), child: Row(children: [SizedBox(width: 85, child: Text(entry.key, style: TextStyle(color: Colors.white.withValues(alpha: .62), fontSize: 12))), Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: entry.value.clamp(0, 1), minHeight: 7, backgroundColor: Colors.white.withValues(alpha: .07), color: kAccent))), const SizedBox(width: 12), SizedBox(width: 44, child: Text('${(entry.value * 100).toStringAsFixed(0)}%', textAlign: TextAlign.right, style: const TextStyle(color: kAccentBright, fontSize: 12)))]))).toList()));
   }
 }
 
@@ -956,7 +981,7 @@ class PlaybackView extends StatelessWidget {
                         return GlassPanel(
                           child: ListTile(
                             contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.movie_outlined, color: Color(0xff73ddbf)),
+                            leading: const Icon(Icons.movie_outlined, color: kAccentBright),
                             title: Text(item['session_name']?.toString() ?? '未命名工作階段'),
                             subtitle: Text('${item['duration_str'] ?? '--'}  •  ${item['record_count'] ?? 0} 筆指標', style: TextStyle(color: Colors.white.withValues(alpha: .45))),
                             trailing: const Icon(Icons.chevron_right, color: Colors.white38),
@@ -1022,7 +1047,7 @@ class _ReplayControlPanelState extends State<_ReplayControlPanel> {
         Row(children: [
           const Text('批次回測控制', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           const Spacer(),
-          if (running) Text('$done / ${total > 0 ? total : '--'}', style: const TextStyle(color: Color(0xff73ddbf), fontWeight: FontWeight.w700)),
+          if (running) Text('$done / ${total > 0 ? total : '--'}', style: const TextStyle(color: kAccentBright, fontWeight: FontWeight.w700)),
         ]),
         const SizedBox(height: 12),
         Row(children: [
@@ -1232,8 +1257,8 @@ class GlassPanel extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: .045),
-            border: Border.all(color: Colors.white.withValues(alpha: .09)),
+            color: kSurface.withValues(alpha: .78),
+            border: const Border(top: BorderSide(color: kAccentLine), left: BorderSide(color: kLine), right: BorderSide(color: kLine), bottom: BorderSide(color: kLine)),
             borderRadius: radius,
           ),
           child: child,
