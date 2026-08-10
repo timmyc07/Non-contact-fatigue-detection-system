@@ -3,6 +3,8 @@ class TauriBridge {
 
   static final TauriBridge instance = TauriBridge._();
 
+  bool get isAvailable => false;
+
   Future<dynamic> invoke(String command, [Map<String, dynamic>? args]) async {
     throw UnsupportedError(
         'Tauri command "$command" is only available on Web.');
@@ -30,4 +32,14 @@ class TauriBridge {
   }
 
   Future<String?> pickReplayFolder() async => null;
+
+  Future<void> setOverlayWindow({
+    required bool visible,
+    required bool locked,
+  }) async {
+    await invoke('set_overlay_window', <String, dynamic>{
+      'visible': visible,
+      'locked': locked,
+    });
+  }
 }

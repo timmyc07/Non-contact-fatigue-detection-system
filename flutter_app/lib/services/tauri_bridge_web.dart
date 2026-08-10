@@ -3,12 +3,17 @@ import 'dart:js_interop';
 @JS('window.__TAURI__.core.invoke')
 external JSPromise<JSAny?> _tauriInvoke(String command, JSAny? args);
 
+@JS('window.__TAURI__')
+external JSAny? get _tauriGlobal;
+
 /// Thin interop layer for Flutter Web running inside Tauri v2.
 /// Browser development falls back with a clear error instead of crashing at startup.
 class TauriBridge {
   const TauriBridge._();
 
   static final TauriBridge instance = TauriBridge._();
+
+  bool get isAvailable => _tauriGlobal != null;
 
   Future<dynamic> invoke(String command, [Map<String, dynamic>? args]) async {
     try {
@@ -53,5 +58,15 @@ class TauriBridge {
   Future<String?> pickReplayFolder() async {
     final value = await invoke('pick_replay_folder');
     return value is String && value.isNotEmpty ? value : null;
+  }
+
+  Future<void> setOverlayWindow({
+    required bool visible,
+    required bool locked,
+  }) async {
+    await invoke('set_overlay_window', <String, dynamic>{
+      'visible': visible,
+      'locked': locked,
+    });
   }
 }

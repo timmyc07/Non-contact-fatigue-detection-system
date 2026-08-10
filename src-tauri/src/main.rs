@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{Manager, WebviewWindow};
+use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 
 struct BackendProcess(Mutex<Option<Child>>);
@@ -84,6 +84,53 @@ async fn pick_replay_folder(app: tauri::AppHandle) -> Result<Option<String>, Str
     };
     let path = file_path.into_path().map_err(|error| error.to_string())?;
     path_to_frontend_string(&path).map(Some)
+}
+
+fn overlay_url() -> WebviewUrl {
+    if cfg!(debug_assertions) {
+        WebviewUrl::External(
+            "http://localhost:1420/?overlay=1"
+                .parse()
+                .expect("overlay dev URL must be valid"),
+        )
+    } else {
+        WebviewUrl::App("index.html?overlay=1".into())
+    }
+}
+
+#[tauri::command]
+fn set_overlay_window(
+    app: tauri::AppHandle,
+    visible: bool,
+    locked: bool,
+) -> Result<(), String> {
+    let window = if let Some(window) = app.get_webview_window("overlay") {
+        window
+    } else if visible {
+        WebviewWindowBuilder::new(&app, "overlay", overlay_url())
+            .title("疲勞監測 Overlay")
+            .inner_size(720.0, 480.0)
+            .min_inner_size(320.0, 180.0)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .build()
+            .map_err(|error| error.to_string())?
+    } else {
+        return Ok(());
+    };
+
+    window
+        .set_ignore_cursor_events(locked)
+        .map_err(|error| error.to_string())?;
+    if visible {
+        window.show().map_err(|error| error.to_string())?;
+    } else {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn backend_address() -> SocketAddr {
@@ -293,7 +340,8 @@ fn run() {
             close_window,
             start_dragging,
             toggle_always_on_top,
-            pick_replay_folder
+            pick_replay_folder,
+            set_overlay_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");

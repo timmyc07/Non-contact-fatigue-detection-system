@@ -77,6 +77,33 @@ def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> N
     assert state["hotkey_registration"]["failures"] == []
 
 
+def test_engine_mode_keeps_legacy_qt_overlay_hidden(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shown: list[bool] = []
+    hidden: list[bool] = []
+    monkeypatch.setattr(
+        settings_window._preview_overlay,
+        "show",
+        lambda: shown.append(True),
+    )
+    monkeypatch.setattr(
+        settings_window._preview_overlay,
+        "hide",
+        lambda: hidden.append(True),
+    )
+    settings_window._pipeline_running = True
+    settings_window._chk_preview.blockSignals(True)
+    settings_window._chk_preview.setChecked(True)
+    settings_window._chk_preview.blockSignals(False)
+
+    settings_window._sync_overlay_visibility()
+
+    assert shown == []
+    assert hidden == [True]
+
+
 def test_hotkeys_configure_replaces_all_shortcuts(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:

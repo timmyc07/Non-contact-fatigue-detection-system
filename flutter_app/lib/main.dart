@@ -56,7 +56,9 @@ class FatigueMonitorApp extends StatelessWidget {
           titleMedium: TextStyle(color: ink, fontWeight: FontWeight.w700),
         ),
       ),
-      home: const MonitorShell(),
+      home: Uri.base.queryParameters['overlay'] == '1'
+          ? const OverlayShell()
+          : const MonitorShell(),
     );
   }
 }
@@ -111,6 +113,10 @@ class _MonitorShellState extends State<MonitorShell> {
   bool _alwaysOnTop = false;
   int? _lastDesktopNoticeId;
   int _selectedSection = 0;
+  Map<String, bool>? _pendingOverlaySync;
+  bool _overlaySyncInFlight = false;
+  bool _overlaySyncDisposed = false;
+  bool _overlaySyncErrorShown = false;
 
   @override
   void initState() {
@@ -147,12 +153,14 @@ class _MonitorShellState extends State<MonitorShell> {
       final state = await _backend.controlState();
       if (!mounted) return;
       _showNewDesktopNotice(state);
+      _requestOverlaySync(state);
       setState(() {
         _engineState = state;
         _connected = true;
         if (!silent) _error = null;
       });
     } catch (error) {
+      _hideOverlayWindow();
       if (!mounted) return;
       setState(() {
         _connected = false;
@@ -174,6 +182,7 @@ class _MonitorShellState extends State<MonitorShell> {
       final state = await _backend.command(command, args);
       if (mounted) {
         _showNewDesktopNotice(state);
+        _requestOverlaySync(state);
         setState(() => _engineState = state);
         final message = _commandSuccessMessage(command, args);
         if (message != null) _showCommandMessage(message);
@@ -231,6 +240,60 @@ class _MonitorShellState extends State<MonitorShell> {
     });
   }
 
+  void _requestOverlaySync(Map<String, dynamic> state) {
+    final running = state['pipeline_running'] == true;
+    final preview = state['overlay_preview'] == true;
+    final metrics = state['overlay_metrics'] == true;
+    _queueOverlaySync(
+      visible: running && (preview || metrics),
+      locked: state['overlay_locked'] == true,
+    );
+  }
+
+  void _hideOverlayWindow() {
+    _queueOverlaySync(visible: false, locked: true);
+  }
+
+  void _queueOverlaySync({required bool visible, required bool locked}) {
+    _pendingOverlaySync = <String, bool>{
+      'visible': visible,
+      'locked': locked,
+    };
+    if (_overlaySyncInFlight) return;
+    _overlaySyncInFlight = true;
+    unawaited(_drainOverlaySync());
+  }
+
+  Future<void> _drainOverlaySync() async {
+    while (_pendingOverlaySync != null) {
+      final desired = _pendingOverlaySync!;
+      _pendingOverlaySync = null;
+      if (!_bridge.isAvailable) continue;
+      try {
+        await _bridge.setOverlayWindow(
+          visible: desired['visible'] == true,
+          locked: desired['locked'] == true,
+        );
+        _overlaySyncErrorShown = false;
+      } catch (error) {
+        if (!_overlaySyncErrorShown && mounted && !_overlaySyncDisposed) {
+          _overlaySyncErrorShown = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !_overlaySyncDisposed) {
+              _showCommandMessage('Overlay window sync failed: $error',
+                  isError: true);
+            }
+          });
+        }
+      }
+    }
+    _overlaySyncInFlight = false;
+    if (_pendingOverlaySync != null) {
+      _overlaySyncInFlight = true;
+      unawaited(_drainOverlaySync());
+    }
+  }
+
   Future<void> _loadRecordings() async {
     try {
       final values = await _backend.recordings();
@@ -268,6 +331,8 @@ class _MonitorShellState extends State<MonitorShell> {
 
   @override
   void dispose() {
+    _overlaySyncDisposed = true;
+    _hideOverlayWindow();
     _metricsSubscription?.cancel();
     _frameSubscription?.cancel();
     _statePoller?.cancel();
@@ -371,6 +436,179 @@ class _MonitorShellState extends State<MonitorShell> {
       error: _error,
       onRetry: _refreshEngineState,
       onCommand: _runCommand,
+    );
+  }
+}
+
+class OverlayShell extends StatefulWidget {
+  const OverlayShell({super.key});
+
+  @override
+  State<OverlayShell> createState() => _OverlayShellState();
+}
+
+double overlayOpacityPercent(Map<String, dynamic> state) {
+  return ((state['overlay_opacity'] as num?)?.toDouble() ?? 55)
+      .clamp(0, 100)
+      .toDouble();
+}
+
+class _OverlayShellState extends State<OverlayShell> {
+  final _backend = BackendService();
+  final _bridge = TauriBridge.instance;
+  StreamSubscription<Map<String, dynamic>>? _metricsSubscription;
+  StreamSubscription<String>? _frameSubscription;
+  Timer? _poller;
+  Map<String, dynamic> _metrics = <String, dynamic>{};
+  Map<String, dynamic> _state = <String, dynamic>{};
+  Uint8List? _frame;
+  bool _hiddenAfterDisconnect = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _metricsSubscription = _backend.connectMetrics().listen((packet) {
+      if (mounted) setState(() => _metrics = packet);
+    });
+    _frameSubscription = _backend.previewFrames.listen((encoded) {
+      try {
+        final bytes = base64Decode(encoded);
+        if (mounted) setState(() => _frame = bytes);
+      } catch (_) {}
+    });
+    _refresh();
+    _poller = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final state = await _backend.controlState();
+      if (mounted) {
+        _hiddenAfterDisconnect = false;
+        setState(() => _state = state);
+      }
+    } catch (_) {
+      if (!_hiddenAfterDisconnect) {
+        _hiddenAfterDisconnect = true;
+        unawaited(_hideOverlayWindow());
+      }
+    }
+  }
+
+  Future<void> _hideOverlayWindow() async {
+    if (!_bridge.isAvailable) return;
+    try {
+      await _bridge.setOverlayWindow(visible: false, locked: true);
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    unawaited(_hideOverlayWindow());
+    _metricsSubscription?.cancel();
+    _frameSubscription?.cancel();
+    _poller?.cancel();
+    unawaited(_backend.dispose());
+    super.dispose();
+  }
+
+  Future<void> _drag() async {
+    try {
+      await _bridge.startDragging();
+    } catch (_) {}
+  }
+
+  String _text(String key, [String fallback = '--']) =>
+      _metrics[key]?.toString() ?? fallback;
+
+  @override
+  Widget build(BuildContext context) {
+    final previewOn = _state['overlay_preview'] == true;
+    final metricsOn = _state['overlay_metrics'] == true;
+    final locked = _state['overlay_locked'] == true;
+    final opacity = overlayOpacityPercent(_state);
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: locked ? null : (_) => _drag(),
+        child: Opacity(
+          opacity: opacity / 100,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xe6151b2b),
+              border: Border.all(color: kAccentBright.withValues(alpha: .75)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  Row(children: [
+                    Icon(locked ? Icons.lock_outline : Icons.open_with,
+                        size: 16, color: kAccentBright),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        'NCFD 監測 Overlay',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ),
+                    Text('FPS ${_text('fps')}',
+                        style: Theme.of(context).textTheme.labelSmall),
+                  ]),
+                  if (previewOn) ...[
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: CameraPreview(
+                        frame: _frame,
+                        running: _state['pipeline_running'] == true,
+                      ),
+                    ),
+                  ],
+                  if (metricsOn) ...[
+                    if (!previewOn) const Spacer(),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _OverlayMetric(
+                            label: 'BPM', value: _text('stress_bpm')),
+                        _OverlayMetric(
+                            label: 'PERCLOS', value: _text('perclos')),
+                        _OverlayMetric(label: '狀態', value: _text('status')),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OverlayMetric extends StatelessWidget {
+  const _OverlayMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+        const SizedBox(height: 2),
+        Text(value,
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(color: kAccentBright)),
+      ],
     );
   }
 }

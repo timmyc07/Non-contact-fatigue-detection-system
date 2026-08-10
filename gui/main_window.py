@@ -4523,6 +4523,9 @@ class MainWindow(QMainWindow):
 
     def _sync_overlay_visibility(self) -> None:
         """Show overlay window only when pipeline running AND at least one overlay is on."""
+        if self._engine_mode:
+            self._preview_overlay.hide()
+            return
         any_on = self._chk_preview.isChecked() or self._chk_metrics.isChecked()
         if self._pipeline_running and any_on:
             self._preview_overlay.refresh_layout()
