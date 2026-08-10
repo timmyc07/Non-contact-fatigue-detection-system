@@ -73,6 +73,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark
+.\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark --port 5001 --samples 10
 .\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark --synthetic-only --samples 10
 ```
 
@@ -105,7 +106,7 @@ bash scripts/setup_ubuntu.sh
 QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py --engine
 ```
 
-正式產品只有 Tauri v2 + Flutter Web 面板；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。PySide6 僅作為隱藏 engine runtime（Qt worker/thread、影像、音效與桌面 Overlay），不再提供可見的舊主面板。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
+正式產品只有 Tauri v2 + Flutter Web 面板與 Overlay；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。PySide6 僅作為隱藏 engine runtime（Qt worker/thread、影像、音效與 Windows 全域快捷鍵），不再建立可見舊主面板或 Qt Overlay。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
 
 Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機、分析端或 Qt 預覽訊號累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，讓分析 worker 永遠取最新幀，並限制預覽影像訊號輸出避免主執行緒堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 GUI 後端手動切換比較穩定性。
 

@@ -10,6 +10,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from gui.alarm_config import AlarmConfig  # noqa: E402
@@ -21,6 +22,7 @@ from gui.desktop_control import (  # noqa: E402
 )
 import gui.main_window as main_window_module  # noqa: E402
 from gui.main_window import MainWindow  # noqa: E402
+from gui.video_replay import ReplayVideoSummary  # noqa: E402
 
 
 _REGISTER_GLOBAL_HOTKEYS = MainWindow._register_global_hotkeys
@@ -75,6 +77,8 @@ def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> N
     }
     assert state["settings_dirty"] is False
     assert state["hotkey_registration"]["failures"] == []
+    assert state["rppg_enabled"] is False
+    assert state["monitor_focus"] is False
 
 
 def test_engine_mode_keeps_legacy_qt_overlay_hidden(
@@ -102,6 +106,71 @@ def test_engine_mode_keeps_legacy_qt_overlay_hidden(
 
     assert shown == []
     assert hidden == [True]
+
+
+def test_engine_mode_does_not_construct_legacy_visual_shell(
+    settings_window: MainWindow,
+) -> None:
+    assert settings_window.centralWidget() is None
+    assert type(settings_window._preview_overlay).__name__ == "_HeadlessOverlay"
+
+
+def test_headless_analysis_command_preserves_worker_toggle_callbacks(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        settings_window,
+        "_on_behavior_toggled",
+        lambda checked: calls.append(("behavior", checked)),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_on_stress_toggled",
+        lambda checked: calls.append(("rppg", checked)),
+    )
+
+    settings_window._handle_desktop_command(
+        "analysis.configure", {"behavior_enabled": False, "rppg_enabled": True}
+    )
+
+    assert calls == [("behavior", False), ("rppg", True)]
+    assert settings_window._chk_behavior.isChecked() is False
+    assert settings_window._chk_stress.isChecked() is True
+
+
+def test_headless_hotkeys_update_overlay_state(
+    settings_window: MainWindow,
+) -> None:
+    settings_window._menu_actions_hotkeys[0].trigger()
+    assert settings_window._chk_metrics.isChecked() is False
+
+    settings_window._menu_actions_hotkeys[4].trigger()
+    assert settings_window._chk_all.isChecked() is False
+    assert settings_window._chk_metrics.isChecked() is False
+    assert settings_window._chk_preview.isChecked() is False
+
+    settings_window._menu_actions_hotkeys[4].trigger()
+    assert settings_window._chk_all.isChecked() is True
+    assert settings_window._chk_metrics.isChecked() is True
+    assert settings_window._chk_preview.isChecked() is True
+
+
+def test_headless_replay_preview_and_queue_are_engine_safe(
+    settings_window: MainWindow,
+) -> None:
+    summary = ReplayVideoSummary(
+        subject="01",
+        label="0",
+        label_name="Alert",
+        video_path="sample.mp4",
+    )
+    settings_window._replay_queue_upsert(summary, done=False)
+    settings_window._on_replay_preview_frame(
+        QImage(2, 2, QImage.Format.Format_RGB32)
+    )
+    settings_window._update_belt_panel()
+    settings_window._refresh_monitor_metrics()
 
 
 def test_hotkeys_configure_replaces_all_shortcuts(

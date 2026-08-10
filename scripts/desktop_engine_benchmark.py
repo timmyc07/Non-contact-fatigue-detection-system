@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import ctypes
+from ctypes import wintypes
 import gc
 import http.client
 import json
@@ -28,6 +29,77 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
 API_VERSION = 2
+
+
+def _expand_process_tree(root_pid: int, parent_by_pid: dict[int, int]) -> list[int]:
+    pids = [int(root_pid)]
+    seen = {int(root_pid)}
+    index = 0
+    while index < len(pids):
+        parent = pids[index]
+        index += 1
+        for pid, parent_pid in parent_by_pid.items():
+            if parent_pid == parent and pid not in seen:
+                seen.add(pid)
+                pids.append(pid)
+    return pids
+
+
+def _windows_process_parent_map() -> dict[int, int]:
+    if not sys.platform.startswith("win"):
+        return {}
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_ulong),
+            ("cntUsage", ctypes.c_ulong),
+            ("th32ProcessID", ctypes.c_ulong),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", ctypes.c_ulong),
+            ("cntThreads", ctypes.c_ulong),
+            ("th32ParentProcessID", ctypes.c_ulong),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_ulong),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)
+    ]
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)
+    ]
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    snapshot_value = getattr(snapshot, "value", snapshot)
+    if not snapshot_value or snapshot_value == invalid_handle:
+        raise OSError("CreateToolhelp32Snapshot failed")
+    parents: dict[int, int] = {}
+    try:
+        entry = ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            raise OSError("Process32FirstW failed")
+        while True:
+            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                break
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return parents
+
+
+def _process_tree_pids(root_pid: int) -> list[int]:
+    if sys.platform.startswith("win"):
+        return _expand_process_tree(root_pid, _windows_process_parent_map())
+    return [int(root_pid)]
 
 
 def _distribution(values: list[float]) -> dict[str, float]:
@@ -99,6 +171,7 @@ def _start_engine(*, host: str, port: int, timeout: float) -> tuple[subprocess.P
         )
     environment = os.environ.copy()
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
+    environment["NCFD_BACKEND_PORT"] = str(port)
     started = time.perf_counter()
     process = subprocess.Popen(
         [sys.executable, str(ROOT / "main.py"), "--engine"],
@@ -166,19 +239,39 @@ def _rss_bytes(pid: int) -> int | None:
                 ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
             ]
 
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD
+        ]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(ProcessMemoryCounters),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
         handle = kernel32.OpenProcess(0x0400 | 0x0010, False, pid)
         if not handle:
             return None
         try:
             counters = ProcessMemoryCounters()
             counters.cb = ctypes.sizeof(counters)
-            if not ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
                 return None
             return int(counters.WorkingSetSize)
         finally:
             kernel32.CloseHandle(handle)
     return None
+
+
+def _process_tree_rss_bytes(root_pid: int) -> tuple[list[int], int | None]:
+    pids = _process_tree_pids(root_pid)
+    values = [_rss_bytes(pid) for pid in pids]
+    measured = [value for value in values if value is not None]
+    return pids, sum(measured) if measured else None
 
 
 def _benchmark_commands(*, host: str, port: int, warmup: int, samples: int) -> dict[str, Any]:
@@ -261,6 +354,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--samples", type=int, default=30, help="Measured sample count (default: 30)")
     parser.add_argument("--warmup", type=int, default=5, help="Discarded warmup count (default: 5)")
     parser.add_argument("--startup-timeout", type=float, default=45.0, help="Engine startup timeout in seconds")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Loopback engine port (default: 5000)")
     parser.add_argument("--synthetic-only", action="store_true", help="Run only the process-free preview benchmark")
     parser.add_argument("--output", type=Path, default=None, help="Also write the JSON result to this path")
     return parser.parse_args(argv)
@@ -270,6 +364,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     samples = max(1, args.samples)
     warmup = max(0, args.warmup)
+    port = int(args.port)
+    if not 1 <= port <= 65535:
+        raise ValueError("port must be between 1 and 65535")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     result: dict[str, Any] = {
         "schema_version": 1, "python": sys.version.split()[0], "platform": sys.platform,
@@ -279,21 +376,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.synthetic_only:
             process, startup_ms = _start_engine(
-                host=DEFAULT_HOST, port=DEFAULT_PORT, timeout=max(1.0, args.startup_timeout)
+                host=DEFAULT_HOST, port=port, timeout=max(1.0, args.startup_timeout)
             )
-            rss = _rss_bytes(process.pid)
+            process_tree_pids, rss = _process_tree_rss_bytes(process.pid)
+            command_result = _benchmark_commands(
+                host=DEFAULT_HOST, port=port, warmup=warmup, samples=samples
+            )
             result["engine"] = {
                 "pid": process.pid, "startup_to_api_ready_ms": round(startup_ms, 3),
+                "process_tree_pids": process_tree_pids,
                 "rss_bytes_at_ready": rss,
                 "rss_mib_at_ready": round(rss / (1024 * 1024), 3) if rss is not None else None,
-                "command": _benchmark_commands(
-                    host=DEFAULT_HOST, port=DEFAULT_PORT, warmup=warmup, samples=samples
-                ),
+                "command": command_result,
             }
         result["preview"] = _benchmark_synthetic_preview(warmup=warmup, samples=samples)
     finally:
         if process is not None:
-            _stop_engine(process, host=DEFAULT_HOST, port=DEFAULT_PORT)
+            _stop_engine(process, host=DEFAULT_HOST, port=port)
 
     rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
     print(rendered)

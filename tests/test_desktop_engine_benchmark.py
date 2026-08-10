@@ -1,11 +1,19 @@
 from __future__ import annotations
 
-from scripts.desktop_engine_benchmark import _benchmark_synthetic_preview, _distribution
+from scripts.desktop_engine_benchmark import (
+    _benchmark_synthetic_preview,
+    _distribution,
+    _expand_process_tree,
+)
 
 
 def test_distribution_reports_expected_percentiles() -> None:
     result = _distribution([1.0, 2.0, 3.0, 4.0, 5.0])
     assert result == {"min": 1.0, "p50": 3.0, "p95": 5.0, "max": 5.0, "mean": 3.0}
+
+
+def test_expand_process_tree_follows_nested_children_once() -> None:
+    assert _expand_process_tree(10, {11: 10, 12: 11, 13: 99, 14: 12}) == [10, 11, 12, 14]
 
 
 def test_synthetic_preview_benchmark_delivers_every_frame(monkeypatch) -> None:

@@ -129,6 +129,230 @@ class _WebRestartBridge(QObject):
     stopped = Signal(bool, bool)
 
 
+class _HeadlessControl:
+    """Small state-only adapter for engine mode; it has no visual Qt object."""
+
+    def __init__(
+        self,
+        *,
+        text: str = "",
+        checked: bool = False,
+        value: int | float = 0,
+    ) -> None:
+        self._text = text
+        self._checked = checked
+        self._value = value
+        self._enabled = True
+        self._visible = True
+        self._items: list[tuple[str, object]] = []
+        self._index = -1
+
+    def setChecked(self, value: bool) -> None:
+        self._checked = bool(value)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setValue(self, value: int | float) -> None:
+        self._value = value
+
+    def value(self) -> int | float:
+        return self._value
+
+    def setText(self, value: object) -> None:
+        self._text = str(value)
+
+    def showMessage(self, value: object, _timeout: int = 0) -> None:
+        self._text = str(value)
+
+    def text(self) -> str:
+        return self._text
+
+    def setCurrentText(self, value: object) -> None:
+        wanted = str(value)
+        for index, (text, _data) in enumerate(self._items):
+            if text == wanted:
+                self._index = index
+                break
+        self._text = wanted
+
+    def currentText(self) -> str:
+        if 0 <= self._index < len(self._items):
+            return self._items[self._index][0]
+        return self._text
+
+    def setCurrentIndex(self, index: int) -> None:
+        self._index = int(index)
+        if 0 <= self._index < len(self._items):
+            self._text = self._items[self._index][0]
+
+    def currentIndex(self) -> int:
+        return self._index
+
+    def currentData(self) -> object:
+        if 0 <= self._index < len(self._items):
+            return self._items[self._index][1]
+        return None
+
+    def addItem(self, text: object, data: object = None) -> None:
+        self._items.append((str(text), data))
+        if self._index < 0:
+            self._index = 0
+            self._text = str(text)
+
+    def addItems(self, values: list[object] | tuple[object, ...]) -> None:
+        for value in values:
+            self.addItem(value)
+
+    def clear(self) -> None:
+        self._items.clear()
+        self._index = -1
+        self._text = ""
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemData(self, index: int) -> object:
+        return self._items[index][1]
+
+    def itemText(self, index: int) -> str:
+        return self._items[index][0]
+
+    def setRange(self, minimum: int | float, maximum: int | float) -> None:
+        self._value = max(minimum, min(maximum, self._value))
+
+    def setEnabled(self, value: bool) -> None:
+        self._enabled = bool(value)
+
+    def isEnabled(self) -> bool:
+        return self._enabled
+
+    def setVisible(self, value: bool) -> None:
+        self._visible = bool(value)
+
+    def isVisible(self) -> bool:
+        return self._visible
+
+    def blockSignals(self, _blocked: bool) -> None:
+        return
+
+    def setProperty(self, _name: str, _value: object) -> None:
+        return
+
+    def setStyleSheet(self, _value: str) -> None:
+        return
+
+    def append(self, _value: str) -> None:
+        return
+
+    def clearContents(self) -> None:
+        return
+
+    def setPixmap(self, _value: object) -> None:
+        return
+
+    def contentsRect(self) -> QRect:
+        return QRect(0, 0, 640, 360)
+
+    def set_colors(self, _primary: object, _secondary: object) -> None:
+        return
+
+    def set_grid_color(self, _color: object) -> None:
+        return
+
+    def add_value(self, _value: object) -> None:
+        return
+
+    def set_value(self, _value: object) -> None:
+        return
+
+    def set_data(self, _data: object) -> None:
+        return
+
+    def set_fraction(self, _fraction: object) -> None:
+        return
+
+    def size(self) -> QSize:
+        return QSize(640, 360)
+
+
+class _HeadlessAction(_HeadlessControl):
+    def __init__(self, callback: Any) -> None:
+        super().__init__()
+        self._callback = callback
+        self._shortcut = QKeySequence()
+
+    def setShortcut(self, shortcut: QKeySequence) -> None:
+        self._shortcut = shortcut
+
+    def shortcut(self) -> QKeySequence:
+        return self._shortcut
+
+    def trigger(self) -> None:
+        self._callback()
+
+
+class _HeadlessOverlay:
+    """No-op compatibility surface; Tauri owns the visible overlay in engine mode."""
+
+    def saveGeometry(self) -> QByteArray:
+        return QByteArray()
+
+    def restoreGeometry(self, _geometry: QByteArray) -> None:
+        return
+
+    def apply_lock_state(self, _locked: bool) -> None:
+        return
+
+    def close(self) -> None:
+        return
+
+    def hide(self) -> None:
+        return
+
+    def refresh_layout(self) -> None:
+        return
+
+    def set_metrics_visible(self, _visible: bool) -> None:
+        return
+
+    def set_opacity(self, _opacity: float) -> None:
+        return
+
+    def set_preview_visible(self, _visible: bool) -> None:
+        return
+
+    def show(self) -> None:
+        return
+
+    def show_fatigue_panel(self, _visible: bool) -> None:
+        return
+
+    def show_fused_panel(self, _visible: bool) -> None:
+        return
+
+    def show_rppg_panel(self, _visible: bool) -> None:
+        return
+
+    def update_camera_info(self, *_args: object) -> None:
+        return
+
+    def update_fatigue_metrics(self, _metrics: object) -> None:
+        return
+
+    def update_fps(self, _fps: float) -> None:
+        return
+
+    def update_frame(self, _image: object) -> None:
+        return
+
+    def update_fused_score(self, _score: object) -> None:
+        return
+
+    def update_rppg_metrics(self, _metrics: object) -> None:
+        return
+
+
 # ── 視覺主題 token（僅影響 QSS 外觀，絕不影響任何 signal/slot 或數值行為） ──
 # 轉譯自 claude.ai/design 設計稿（Industry design system）：深色為預設，另備淺色。
 # 語意色（ok/warn/bad、綜合疲勞等級動態色）由資料驅動，不放進 palette。
@@ -975,8 +1199,11 @@ class MainWindow(QMainWindow):
         self._hotkeys = HotkeyConfig()
         self._user = UserProfile()
 
-        self._preview_overlay = PreviewOverlayWindow()
-        self._preview_overlay.move(100, 100)
+        self._preview_overlay = (
+            _HeadlessOverlay() if self._engine_mode else PreviewOverlayWindow()
+        )
+        if not self._engine_mode:
+            self._preview_overlay.move(100, 100)
         self._cam_thread: QThread | None = None
         self._cam_worker: CameraStreamWorker | None = None
         self._rppg_thread: QThread | None = None
@@ -1085,9 +1312,18 @@ class MainWindow(QMainWindow):
         # 啟動計時器當下記錄的 _recording_db_path，供 _finish_auto_capture 收尾時比對，
         # 避免誤停使用者在倒數期間另行啟動的、與本次自動採集無關的新錄製。
         self._auto_capture_expected_db_path: Path | None = None
+        self._monitor_focus = False
+        self._monitor_rail = None
+        self._monitor_controls_panel = None
+        self._preview_panel = None
+        self._replay_queue_table = None
 
-        self._build_menu()
-        self._build_central()
+        if self._engine_mode:
+            self._install_headless_controls()
+            self._start_camera_scan()
+        else:
+            self._build_menu()
+            self._build_central()
 
         self._desktop_control_timer = QTimer(self)
         self._desktop_control_timer.setInterval(20)
@@ -1097,11 +1333,126 @@ class MainWindow(QMainWindow):
         self._load_settings()
         self._alarm_controller = FatigueAlarmController(self._alarm_config, self)
         self._apply_hotkey_shortcuts()
-        self._apply_overlay_state()
+        if not self._engine_mode:
+            self._apply_overlay_state()
         self._start_web_server()
 
         self.statusBar().showMessage("就緒 — 選擇攝影機後按「開始」可預覽（無 MediaPipe）")
-        self._apply_native_titlebar_theme()
+        if not self._engine_mode:
+            self._apply_native_titlebar_theme()
+
+    def _install_headless_controls(self) -> None:
+        """Install state-only controls so desktop commands keep their contracts."""
+        self._chk_all = _HeadlessControl(checked=True)
+        self._chk_preview = _HeadlessControl()
+        self._chk_metrics = _HeadlessControl(checked=True)
+        self._chk_lock = _HeadlessControl(checked=True)
+        self._chk_behavior = _HeadlessControl(checked=True)
+        self._chk_stress = _HeadlessControl()
+        self._chk_auto_record = _HeadlessControl()
+        self._chk_belt_calib = _HeadlessControl()
+        self._chk_auto_capture_belt = _HeadlessControl()
+        self._chk_replay_annotated = _HeadlessControl()
+        self._sld_opacity = _HeadlessControl(value=55)
+        self._spn_auto_capture_seconds = _HeadlessControl(value=60)
+        self._spn_replay_jobs = _HeadlessControl(value=2)
+        self._act_web_allow_lan = _HeadlessControl()
+        self._log = _HeadlessControl()
+        self._mon_contrib_bars: dict[str, Any] = {}
+        self._layout_seg_buttons: dict[str, Any] = {}
+        self._theme_seg_buttons: dict[str, Any] = {}
+
+        # Explicit state-only fields used by engine callbacks.  These are not
+        # visual widgets; keeping the names explicit makes missing runtime
+        # contracts fail loudly instead of being hidden by a dynamic adapter.
+        control_names = (
+            "_btn_auto_capture", "_btn_bench", "_btn_record", "_btn_record_baseline",
+            "_btn_replay_parallel", "_btn_replay_start", "_btn_replay_stop", "_btn_start",
+            "_lbl_belt_address", "_lbl_belt_banner_battery", "_lbl_belt_banner_bpm",
+            "_lbl_belt_banner_device", "_lbl_belt_banner_rssi", "_lbl_belt_battery",
+            "_lbl_belt_bpm", "_lbl_belt_calib_confidence", "_lbl_belt_calib_corr_resid",
+            "_lbl_belt_calib_offset", "_lbl_belt_calib_pairs", "_lbl_belt_calib_raw_resid",
+            "_lbl_belt_calib_resid", "_lbl_belt_calib_status", "_lbl_belt_cfg_address",
+            "_lbl_belt_cfg_capture", "_lbl_belt_cfg_name_prefix", "_lbl_belt_cfg_tuning",
+            "_lbl_belt_connected_since", "_lbl_belt_contact", "_lbl_belt_device",
+            "_lbl_belt_hrv_conf", "_lbl_belt_hrv_lfhf", "_lbl_belt_hrv_rmssd",
+            "_lbl_belt_hrv_sdnn", "_lbl_belt_hrv_warmup", "_lbl_belt_last_error",
+            "_lbl_belt_location", "_lbl_belt_notifications", "_lbl_belt_rr",
+            "_lbl_belt_rssi", "_lbl_belt_stale", "_lbl_belt_status", "_lbl_bench",
+            "_lbl_cam_hint", "_lbl_camera", "_lbl_codec", "_lbl_dev_belt", "_lbl_dev_cam",
+            "_lbl_dev_mp", "_lbl_face", "_lbl_fps", "_lbl_opacity", "_lbl_pipeline",
+            "_lbl_preview_telemetry", "_lbl_profile_status", "_lbl_record",
+            "_lbl_replay_current", "_lbl_replay_dir", "_lbl_replay_parallel_status",
+            "_lbl_replay_preview", "_lbl_replay_result", "_lbl_replay_sum_avg",
+            "_lbl_replay_sum_fail", "_lbl_replay_sum_warn", "_mon_blink", "_mon_bpm",
+            "_mon_bpm_delta", "_mon_ear", "_mon_expr", "_mon_fused_level",
+            "_mon_fused_score", "_mon_gaze", "_mon_head", "_mon_hrv_conf", "_mon_lfhf",
+            "_mon_perclos", "_mon_rec_pill", "_mon_rmssd", "_mon_score_bar",
+            "_mon_score_big", "_mon_sdnn", "_mon_sqi", "_mon_trend", "_mon_warmup",
+            "_tag_mesh", "_tag_rppg", "_frame_replay_preview",
+        )
+        for name in control_names:
+            self.__dict__[name] = _HeadlessControl()
+        self._belt_bpm_spark = _HeadlessControl()
+        self._belt_calib_bar = _HeadlessControl()
+        self._mon_wave = _HeadlessControl()
+        self._brand_dot = _HeadlessControl()
+        self._belt_banner_dot = _HeadlessControl()
+
+        camera = self._engine_controller.camera_snapshot()
+        self._cmb_camera = _HeadlessControl()
+        self._cmb_camera.addItem("-- select camera --", None)
+        self._cmb_resolution = _HeadlessControl()
+        self._cmb_resolution.addItems(list(CAMERA_RESOLUTIONS))
+        self._cmb_resolution.setCurrentText(camera.resolution)
+        self._cmb_fps = _HeadlessControl()
+        self._cmb_fps.addItems(list(CAMERA_FPS_OPTIONS))
+        self._cmb_fps.setCurrentText(camera.fps)
+        self._cmb_backend = _HeadlessControl()
+        for backend in CAMERA_BACKENDS:
+            self._cmb_backend.addItem(backend.upper(), backend)
+        self._select_combo_by_data(self._cmb_backend, camera.backend)
+        self._chk_horizontal_flip = _HeadlessControl(checked=camera.horizontal_flip)
+
+        callbacks = (
+            lambda: self._toggle_headless_checkbox(
+                self._chk_metrics, self._on_metrics_toggled
+            ),
+            lambda: self._toggle_headless_checkbox(
+                self._chk_preview, self._on_preview_toggled
+            ),
+            self._toggle_pipeline,
+            lambda: self._toggle_headless_checkbox(self._chk_lock, self._on_lock_toggled),
+            self._toggle_headless_all,
+            self._toggle_recording,
+        )
+        self._menu_actions_hotkeys = tuple(_HeadlessAction(callback) for callback in callbacks)
+
+    def _toggle_headless_checkbox(self, control: _HeadlessControl, handler) -> None:
+        checked = not control.isChecked()
+        control.setChecked(checked)
+        handler(checked)
+
+    def _toggle_headless_all(self) -> None:
+        checked = not self._chk_all.isChecked()
+        self._chk_all.setChecked(checked)
+        self._on_toggle_all(checked)
+
+    def _set_engine_checkbox(
+        self,
+        control: _HeadlessControl,
+        checked: bool,
+        handler=None,
+    ) -> None:
+        previous = control.isChecked()
+        control.setChecked(checked)
+        if self._engine_mode and handler is not None and previous != checked:
+            handler(checked)
+
+    def statusBar(self) -> Any:  # noqa: N802
+        if getattr(self, "_engine_mode", False):
+            return _HeadlessControl()
+        return super().statusBar()
 
     def _apply_native_titlebar_theme(self) -> None:
         """Windows：讓原生標題列跟隨深/淺主題（DWM immersive dark mode）。
@@ -1387,9 +1738,9 @@ class MainWindow(QMainWindow):
             track = QColor(pal["TEXT"])
             track.setAlpha(26)
             self._belt_calib_bar.set_colors(pal["STATUS_OK"], track)
-        if hasattr(self, "_replay_queue_table"):
+        if self._replay_queue_table is not None:
             self._restyle_replay_queue_rows()
-        if hasattr(self, "_preview_panel"):
+        if self._preview_panel is not None:
             self._preview_panel.set_grid_color(QColor(255, 255, 255, 16))
         self._refresh_preview_tags()
         self._update_device_status()
@@ -1694,9 +2045,9 @@ class MainWindow(QMainWindow):
     def _set_monitor_layout(self, focus: bool) -> None:
         """分割 Split（雙欄）／專注 Focus（隱藏右欄與控制卡、預覽放大）純視覺切換。"""
         self._monitor_focus = focus
-        if hasattr(self, "_monitor_rail"):
+        if self._monitor_rail is not None:
             self._monitor_rail.setVisible(not focus)
-        if hasattr(self, "_monitor_controls_panel"):
+        if self._monitor_controls_panel is not None:
             self._monitor_controls_panel.setVisible(not focus)
         if hasattr(self, "_layout_seg_buttons"):
             self._set_segmented_selection(self._layout_seg_buttons, "focus" if focus else "split")
@@ -2333,13 +2684,13 @@ class MainWindow(QMainWindow):
         """批次開始時清空處理清單表格與摘要聚合。"""
         self._replay_queue_rows = {}
         self._replay_completed_summaries = []
-        if hasattr(self, "_replay_queue_table"):
+        if self._replay_queue_table is not None:
             self._replay_queue_table.setRowCount(0)
         self._refresh_replay_summary()
 
     def _replay_queue_upsert(self, summary: ReplayVideoSummary, *, done: bool) -> None:
         """依 video_start／video_done 事件在處理清單表格新增或更新一列（純顯示層）。"""
-        table = getattr(self, "_replay_queue_table", None)
+        table = self._replay_queue_table
         if table is None:
             return
         key = self._replay_video_key(summary)
@@ -3729,8 +4080,12 @@ class MainWindow(QMainWindow):
             )
             if not behavior_enabled and not rppg_enabled:
                 raise ValueError("At least one analysis mode must remain enabled")
-            self._chk_behavior.setChecked(behavior_enabled)
-            self._chk_stress.setChecked(rppg_enabled)
+            self._set_engine_checkbox(
+                self._chk_behavior, behavior_enabled, self._on_behavior_toggled
+            )
+            self._set_engine_checkbox(
+                self._chk_stress, rppg_enabled, self._on_stress_toggled
+            )
             self._settings_dirty = True
 
         elif command == "preferences.configure":
@@ -3743,7 +4098,14 @@ class MainWindow(QMainWindow):
             }
             for key, checkbox in checkbox_keys.items():
                 if key in args:
-                    checkbox.setChecked(self._require_bool(args, key))
+                    checked = self._require_bool(args, key)
+                    handler = {
+                        "belt_calibration": self._on_belt_calib_toggled,
+                        "overlay_preview": self._on_preview_toggled,
+                        "overlay_metrics": self._on_metrics_toggled,
+                        "overlay_locked": self._on_lock_toggled,
+                    }.get(key)
+                    self._set_engine_checkbox(checkbox, checked, handler)
             self._settings_dirty = True
 
         elif command == "auto_capture.set":
@@ -3780,7 +4142,11 @@ class MainWindow(QMainWindow):
 
         elif command == "overlay.configure":
             if "all" in args:
-                self._chk_all.setChecked(self._require_bool(args, "all"))
+                checked = self._require_bool(args, "all")
+                changed = self._chk_all.isChecked() != checked
+                self._chk_all.setChecked(checked)
+                if self._engine_mode and changed:
+                    self._on_toggle_all(checked)
             if "opacity" in args:
                 opacity = args["opacity"]
                 if isinstance(opacity, bool) or not isinstance(opacity, int) or not 0 <= opacity <= 100:
@@ -5687,10 +6053,14 @@ class MainWindow(QMainWindow):
         """回滾本次自動採集自己強制勾選的核取方塊，且只在目前仍是勾選狀態才動，
         避免覆蓋使用者在期間手動做的操作。"""
         if self._auto_capture_started_belt_calib and self._chk_belt_calib.isChecked():
-            self._chk_belt_calib.setChecked(False)
+            self._set_engine_checkbox(
+                self._chk_belt_calib, False, self._on_belt_calib_toggled
+            )
         self._auto_capture_started_belt_calib = False
         if self._auto_capture_started_stress and self._chk_stress.isChecked():
-            self._chk_stress.setChecked(False)
+            self._set_engine_checkbox(
+                self._chk_stress, False, self._on_stress_toggled
+            )
         self._auto_capture_started_stress = False
 
     def _on_auto_capture_clicked(self) -> None:
@@ -5708,10 +6078,14 @@ class MainWindow(QMainWindow):
         self._auto_capture_started_recording = False
         if include_belt:
             if not self._chk_stress.isChecked():
-                self._chk_stress.setChecked(True)
+                self._set_engine_checkbox(
+                    self._chk_stress, True, self._on_stress_toggled
+                )
                 self._auto_capture_started_stress = True
             if not self._chk_belt_calib.isChecked():
-                self._chk_belt_calib.setChecked(True)
+                self._set_engine_checkbox(
+                    self._chk_belt_calib, True, self._on_belt_calib_toggled
+                )
                 self._auto_capture_started_belt_calib = True
 
         pipeline_started_by_this_call = False
