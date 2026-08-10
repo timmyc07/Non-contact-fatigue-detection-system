@@ -13,6 +13,7 @@ def test_windows_shell_uses_opaque_webview_surface() -> None:
 
     assert window["decorations"] is False
     assert window["transparent"] is False
+    assert window["devtools"] is False
 
 
 def test_flutter_bootstrap_page_has_opaque_fallback_background() -> None:
@@ -27,3 +28,43 @@ def test_tauri_csp_allows_flutter_canvaskit_and_fonts() -> None:
 
     assert "https://www.gstatic.com" in csp
     assert "https://fonts.gstatic.com" in csp
+
+
+def test_tauri_csp_allows_configured_loopback_backend_ports_only() -> None:
+    config = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    csp = config["app"]["security"]["csp"]
+
+    assert "http://127.0.0.1:*" in csp
+    assert "http://localhost:*" in csp
+    assert "ws://127.0.0.1:*" in csp
+    assert "ws://localhost:*" in csp
+    assert "http://*:" not in csp
+
+
+def test_windows_installer_bundles_offline_webview_runtime() -> None:
+    config = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    install_mode = config["bundle"]["windows"]["webviewInstallMode"]
+
+    assert install_mode == {"type": "offlineInstaller", "silent": True}
+
+
+def test_tauri_bundles_engine_under_the_runtime_resource_root() -> None:
+    config = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+
+    assert config["bundle"]["resources"] == {"../dist/ncfd-engine/": "engine/"}
+
+
+def test_tauri_shell_enforces_single_instance() -> None:
+    cargo = (ROOT / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
+    source = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+
+    assert 'tauri-plugin-single-instance = "2"' in cargo
+    assert "tauri_plugin_single_instance::init" in source
+
+
+def test_desktop_build_propagates_tauri_failure() -> None:
+    script = (ROOT / "scripts" / "build_desktop.ps1").read_text(encoding="utf-8")
+
+    assert "npm run desktop:build" in script
+    assert 'if ($LASTEXITCODE -ne 0)' in script
+    assert "Tauri desktop build failed" in script

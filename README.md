@@ -87,7 +87,7 @@ Python/套件版本與 `--samples`，並確保 TCP 5000 沒有其他 engine。
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
 ```
-輸出位於 `src-tauri\target\release\bundle\nsis\`。安裝包包含 Tauri/Flutter 外殼；Python engine 仍需與安裝包一起部署，或透過 `NCFD_ENGINE_ROOT` 和 `NCFD_ENGINE_PYTHON` 指向包含 `.venv`、`main.py`、`models` 的 engine 目錄。
+輸出位於 `src-tauri\target\release\bundle\nsis\`。建置流程會先用 PyInstaller 產生 `dist\ncfd-engine\`，再由 Tauri 將 engine、MediaPipe model、不可變 tuning 資源一起嵌入 installer。正式安裝時，Tauri 會把設定、錄影與校準寫入使用者資料目錄，不需要 repository 或 `.venv`；若要開發 fallback，仍可用 `NCFD_ENGINE_ROOT` 與 `NCFD_ENGINE_PYTHON` 指向 Python engine。
 
 Ubuntu engine（供 Tauri 背景服務使用）：
 ```bash
@@ -106,7 +106,7 @@ bash scripts/setup_ubuntu.sh
 QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py --engine
 ```
 
-正式產品只有 Tauri v2 + Flutter Web 面板與 Overlay；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。PySide6 僅作為隱藏 engine runtime（Qt worker/thread、影像、音效與 Windows 全域快捷鍵），不再建立可見舊主面板或 Qt Overlay。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
+正式產品只有 Tauri v2 + Flutter Web 面板與 Overlay；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。PySide6 僅作為隱藏 engine runtime（Qt worker/thread、影像、音效與 Windows 全域快捷鍵），engine mode 不建立 legacy menu、central dashboard、Qt Overlay、視窗樣式或標題列。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
 
 Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機、分析端或 Qt 預覽訊號累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，讓分析 worker 永遠取最新幀，並限制預覽影像訊號輸出避免主執行緒堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 GUI 後端手動切換比較穩定性。
 

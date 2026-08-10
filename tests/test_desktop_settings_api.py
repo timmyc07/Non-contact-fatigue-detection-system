@@ -11,7 +11,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QImage  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QStatusBar  # noqa: E402
 
 from gui.alarm_config import AlarmConfig  # noqa: E402
 from gui.alarm_player import FatigueAlarmController  # noqa: E402
@@ -115,6 +115,10 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
 ) -> None:
     assert settings_window.centralWidget() is None
     assert type(settings_window._preview_overlay).__name__ == "_HeadlessOverlay"
+    assert settings_window.windowTitle() == ""
+    assert settings_window.minimumWidth() == 0
+    assert settings_window.minimumHeight() == 0
+    assert settings_window.findChildren(QStatusBar) == []
 
 
 def test_headless_analysis_command_preserves_worker_toggle_callbacks(
@@ -794,6 +798,60 @@ def test_replay_commands_configure_start_and_stop(
     assert configured["replay_annotated"] is True
     expected_start = "single" if mode == "single" else "parallel:False"
     assert events == [expected_start, "stop"]
+
+
+def test_engine_shutdown_waits_for_active_replay(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    settings_window._replay_thread = object()  # type: ignore[assignment]
+    monkeypatch.setattr(settings_window, "_stop_replay", lambda: events.append("stop"))
+    monkeypatch.setattr(settings_window, "close", lambda: events.append("close"))
+
+    class FakeApplication:
+        @staticmethod
+        def instance():
+            raise AssertionError("application must not quit before replay finishes")
+
+    monkeypatch.setattr("gui.main_window.QApplication", FakeApplication)
+
+    settings_window._shutdown_engine()
+
+    assert settings_window._close_after_replay is True
+    assert events == ["stop"]
+
+
+def test_engine_shutdown_resumes_after_replay_thread_finishes(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    settings_window._replay_thread = object()  # type: ignore[assignment]
+    settings_window._replay_worker = object()  # type: ignore[assignment]
+    settings_window._close_after_replay = True
+    monkeypatch.setattr(
+        settings_window,
+        "_set_replay_controls_running",
+        lambda running: events.append(f"controls:{running}"),
+    )
+    monkeypatch.setattr(settings_window, "close", lambda: events.append("close"))
+
+    class FakeApp:
+        def quit(self) -> None:
+            events.append("quit")
+
+    class FakeApplication:
+        @staticmethod
+        def instance():
+            return FakeApp()
+
+    monkeypatch.setattr("gui.main_window.QApplication", FakeApplication)
+
+    settings_window._on_replay_thread_finished()
+
+    assert settings_window._replay_thread is None
+    assert settings_window._replay_worker is None
+    assert settings_window._close_after_replay is False
+    assert events == ["controls:False", "close", "quit"]
 
 
 def test_web_reset_updates_state_and_schedules_nonblocking_restart(

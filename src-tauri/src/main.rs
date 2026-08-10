@@ -256,8 +256,13 @@ fn hide_backend_console(command: &mut Command) {
 fn hide_backend_console(_command: &mut Command) {}
 
 fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("failed to resolve resource directory: {error}"))?;
+    let packaged_engine = bundled_engine_path(&resource_dir);
     if backend_available() {
-        if backend_api_compatible() {
+        if backend_api_compatible() && packaged_engine.is_none() {
             return Ok(None);
         }
         request_backend_shutdown();
@@ -266,17 +271,13 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
             thread::sleep(Duration::from_millis(100));
         }
         if backend_available() {
-            return Err(
-                "An outdated Python engine is already using port 5000. Close it and restart the application."
-                    .to_owned(),
-            );
+            return Err(format!(
+                "A Python engine is already using port {} and could not be stopped. Close it and restart the application.",
+                backend_address().port()
+            ));
         }
     }
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("failed to resolve resource directory: {error}"))?;
-    let mut command = if let Some(engine_path) = bundled_engine_path(&resource_dir) {
+    let mut command = if let Some(engine_path) = packaged_engine {
         let engine_dir = engine_path
             .parent()
             .ok_or_else(|| "bundled engine has no parent directory".to_owned())?;
@@ -322,7 +323,10 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         thread::sleep(Duration::from_millis(150));
     }
     let _ = child.kill();
-    Err("Python engine did not open port 5000 within 20 seconds".to_owned())
+    Err(format!(
+        "Python engine did not open port {} within 20 seconds",
+        backend_address().port()
+    ))
 }
 
 fn request_backend_shutdown() {
@@ -366,6 +370,13 @@ fn stop_owned_backend(state: &BackendProcess) {
 
 fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendProcess(Mutex::new(None)))
         .setup(|app: &mut tauri::App| {

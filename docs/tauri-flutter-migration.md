@@ -27,7 +27,7 @@ This boundary is deliberately additive. The numeric paths in `rppg/`, `gui/fatig
 
 ## Files
 
-- `src-tauri/tauri.conf.json`: frameless 1280x820 window, transparency, CSP, and Flutter build hooks.
+- `src-tauri/tauri.conf.json`: frameless opaque 1280x820 main window, transparent overlay, CSP, and Flutter build hooks.
 - `src-tauri/capabilities/default.json`: least-privilege window manipulation permissions.
 - `src-tauri/src/main.rs`: window commands plus `get_system_info` and always-on-top support.
 - `src-tauri/icons/icon.ico`: placeholder shell icon; replace it with the product mark before release.
@@ -38,10 +38,12 @@ This boundary is deliberately additive. The numeric paths in `rppg/`, `gui/fatig
 ## Headless engine status
 
 The production path starts `main.py --engine`. In this mode `MainWindow` no
-longer constructs the legacy Qt menu, central dashboard, or Qt overlay. A
-state-only adapter preserves the desktop command interface while camera,
-workers, recording, alarms, BLE, replay, rPPG, fatigue scoring, and calibration
-continue to use the existing runtime paths.
+longer constructs the legacy Qt menu, central dashboard, or Qt overlay, and the
+engine path does not apply the visual QSS, window size, title bar, or status bar.
+The remaining Qt object is an internal event-loop/runtime adapter: it owns the
+existing worker, camera, recording, alarm, BLE, replay, rPPG, fatigue scoring,
+and calibration lifecycles while the desktop command API exposes explicit state
+to Flutter/Tauri.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:
@@ -56,9 +58,19 @@ shell measured 256.3 MiB and 1843.5 ms: 13.7 MiB (5.1%) less memory with no
 startup regression. Preview encoding stayed within benchmark noise. These are
 microbenchmarks; they exclude a physical camera and Flutter WebView rendering.
 
+Latest verification run (Windows, Python 3.11, 10 samples, port 5003) measured
+255.359 MiB process-tree RSS at readiness, 2454.079 ms startup to API ready,
+`state.get` p50 20.312 ms / p95 40.408 ms, and synthetic JPEG encode mean
+1.347 ms. Startup and latency are environment-sensitive; retain the command
+and sample settings when comparing future changes rather than treating these
+values as hard product limits.
+The raw result and capture metadata are retained in
+`docs/benchmarks/desktop-engine-2026-08-10.json`.
+
 ## Build prerequisites
 
-Development requires Node, Rust, and Flutter/Dart. The Python engine remains a separate runtime and must be present beside the source tree (or configured explicitly) when running a packaged shell:
+Development requires Node, Rust, Flutter/Dart, and the repository Python
+environment. The development shell starts the source engine from this checkout:
 
 ```powershell
 Set-Location flutter_app
@@ -69,17 +81,36 @@ npm install --save-dev @tauri-apps/cli
 npm run desktop
 ```
 
-For an installed Tauri build, set `NCFD_ENGINE_ROOT` to the directory containing `main.py`, `gui/`, `rppg/`, `models/`, and the Python environment, and optionally set `NCFD_ENGINE_PYTHON` to its interpreter. The shell also searches install-relative directories for `main.py`; it never relies on a developer machine path when those variables are provided. Set `NCFD_BACKEND_PORT` consistently and pass `--dart-define=NCFD_BACKEND_URL=http://127.0.0.1:<port>` when using a non-default port.
+Installed builds use the bundled sidecar automatically. `NCFD_ENGINE_ROOT` and
+`NCFD_ENGINE_PYTHON` remain development/custom-runtime overrides for a source
+engine. Set `NCFD_BACKEND_PORT` consistently and pass
+`--dart-define=NCFD_BACKEND_URL=http://127.0.0.1:<port>` when using a non-default
+port during development.
 
-The current NSIS artifact packages the Tauri/Flutter shell but not a frozen
-Python runtime. It is therefore a shell installer, not yet a standalone product
-installer. A release is standalone only after the engine, model, immutable
-tuning assets, and writable per-user calibration/config paths are packaged and
-verified outside the repository checkout.
+`scripts/build_engine_sidecar.ps1` creates a PyInstaller `--onedir` engine under
+`dist/ncfd-engine/`. `scripts/build_desktop.ps1` runs that step before the
+Flutter/Tauri build, and `src-tauri/tauri.conf.json` embeds it under the
+installer's `engine/` resource directory. At runtime Tauri injects
+`NCFD_RESOURCE_ROOT` for immutable bundled assets and `NCFD_DATA_ROOT` for
+per-user settings, recordings, and calibration. The resulting NSIS artifact is
+a standalone product installer and no longer depends on a checkout or `.venv`.
+The NSIS build embeds the offline WebView2 installer, so first launch does not
+depend on network access. Release executables are not Authenticode-signed until
+a project signing certificate is configured; SmartScreen trust remains a
+distribution release gate rather than a runtime dependency.
+On 2026-08-10, the generated NSIS package was silently installed into an
+isolated temporary directory and launched successfully: the bundled engine
+returned desktop API v2, created the per-user calibration data root, and its
+child process exited after a normal shell close. This is a packaging smoke
+check, not a camera or sensor accuracy run. The observed checks are retained in
+`docs/benchmarks/packaged-smoke-2026-08-10.json`.
 
 The Dart bridge uses the Tauri global API exposed by `withGlobalTauri`, so a JavaScript `@tauri-apps/api` import is not required for the Flutter Web build.
 
-`npm run desktop` starts the Python engine automatically through Tauri. For browser-only Flutter work, start `.venv\Scripts\python main.py --engine` separately. `flutter build web --release` is invoked by Tauri's `beforeBuildCommand`.
+`npm run desktop` starts the Python engine automatically through Tauri. For
+browser-only Flutter work, start `.venv\Scripts\python main.py --engine`
+separately. `flutter build web --release` is invoked by Tauri's
+`beforeBuildCommand`.
 
 ## Rollout
 

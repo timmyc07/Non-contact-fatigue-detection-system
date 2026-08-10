@@ -31,12 +31,12 @@
         "transparent": false,
         "center": true,
         "resizable": true,
-        "devtools": true,
+        "devtools": false,
         "visible": true
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:5000 http://localhost:5000 ws://127.0.0.1:5000 ws://localhost:5000 https://www.gstatic.com https://fonts.gstatic.com; img-src 'self' asset: data: blob: http://127.0.0.1:5000 http://localhost:5000; media-src 'self' asset: data: blob: http://127.0.0.1:5000; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://www.gstatic.com; font-src 'self' data: https://fonts.gstatic.com; worker-src 'self' blob:"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* https://www.gstatic.com https://fonts.gstatic.com; img-src 'self' asset: data: blob: http://127.0.0.1:* http://localhost:*; media-src 'self' asset: data: blob: http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://www.gstatic.com; font-src 'self' data: https://fonts.gstatic.com; worker-src 'self' blob:"
     }
   },
   "bundle": {
@@ -44,6 +44,12 @@
     "icon": ["icons/icon.ico"],
     "resources": {
       "../dist/ncfd-engine/": "engine/"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      }
     },
     "targets": ["nsis"],
     "createUpdaterArtifacts": false

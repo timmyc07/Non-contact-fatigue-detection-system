@@ -25,6 +25,9 @@ try {
         throw "Engine sidecar build failed with exit code $LASTEXITCODE"
     }
     npm run desktop:build
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tauri desktop build failed with exit code $LASTEXITCODE"
+    }
 } finally {
     Pop-Location
 }

@@ -1185,9 +1185,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._engine_mode = bool(engine_mode)
         self._engine_controller = EngineController()
-        self.setWindowTitle("NCFD System — 非接觸式疲勞監測系統 V2")
-        self.resize(1420, 900)
-        self.setMinimumSize(1080, 620)
+        if not self._engine_mode:
+            self.setWindowTitle("NCFD System — 非接觸式疲勞監測系統 V2")
+            self.resize(1420, 900)
+            self.setMinimumSize(1080, 620)
 
         # 本次啟動的 session 識別（真實識別碼，非設計稿假資料）：以啟動日期+時分生成一次。
         self._session_id = "S-" + time.strftime("%m%d")
@@ -1338,7 +1339,8 @@ class MainWindow(QMainWindow):
             self._apply_overlay_state()
         self._start_web_server()
 
-        self.statusBar().showMessage("就緒 — 選擇攝影機後按「開始」可預覽（無 MediaPipe）")
+        if not self._engine_mode:
+            self.statusBar().showMessage("就緒 — 選擇攝影機後按「開始」可預覽（無 MediaPipe）")
         if not self._engine_mode:
             self._apply_native_titlebar_theme()
 
@@ -4287,6 +4289,10 @@ class MainWindow(QMainWindow):
         return self._desktop_control_state()
 
     def _shutdown_engine(self) -> None:
+        if self._replay_thread is not None:
+            self._close_after_replay = True
+            self._stop_replay()
+            return
         self.close()
         if self._engine_mode:
             app = QApplication.instance()
@@ -4863,7 +4869,7 @@ class MainWindow(QMainWindow):
         self._set_replay_controls_running(False)
         if self._close_after_replay:
             self._close_after_replay = False
-            self.close()
+            self._shutdown_engine()
 
     def _on_toggle_all(self, checked: bool) -> None:
         for chk in (self._chk_metrics, self._chk_preview):

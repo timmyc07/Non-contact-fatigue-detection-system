@@ -123,8 +123,9 @@ def main() -> int:
     qt_args = [arg for arg in sys.argv if arg != "--engine"]
     app = QApplication(qt_args)
     app.setQuitOnLastWindowClosed(not engine_mode)
-    app.setStyle("Fusion")
-    app.setStyleSheet(application_stylesheet())
+    if not engine_mode:
+        app.setStyle("Fusion")
+        app.setStyleSheet(application_stylesheet())
     win = MainWindow(engine_mode=engine_mode)
     if not engine_mode:
         win.show()

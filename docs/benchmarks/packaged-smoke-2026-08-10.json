@@ -1,0 +1,23 @@
+{
+  "date": "2026-08-10",
+  "installer": {
+    "artifact": "src-tauri/target/release/bundle/nsis/疲勞監測操作台_0.1.0_x64-setup.exe",
+    "mode": "NSIS silent install to an isolated temporary directory",
+    "offline_webview2": true
+  },
+  "installed_layout": {
+    "shell": "fatigue-monitor-shell.exe",
+    "bundled_engine": "engine/ncfd-engine.exe",
+    "pyinstaller_internal": "engine/_internal/",
+    "resource_model": "engine/_internal/models/face_landmarker.task",
+    "resource_tuning": "engine/_internal/config/mediapipe_tuning.json"
+  },
+  "runtime_checks": {
+    "desktop_api_version": 2,
+    "engine_started_as_child_of_shell": true,
+    "per_user_data_root_created": "%LOCALAPPDATA%/tw.fatigue-monitor.desktop/",
+    "normal_shell_close_released_engine_port": true,
+    "child_process_alive_after_close": false
+  },
+  "limitations": "No physical camera, BLE sensor, or UTA-RLDD golden dataset was used in this packaging smoke."
+}

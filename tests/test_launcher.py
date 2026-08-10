@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import main as launcher
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,3 +27,44 @@ def test_legacy_panel_flag_is_rejected_without_starting_qt() -> None:
     assert result.returncode == 2
     assert "舊版 PySide 主面板已移除" in result.stdout
     assert "npm run desktop" in result.stdout
+
+
+def test_engine_mode_skips_visual_application_styling_and_show(
+    monkeypatch,
+) -> None:
+    events: list[object] = []
+
+    class FakeApplication:
+        def __init__(self, args: list[str]) -> None:
+            events.append(("app", args))
+
+        def setQuitOnLastWindowClosed(self, enabled: bool) -> None:  # noqa: N802
+            events.append(("quit_on_last_window", enabled))
+
+        def setStyle(self, _style: str) -> None:  # noqa: N802
+            raise AssertionError("engine mode must not apply a visual Qt style")
+
+        def setStyleSheet(self, _stylesheet: str) -> None:  # noqa: N802
+            raise AssertionError("engine mode must not apply a visual stylesheet")
+
+        def exec(self) -> int:
+            return 0
+
+    class FakeWindow:
+        def __init__(self, *, engine_mode: bool) -> None:
+            events.append(("window", engine_mode))
+
+        def show(self) -> None:
+            raise AssertionError("engine mode must not show a Qt window")
+
+    monkeypatch.setattr(launcher, "QApplication", FakeApplication)
+    monkeypatch.setattr(launcher, "MainWindow", FakeWindow)
+    monkeypatch.setattr(launcher, "_missing_linux_qt_runtime_libraries", lambda: [])
+    monkeypatch.setattr(sys, "argv", ["main.py", "--engine"])
+
+    assert launcher.main() == 0
+    assert events == [
+        ("app", ["main.py"]),
+        ("quit_on_last_window", False),
+        ("window", True),
+    ]
