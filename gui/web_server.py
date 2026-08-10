@@ -21,6 +21,7 @@ import re
 import sqlite3
 
 from gui.file_browser_client import FileBrowserClient
+from gui.desktop_control import DesktopControlError
 
 logger = logging.getLogger(__name__)
 
@@ -503,16 +504,44 @@ def create_app(
 
     def _invoke_control(command: str, args: dict[str, Any]) -> tuple[Any, int]:
         if control_handler is None:
-            return jsonify({"success": False, "error": "desktop control unavailable"}), 503
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "handler_missing",
+                        "message": "desktop control unavailable",
+                    },
+                }
+            ), 503
         try:
             result = control_handler(command, args)
         except TimeoutError as exc:
-            return jsonify({"success": False, "error": str(exc)}), 504
+            return jsonify({"success": False, "error": {"code": "timeout", "message": str(exc)}}), 504
+        except DesktopControlError as exc:
+            return jsonify({"success": False, "error": exc.to_payload()}), exc.status_code
         except (TypeError, ValueError) as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
-        except Exception:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "validation_error", "message": str(exc)},
+                }
+            ), 400
+        except OSError as exc:
+            logger.warning("Desktop control I/O command failed: %s: %s", command, exc)
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "io_error", "message": str(exc)},
+                }
+            ), 409
+        except Exception as exc:
             logger.exception("Desktop control command failed: %s", command)
-            return jsonify({"success": False, "error": "command failed"}), 409
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "unexpected", "message": str(exc)},
+                }
+            ), 500
         return jsonify({"success": True, "data": result}), 200
 
     @app.route("/api/control/state", methods=["GET", "OPTIONS"])
@@ -531,13 +560,28 @@ def create_app(
             return Response(status=204)
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
-            return jsonify({"success": False, "error": "JSON object required"}), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "validation_error", "message": "JSON object required"},
+                }
+            ), 400
         command = payload.get("command")
         args = payload.get("args", {})
         if not isinstance(command, str) or not command.strip():
-            return jsonify({"success": False, "error": "command is required"}), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "validation_error", "message": "command is required"},
+                }
+            ), 400
         if not isinstance(args, dict):
-            return jsonify({"success": False, "error": "args must be an object"}), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "validation_error", "message": "args must be an object"},
+                }
+            ), 400
         return _invoke_control(command.strip(), dict(args))
 
     @app.route("/api/playback")

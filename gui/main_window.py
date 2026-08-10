@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import html
 import json
+import logging
+import os
 import queue
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +17,7 @@ from typing import Any, cast
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -58,16 +62,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.alarm_config import AlarmConfig
+from gui.alarm_config import (
+    ALARM_SCENARIO_KEYS,
+    AlarmConfig,
+)
 from gui.alarm_dialog import AlarmSettingsDialog
 from gui.alarm_player import FatigueAlarmController
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.combined_worker import CombinedWorker
 from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserProfileDialog
 from gui.desktop_control import (
+    AlarmUnplayableError,
+    BusyError,
     DESKTOP_CONTROL_API_VERSION,
     DesktopCommandBroker,
+    HotkeyApplyError,
+    SettingsWriteError,
     desktop_dialog_parent,
+)
+from gui.desktop_settings_contract import (
+    parse_alarm_config,
+    parse_settings_reset_sections,
+    parse_user_profile,
 )
 from gui.engine_controller import (
     CAMERA_BACKENDS,
@@ -109,6 +125,11 @@ from gui.web_server import (
 )
 
 WEB_PREVIEW_TARGET_FPS = 30.0
+logger = logging.getLogger(__name__)
+
+
+class _WebRestartBridge(QObject):
+    stopped = Signal(bool, bool)
 
 
 # ── 視覺主題 token（僅影響 QSS 外觀，絕不影響任何 signal/slot 或數值行為） ──
@@ -991,8 +1012,19 @@ class MainWindow(QMainWindow):
         self._global_hotkeys_registered = False
         self._global_hotkey_id_map: dict[int, QAction] = {}
         self._hotkey_failed_once: set[str] = set()
+        self._hotkey_registration_failures: list[dict[str, Any]] = []
+        self._settings_dirty = False
         self._web_metrics_buffer = MetricsBuffer(maxsize=300)
         self._web_server: WebServerThread | None = None
+        self._web_restart_scheduled = False
+        self._web_restart_in_progress = False
+        self._web_restart_shutdown = False
+        self._web_restart_stopping_server: WebServerThread | None = None
+        self._web_restart_bridge = _WebRestartBridge(self)
+        self._web_restart_bridge.stopped.connect(
+            self._on_web_restart_stopped,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._desktop_control_broker = DesktopCommandBroker(timeout_seconds=10.0)
         self._web_emit_interval = 0.25
         self._web_frame_interval = 1.0 / WEB_PREVIEW_TARGET_FPS
@@ -2779,6 +2811,7 @@ class MainWindow(QMainWindow):
         return int(cast(Any, getattr(value, "value", value)))
 
     def _register_global_hotkeys(self) -> None:
+        self._hotkey_registration_failures = []
         if not self._global_hotkey_enabled:
             return
         self._unregister_global_hotkeys()
@@ -2786,14 +2819,39 @@ class MainWindow(QMainWindow):
         user32 = cast(Any, ctypes).WinDLL("user32", use_last_error=True)
         hwnd = int(self.winId())
 
+        field_names = (
+            "toggle_metrics",
+            "toggle_preview",
+            "start_stop",
+            "lock_overlay",
+            "toggle_all",
+            "toggle_recording",
+        )
         for hotkey_id, act in self._global_hotkey_id_map.items():
             seq = act.shortcut().toString()
             parsed = self._parse_hotkey(seq)
             if parsed is None:
+                if seq:
+                    self._hotkey_registration_failures.append(
+                        {
+                            "key": field_names[hotkey_id - 1],
+                            "sequence": seq,
+                            "code": 0,
+                            "reason": "unsupported_sequence",
+                        }
+                    )
                 continue
             mod_flags, vk = parsed
             if not user32.RegisterHotKey(hwnd, hotkey_id, mod_flags, vk):
                 err = cast(Any, ctypes).get_last_error()
+                self._hotkey_registration_failures.append(
+                    {
+                        "key": field_names[hotkey_id - 1],
+                        "sequence": seq,
+                        "code": int(err),
+                        "reason": "already_registered" if err == 1409 else "registration_failed",
+                    }
+                )
                 if seq not in self._hotkey_failed_once:
                     if err == 1409:
                         self._append_log(f"⚠ 全域快捷鍵已被占用：{seq}（錯誤 {err}）")
@@ -3058,7 +3116,37 @@ class MainWindow(QMainWindow):
             },
             "alarm": self._alarm_config.to_dict(),
         }
-        path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                json.dump(data, temp_file, ensure_ascii=True, indent=2)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            temp_path.replace(path)
+        except OSError as exc:
+            raise SettingsWriteError(
+                f"Unable to write settings file {path}: {exc}",
+                path=str(path),
+            ) from exc
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError as cleanup_exc:
+                    logger.warning(
+                        "設定暫存檔清理失敗：%s: %s",
+                        temp_path,
+                        cleanup_exc,
+                    )
+        self._settings_dirty = False
         return path
 
     def _start_camera_scan(self) -> None:
@@ -3185,19 +3273,67 @@ class MainWindow(QMainWindow):
             self._web_server = None
 
     def _restart_web_server(self) -> None:
-        self._stop_web_server()
-        self._start_web_server()
+        self._schedule_web_server_restart()
 
-    def _stop_web_server(self) -> None:
-        if self._web_server is None:
+    def _schedule_web_server_restart(self) -> None:
+        if self._web_restart_shutdown or self._web_restart_scheduled or self._web_restart_in_progress:
             return
-        thread = self._web_server
-        stopped = thread.stop(join_timeout=5.0)
-        if not stopped and thread.is_alive():
+        self._web_restart_scheduled = True
+        QTimer.singleShot(0, self._begin_web_server_restart)
+
+    def _begin_web_server_restart(self) -> None:
+        self._web_restart_scheduled = False
+        if self._web_restart_shutdown or self._web_restart_in_progress:
+            return
+        server = self._web_server
+        if server is None:
+            self._start_web_server()
+            return
+        self._web_server = None
+        self._web_restart_stopping_server = server
+        self._web_restart_in_progress = True
+
+        def stop_in_background() -> None:
+            stopped = server.stop(join_timeout=5.0)
+            still_alive = bool(not stopped and server.is_alive())
+            self._web_restart_bridge.stopped.emit(stopped, still_alive)
+
+        threading.Thread(
+            target=stop_in_background,
+            daemon=True,
+            name="WebServerRestartStop",
+        ).start()
+
+    def _on_web_restart_stopped(self, _stopped: bool, still_alive: bool) -> None:
+        stopping_server = self._web_restart_stopping_server
+        self._web_restart_in_progress = False
+        self._web_restart_stopping_server = None
+        if still_alive:
+            if not self._web_restart_shutdown:
+                self._web_server = stopping_server
             self._append_log(
                 "⚠ Web 儀表板舊執行緒未能及時結束；若儀表板無法更新，請重新啟動程式。"
             )
+            return
+        if not self._web_restart_shutdown:
+            self._start_web_server()
+
+    def _stop_web_server(self) -> None:
+        servers = [
+            server
+            for server in (self._web_server, self._web_restart_stopping_server)
+            if server is not None
+        ]
+        if not servers:
+            return
         self._web_server = None
+        self._web_restart_stopping_server = None
+        for thread in dict.fromkeys(servers):
+            stopped = thread.stop(join_timeout=5.0)
+            if not stopped and thread.is_alive():
+                self._append_log(
+                    "⚠ Web 儀表板舊執行緒未能及時結束；若儀表板無法更新，請重新啟動程式。"
+                )
 
     def _build_web_metrics(self) -> dict:
         pipeline_running = bool(self._pipeline_running)
@@ -3379,6 +3515,92 @@ class MainWindow(QMainWindow):
             raise ValueError(f"{key} must be a boolean")
         return value
 
+    @staticmethod
+    def _parse_hotkey_config(args: dict[str, Any]) -> HotkeyConfig:
+        if set(args) != {"hotkeys"} or not isinstance(args.get("hotkeys"), dict):
+            raise ValueError("hotkeys must be the only argument and must be an object")
+        raw = args["hotkeys"]
+        fields = (
+            "toggle_metrics",
+            "toggle_preview",
+            "start_stop",
+            "lock_overlay",
+            "toggle_all",
+            "toggle_recording",
+        )
+        if set(raw) != set(fields):
+            raise ValueError("hotkeys must contain all six supported shortcut keys")
+
+        values: dict[str, str] = {}
+        for key in fields:
+            value = raw[key]
+            if not isinstance(value, str) or len(value) > 64:
+                raise ValueError(f"hotkeys.{key} must be a string up to 64 characters")
+            if value:
+                sequence = QKeySequence(value)
+                if sequence.isEmpty() or sequence.count() != 1:
+                    raise ValueError(f"hotkeys.{key} must be a valid single shortcut")
+            values[key] = value
+        return HotkeyConfig(**values)
+
+    @staticmethod
+    def _parse_user_profile(args: dict[str, Any]) -> UserProfile:
+        age, height_cm, weight_kg = parse_user_profile(args)
+        return UserProfile(age=age, height_cm=height_cm, weight_kg=weight_kg)
+
+    @staticmethod
+    def _parse_alarm_config(args: dict[str, Any]) -> AlarmConfig:
+        return parse_alarm_config(args)
+
+    @staticmethod
+    def _parse_settings_reset_sections(args: dict[str, Any]) -> list[str]:
+        return parse_settings_reset_sections(args)
+
+    def _reset_settings_sections(self, sections: list[str]) -> None:
+        selected = set(sections)
+        if (self._pipeline_running or self._replay_thread is not None) and selected.intersection(
+            {"camera", "toggles", "replay"}
+        ):
+            raise BusyError("Stop the pipeline and replay before resetting runtime settings")
+
+        if "hotkeys" in selected:
+            self._hotkeys = HotkeyConfig()
+            self._apply_hotkey_shortcuts()
+        if "user_profile" in selected:
+            self._user = UserProfile()
+        if "alarm" in selected:
+            self._alarm_config = AlarmConfig.defaults()
+            self._alarm_controller.set_config(self._alarm_config)
+        if "camera" in selected:
+            self._engine_controller.reset_camera_settings()
+            self._sync_camera_widgets()
+        if "toggles" in selected:
+            for checkbox, checked in (
+                (self._chk_all, True),
+                (self._chk_preview, False),
+                (self._chk_metrics, True),
+                (self._chk_lock, True),
+                (self._chk_behavior, True),
+                (self._chk_stress, False),
+                (self._chk_belt_calib, False),
+                (self._chk_auto_record, False),
+            ):
+                checkbox.setChecked(checked)
+        if "overlay" in selected:
+            self._sld_opacity.setValue(55)
+            self._apply_overlay_state()
+        if "web" in selected:
+            self._act_web_allow_lan.blockSignals(True)
+            self._act_web_allow_lan.setChecked(False)
+            self._act_web_allow_lan.blockSignals(False)
+            self._schedule_web_server_restart()
+        if "replay" in selected:
+            self._replay_dataset_dir = None
+            self._spn_replay_jobs.setValue(2)
+            self._chk_replay_annotated.setChecked(False)
+            self._lbl_replay_dir.setText("尚未選擇資料夾")
+        self._settings_dirty = True
+
     def _desktop_control_state(self) -> dict[str, Any]:
         camera = self._engine_controller.camera_snapshot()
         cameras = [
@@ -3415,6 +3637,29 @@ class MainWindow(QMainWindow):
             "fps": camera.fps,
             "backend": camera.backend,
             "web_allow_lan": self._act_web_allow_lan.isChecked(),
+            "hotkeys": {
+                "toggle_metrics": self._hotkeys.toggle_metrics,
+                "toggle_preview": self._hotkeys.toggle_preview,
+                "start_stop": self._hotkeys.start_stop,
+                "lock_overlay": self._hotkeys.lock_overlay,
+                "toggle_all": self._hotkeys.toggle_all,
+                "toggle_recording": self._hotkeys.toggle_recording,
+            },
+            "hotkey_registration": {
+                "supported": bool(self._global_hotkey_enabled),
+                "failures": list(self._hotkey_registration_failures),
+            },
+            "user_profile": {
+                "age": self._user.age,
+                "height_cm": self._user.height_cm,
+                "weight_kg": self._user.weight_kg,
+                "bmi": round(
+                    self._user.weight_kg / ((self._user.height_cm / 100.0) ** 2),
+                    1,
+                ),
+            },
+            "alarm": self._alarm_config.to_dict(),
+            "settings_dirty": bool(self._settings_dirty),
             "profile_loaded": self._personal_profile is not None,
             "replay_running": self._replay_thread is not None,
             "replay_stopping": bool(self._replay_stopping),
@@ -3464,21 +3709,22 @@ class MainWindow(QMainWindow):
 
         elif command == "camera.select":
             if self._pipeline_running:
-                raise ValueError("Stop the pipeline before changing camera")
+                raise BusyError("Stop the pipeline before changing camera")
             raw_index = args.get("index")
             if isinstance(raw_index, bool) or not isinstance(raw_index, int):
                 raise ValueError("index must be an integer")
             self._engine_controller.select_camera(raw_index)
             self._sync_camera_widgets()
+            self._settings_dirty = True
 
         elif command == "camera.refresh":
             if self._pipeline_running:
-                raise ValueError("Stop the pipeline before refreshing cameras")
+                raise BusyError("Stop the pipeline before refreshing cameras")
             self._start_camera_scan()
 
         elif command == "camera.configure":
             if self._pipeline_running:
-                raise ValueError("Stop the pipeline before changing camera settings")
+                raise BusyError("Stop the pipeline before changing camera settings")
             camera_args: dict[str, object] = {
                 key: args[key]
                 for key in ("resolution", "fps", "backend")
@@ -3488,6 +3734,7 @@ class MainWindow(QMainWindow):
                 camera_args["horizontal_flip"] = self._require_bool(args, "horizontal_flip")
             self._engine_controller.configure_camera(**camera_args)
             self._sync_camera_widgets()
+            self._settings_dirty = True
 
         elif command == "analysis.configure":
             behavior_enabled = (
@@ -3504,6 +3751,7 @@ class MainWindow(QMainWindow):
                 raise ValueError("At least one analysis mode must remain enabled")
             self._chk_behavior.setChecked(behavior_enabled)
             self._chk_stress.setChecked(rppg_enabled)
+            self._settings_dirty = True
 
         elif command == "preferences.configure":
             checkbox_keys = {
@@ -3516,6 +3764,7 @@ class MainWindow(QMainWindow):
             for key, checkbox in checkbox_keys.items():
                 if key in args:
                     checkbox.setChecked(self._require_bool(args, key))
+            self._settings_dirty = True
 
         elif command == "auto_capture.set":
             enabled = self._require_bool(args, "enabled")
@@ -3557,13 +3806,14 @@ class MainWindow(QMainWindow):
                 if isinstance(opacity, bool) or not isinstance(opacity, int) or not 0 <= opacity <= 100:
                     raise ValueError("opacity must be between 0 and 100")
                 self._sld_opacity.setValue(opacity)
+            self._settings_dirty = True
 
         elif command == "replay.choose":
             self._choose_replay_dir()
 
         elif command == "replay.configure":
             if self._replay_thread is not None:
-                raise ValueError("Stop the replay before changing replay settings")
+                raise BusyError("Stop the replay before changing replay settings")
             if "path" in args:
                 raw_path = args.get("path")
                 if not isinstance(raw_path, str) or not raw_path.strip():
@@ -3587,7 +3837,7 @@ class MainWindow(QMainWindow):
                 self._stop_replay()
             elif self._replay_thread is None:
                 if self._pipeline_running or self._recording:
-                    raise ValueError("Stop the live pipeline and recording before replay")
+                    raise BusyError("Stop the live pipeline and recording before replay")
                 if self._replay_dataset_dir is None:
                     raise ValueError("Choose a replay folder before starting replay")
                 mode = str(args.get("mode", "single"))
@@ -3597,6 +3847,58 @@ class MainWindow(QMainWindow):
                     self._start_replay()
                 else:
                     raise ValueError("mode must be single or parallel")
+
+        elif command == "hotkeys.configure":
+            previous_hotkeys = self._hotkeys
+            self._hotkeys = self._parse_hotkey_config(args)
+            try:
+                self._apply_hotkey_shortcuts()
+            except Exception as exc:
+                self._hotkeys = previous_hotkeys
+                try:
+                    self._apply_hotkey_shortcuts()
+                except Exception:
+                    logger.exception("回復舊快捷鍵時發生錯誤")
+                raise HotkeyApplyError(f"Failed to apply hotkeys: {exc}") from exc
+            self._settings_dirty = True
+
+        elif command == "user_profile.configure":
+            self._user = self._parse_user_profile(args)
+            self._settings_dirty = True
+
+        elif command == "alarm.configure":
+            self._alarm_config = self._parse_alarm_config(args)
+            self._alarm_controller.set_config(self._alarm_config)
+            self._settings_dirty = True
+
+        elif command == "alarm.test":
+            if not set(args).issubset({"scenario", "alarm"}) or "scenario" not in args:
+                raise ValueError("alarm.test accepts scenario and an optional alarm draft")
+            scenario = args["scenario"]
+            if not isinstance(scenario, str) or scenario not in ALARM_SCENARIO_KEYS:
+                raise ValueError("scenario must be a supported alarm scenario")
+            preview_config = (
+                self._parse_alarm_config({"alarm": args["alarm"]})
+                if "alarm" in args
+                else self._alarm_config
+            )
+            source = self._alarm_controller.preview_scenario(
+                scenario,
+                config=preview_config,
+            )
+            if source is None:
+                raise AlarmUnplayableError("alarm sound could not be played")
+            state = self._desktop_control_state()
+            state["command_result"] = {
+                "command": "alarm.test",
+                "scenario": scenario,
+                "dispatched": True,
+                "source": source,
+            }
+            return state
+
+        elif command == "settings.reset":
+            self._reset_settings_sections(self._parse_settings_reset_sections(args))
 
         elif command == "settings.action":
             action = str(args.get("action", ""))
@@ -3610,7 +3912,12 @@ class MainWindow(QMainWindow):
                 "web": self._on_web_info,
             }
             if action == "web_lan":
-                self._act_web_allow_lan.setChecked(self._require_bool(args, "enabled"))
+                enabled = self._require_bool(args, "enabled")
+                self._act_web_allow_lan.blockSignals(True)
+                self._act_web_allow_lan.setChecked(enabled)
+                self._act_web_allow_lan.blockSignals(False)
+                self._settings_dirty = True
+                self._schedule_web_server_restart()
             elif action in actions:
                 actions[action]()
             else:
@@ -3622,7 +3929,15 @@ class MainWindow(QMainWindow):
             self._on_record_baseline_clicked()
 
         elif command == "settings.save":
-            self._save_settings()
+            if args:
+                raise ValueError("settings.save does not accept arguments")
+            path = self._save_settings()
+            state = self._desktop_control_state()
+            state["command_result"] = {
+                "command": "settings.save",
+                "path": str(path),
+            }
+            return state
 
         elif command == "app.shutdown":
             QTimer.singleShot(0, self._shutdown_engine)
@@ -5738,6 +6053,8 @@ class MainWindow(QMainWindow):
             self._stop_belt_calibration()   # 存本次 session 校準版本
         self._belt_ui_timer.stop()
         self._belt_runtime.stop_belt()
+        self._web_restart_shutdown = True
+        self._web_restart_scheduled = False
         self._stop_web_server()
         self._stop_recording()
         self._stop_camera_worker()

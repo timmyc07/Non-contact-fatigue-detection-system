@@ -12,7 +12,7 @@ use tauri::{Manager, WebviewWindow};
 
 struct BackendProcess(Mutex<Option<Child>>);
 
-const DESKTOP_CONTROL_API_VERSION: u64 = 1;
+const DESKTOP_CONTROL_API_VERSION: u64 = 2;
 
 #[derive(Debug, Serialize)]
 struct SystemInfo {
@@ -296,9 +296,9 @@ mod tests {
 
     #[test]
     fn parses_desktop_api_version_from_control_state() {
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true,\"data\":{\"desktop_api_version\":1}}";
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true,\"data\":{\"desktop_api_version\":2}}";
 
-        assert_eq!(backend_api_version_from_response(response), Some(1));
+        assert_eq!(backend_api_version_from_response(response), Some(2));
     }
 
     #[test]

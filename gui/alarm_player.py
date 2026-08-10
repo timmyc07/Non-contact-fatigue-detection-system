@@ -218,23 +218,31 @@ class FatigueAlarmController:
         self._play_scenario(scenario, scenario_cfg)
         mark_alarm_played(self._state, scenario, now=now)
 
-    def preview_scenario(self, scenario: str) -> bool:
+    def preview_scenario(self, scenario: str, *, config: AlarmConfig | None = None) -> str | None:
         """設定對話框試聽用。"""
-        scenario_cfg = self._config.scenarios.get(scenario)
+        preview_config = config or self._config
+        scenario_cfg = preview_config.scenarios.get(scenario)
         if scenario_cfg is None:
-            return False
-        return self._play_scenario(scenario, scenario_cfg)
+            return None
+        return self._play_scenario(scenario, scenario_cfg, config=preview_config)
 
-    def _play_scenario(self, scenario: str, scenario_cfg: AlarmScenarioConfig) -> bool:
-        volume = max(0.0, min(1.0, self._config.volume / 100.0))
+    def _play_scenario(
+        self,
+        scenario: str,
+        scenario_cfg: AlarmScenarioConfig,
+        *,
+        config: AlarmConfig | None = None,
+    ) -> str | None:
+        active_config = config or self._config
+        volume = max(0.0, min(1.0, active_config.volume / 100.0))
         path = str(scenario_cfg.sound_path or "").strip()
         if path:
             sound = Path(path).expanduser()
             if sound.is_file() and self._playback.play_file(str(sound), volume=volume):
-                return True
+                return "file"
             logger.info("警報音效檔不存在或無法播放：%s", path)
 
-        if self._config.use_builtin_fallback:
+        if active_config.use_builtin_fallback:
             self._playback.play_builtin(scenario)
-            return True
-        return False
+            return "builtin"
+        return None

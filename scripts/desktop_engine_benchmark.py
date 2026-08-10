@@ -27,7 +27,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
-API_VERSION = 1
+API_VERSION = 2
 
 
 def _distribution(values: list[float]) -> dict[str, float]:

@@ -4,8 +4,28 @@ import threading
 import time
 from pathlib import Path
 
-from gui.desktop_control import DesktopCommandBroker, desktop_dialog_parent
+import pytest
+
+from gui.desktop_control import (
+    BusyError,
+    DesktopCommandBroker,
+    SettingsWriteError,
+    desktop_dialog_parent,
+)
 from gui.web_server import MetricsBuffer, PlaybackManager, create_app
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_desktop_api_version_matches_all_consumers() -> None:
+    rust_source = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+    benchmark_source = (ROOT / "scripts" / "desktop_engine_benchmark.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const DESKTOP_CONTROL_API_VERSION: u64 = 2;" in rust_source
+    assert "API_VERSION = 2" in benchmark_source
 
 
 def test_control_state_uses_registered_handler(tmp_path: Path) -> None:
@@ -53,6 +73,126 @@ def test_control_command_forwards_name_and_args(tmp_path: Path) -> None:
         "success": True,
         "data": {"pipeline_running": True},
     }
+
+
+def test_control_command_reports_settings_write_error(tmp_path: Path) -> None:
+    def handler(command: str, args: dict) -> dict:
+        raise SettingsWriteError(
+            "Unable to write settings file C:/app/settings.json: access denied",
+            path="C:/app/settings.json",
+        )
+
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        control_handler=handler,
+    )
+
+    response = app.test_client().post(
+        "/api/control/command",
+        json={"command": "settings.save", "args": {}},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "success": False,
+        "error": {
+            "code": "settings_write_failed",
+            "message": "Unable to write settings file C:/app/settings.json: access denied",
+            "path": "C:/app/settings.json",
+        },
+    }
+
+
+def test_control_command_returns_structured_validation_error(tmp_path: Path) -> None:
+    def handler(command: str, args: dict) -> dict:
+        raise ValueError("volume must be between 0 and 100")
+
+    app, _socketio = create_app(
+        MetricsBuffer(),
+        PlaybackManager(tmp_path),
+        control_handler=handler,
+    )
+
+    response = app.test_client().post(
+        "/api/control/command",
+        json={"command": "alarm.configure", "args": {}},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "success": False,
+        "error": {
+            "code": "validation_error",
+            "message": "volume must be between 0 and 100",
+        },
+    }
+
+
+def test_control_command_returns_structured_busy_error(tmp_path: Path) -> None:
+    def handler(command: str, args: dict) -> dict:
+        raise BusyError("Stop the pipeline before changing camera settings")
+
+    app, _socketio = create_app(
+        MetricsBuffer(), PlaybackManager(tmp_path), control_handler=handler
+    )
+
+    response = app.test_client().post(
+        "/api/control/command",
+        json={"command": "camera.configure", "args": {}},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "success": False,
+        "error": {
+            "code": "busy",
+            "message": "Stop the pipeline before changing camera settings",
+        },
+    }
+
+
+def test_control_request_shape_and_missing_handler_errors_are_structured(
+    tmp_path: Path,
+) -> None:
+    app, _socketio = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
+    client = app.test_client()
+
+    invalid = client.post("/api/control/command", data="[]", content_type="application/json")
+    missing = client.get("/api/control/state")
+
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"]["code"] == "validation_error"
+    assert missing.status_code == 503
+    assert missing.get_json()["error"] == {
+        "code": "handler_missing",
+        "message": "desktop control unavailable",
+    }
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "code"),
+    [
+        (OSError("disk failed"), 409, "io_error"),
+        (RuntimeError("boom"), 500, "unexpected"),
+    ],
+)
+def test_control_handler_failures_use_structured_envelope(
+    tmp_path: Path, error: Exception, status: int, code: str
+) -> None:
+    def handler(command: str, args: dict) -> dict:
+        raise error
+
+    app, _socketio = create_app(
+        MetricsBuffer(), PlaybackManager(tmp_path), control_handler=handler
+    )
+
+    response = app.test_client().post(
+        "/api/control/command", json={"command": "state.fail", "args": {}}
+    )
+
+    assert response.status_code == status
+    assert response.get_json()["error"] == {"code": code, "message": str(error)}
 
 
 def test_control_command_rejects_remote_clients_even_with_dashboard_token(tmp_path: Path) -> None:

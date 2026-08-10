@@ -75,6 +75,15 @@ CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  �
                                                           └→ web_server（Socket.IO 推播）
 ```
 
+Desktop control 使用 localhost-only API v2（Python、Tauri readiness 與 benchmark 版本必須同步）：
+`state.get` 提供 camera/hotkeys/user/alarm/replay 與 `settings_dirty`；設定更新先改 runtime，
+`settings.save` 才以同目錄 temporary file + `fsync` + atomic replace 持久化。錯誤統一為
+`{success:false,error:{code,message,field?,path?}}`（限 localhost control handler 與 request
+validation）。設定引發的 Web server restart 必須在
+背景 thread 停服，再以 Qt queued signal 回主執行緒重啟，禁止在 command handler 阻塞 UI。
+User/alarm/reset 的 strict JSON validation 位於 Qt-free `gui/desktop_settings_contract.py`；
+hotkey 與 camera validation 分別保留在 Qt adapter 與 `gui/engine_controller.py`。
+
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。
 - 只啟用 rPPG → `RppgWorker`；只啟用疲勞 → `FatigueWorker`。

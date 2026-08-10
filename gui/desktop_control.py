@@ -9,7 +9,59 @@ from typing import Any, Callable
 
 
 ControlHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
-DESKTOP_CONTROL_API_VERSION = 1
+DESKTOP_CONTROL_API_VERSION = 2
+
+
+class DesktopControlError(Exception):
+    """Structured command error that is safe to return to the local client."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int,
+        field: str | None = None,
+        path: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.field = field
+        self.path = path
+
+    def to_payload(self) -> dict[str, str]:
+        payload = {"code": self.code, "message": str(self)}
+        if self.field is not None:
+            payload["field"] = self.field
+        if self.path is not None:
+            payload["path"] = self.path
+        return payload
+
+
+class BusyError(DesktopControlError):
+    def __init__(self, message: str) -> None:
+        super().__init__("busy", message, status_code=409)
+
+
+class SettingsWriteError(DesktopControlError, OSError):
+    def __init__(self, message: str, *, path: str) -> None:
+        super().__init__(
+            "settings_write_failed",
+            message,
+            status_code=409,
+            path=path,
+        )
+
+
+class AlarmUnplayableError(DesktopControlError):
+    def __init__(self, message: str) -> None:
+        super().__init__("alarm_unplayable", message, status_code=400)
+
+
+class HotkeyApplyError(DesktopControlError):
+    def __init__(self, message: str) -> None:
+        super().__init__("hotkey_apply_failed", message, status_code=409)
 
 
 def desktop_dialog_parent(window: Any, *, engine_mode: bool) -> Any | None:
