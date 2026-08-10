@@ -61,6 +61,30 @@ class FatigueMonitorApp extends StatelessWidget {
   }
 }
 
+class DesktopNotice {
+  const DesktopNotice(
+      {required this.id, required this.level, required this.message});
+
+  final int id;
+  final String level;
+  final String message;
+}
+
+DesktopNotice? parseDesktopNotice(dynamic raw) {
+  if (raw is! Map || raw['id'] is! int || raw['message'] is! String) {
+    return null;
+  }
+  final message = (raw['message'] as String).trim();
+  if (message.isEmpty) return null;
+  final rawLevel = raw['level'];
+  final level = rawLevel == 'info' || rawLevel == 'error' ? rawLevel : 'error';
+  return DesktopNotice(
+    id: raw['id'] as int,
+    level: level,
+    message: message,
+  );
+}
+
 class MonitorShell extends StatefulWidget {
   const MonitorShell({super.key});
 
@@ -85,6 +109,7 @@ class _MonitorShellState extends State<MonitorShell> {
   bool _connected = false;
   bool _commandBusy = false;
   bool _alwaysOnTop = false;
+  int? _lastDesktopNoticeId;
   int _selectedSection = 0;
 
   @override
@@ -121,6 +146,7 @@ class _MonitorShellState extends State<MonitorShell> {
     try {
       final state = await _backend.controlState();
       if (!mounted) return;
+      _showNewDesktopNotice(state);
       setState(() {
         _engineState = state;
         _connected = true;
@@ -147,6 +173,7 @@ class _MonitorShellState extends State<MonitorShell> {
     try {
       final state = await _backend.command(command, args);
       if (mounted) {
+        _showNewDesktopNotice(state);
         setState(() => _engineState = state);
         final message = _commandSuccessMessage(command, args);
         if (message != null) _showCommandMessage(message);
@@ -191,6 +218,17 @@ class _MonitorShellState extends State<MonitorShell> {
         backgroundColor: isError ? const Color(0xff8f3f4d) : kSurfaceElevated,
       ),
     );
+  }
+
+  void _showNewDesktopNotice(Map<String, dynamic> state) {
+    final notice = parseDesktopNotice(state['desktop_notice']);
+    if (notice == null || notice.id <= (_lastDesktopNoticeId ?? -1)) return;
+    _lastDesktopNoticeId = notice.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _showCommandMessage(notice.message, isError: notice.level != 'info');
+      }
+    });
   }
 
   Future<void> _loadRecordings() async {

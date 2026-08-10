@@ -1011,6 +1011,8 @@ class MainWindow(QMainWindow):
         self._hotkey_failed_once: set[str] = set()
         self._hotkey_registration_failures: list[dict[str, Any]] = []
         self._settings_dirty = False
+        self._desktop_notice_seq = 0
+        self._desktop_notice: dict[str, Any] | None = None
         self._web_metrics_buffer = MetricsBuffer(maxsize=300)
         self._web_server: WebServerThread | None = None
         self._web_restart_scheduled = False
@@ -3637,6 +3639,7 @@ class MainWindow(QMainWindow):
             },
             "alarm": self._alarm_config.to_dict(),
             "settings_dirty": bool(self._settings_dirty),
+            "desktop_notice": self._desktop_notice,
             "profile_loaded": self._personal_profile is not None,
             "replay_running": self._replay_thread is not None,
             "replay_stopping": bool(self._replay_stopping),
@@ -4161,6 +4164,7 @@ class MainWindow(QMainWindow):
             self._append_log(f"⚠ {msg}")
         else:
             self._append_log(f"✗ 影片錄製失敗：{msg}")
+        self._notify_user("影片錄製", msg)
 
     def _append_log(self, msg: str) -> None:
         self._append_log_html(msg)
@@ -4192,6 +4196,24 @@ class MainWindow(QMainWindow):
         )
         self._log.append(line)
 
+    def _publish_desktop_notice(self, message: str, *, level: str = "error") -> None:
+        """Publish a one-shot UI notice for the Flutter/Tauri shell."""
+        self._desktop_notice_seq += 1
+        self._desktop_notice = {
+            "id": self._desktop_notice_seq,
+            "level": level,
+            "message": str(message),
+        }
+
+    def _notify_user(self, title: str, message: str, *, level: str = "error") -> None:
+        if self._engine_mode:
+            self._publish_desktop_notice(f"{title}：{message}", level=level)
+            return
+        if level == "info":
+            QMessageBox.information(self, title, message)
+        else:
+            QMessageBox.warning(self, title, message)
+
     def _start_replay(self) -> None:
         self._start_replay_run(jobs=1, preview_enabled=True, mode_label="回放中")
 
@@ -4205,11 +4227,11 @@ class MainWindow(QMainWindow):
             self._chk_replay_annotated.setChecked(False)
             self._append_log("[影片回測] 平行驗證已自動關閉輸出標註影片；需要標註畫面請用「開始批次」單工模式")
             if notify:
-                QMessageBox.information(
-                    self,
+                self._notify_user(
                     "影片回測平行驗證",
                     "平行驗證會同時啟動多個 MediaPipe/影片解碼流程。為避免子行程崩潰，已自動關閉「輸出標註影片」。\n\n"
                     "需要標註影片時，請改用「開始批次」單工模式。正式大量驗證建議平行數 2-4。",
+                    level="info",
                 )
         self._start_replay_run(jobs=jobs, preview_enabled=False, mode_label=f"平行驗證中 x{jobs}")
 
@@ -4217,13 +4239,13 @@ class MainWindow(QMainWindow):
         if self._replay_thread is not None:
             return
         if self._pipeline_running or self._recording:
-            QMessageBox.information(self, "影片回測", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。")
+            self._notify_user("影片回測", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。", level="info")
             return
         if self._replay_dataset_dir is None:
             self._append_log("[影片回測] 尚未由正式桌面面板設定資料夾")
             return
         if not self._replay_dataset_dir.exists():
-            QMessageBox.warning(self, "影片回測", f"找不到資料夾：\n{self._replay_dataset_dir}")
+            self._notify_user("影片回測", f"找不到資料夾：\n{self._replay_dataset_dir}")
             return
 
         thread = QThread(self)
@@ -4465,7 +4487,7 @@ class MainWindow(QMainWindow):
         )
         self._lbl_pipeline.setText("管線：影片回測 失敗")
         self._append_log(f"[影片回測] 批次失敗：{msg}")
-        QMessageBox.warning(self, "影片回測", msg)
+        self._notify_user("影片回測", msg)
 
     def _on_replay_thread_finished(self) -> None:
         self._replay_thread = None
@@ -5214,7 +5236,7 @@ class MainWindow(QMainWindow):
         self._stop_combined_worker()
         self._chk_stress.setChecked(False)
         self._chk_behavior.setChecked(False)
-        QMessageBox.warning(self, "引擎錯誤", msg)
+        self._notify_user("引擎錯誤", msg)
 
     # ── rPPG worker (solo — only when fatigue is OFF) ─────────────────────────
 
@@ -5307,7 +5329,7 @@ class MainWindow(QMainWindow):
         self._append_log(f"✗ rPPG 錯誤：{msg}")
         self._stop_rppg_worker()
         self._chk_stress.setChecked(False)
-        QMessageBox.warning(self, "rPPG 錯誤", msg)
+        self._notify_user("rPPG 錯誤", msg)
 
     # ── Fatigue / Behaviour Alertness worker ──────────────────────────────────
 
@@ -5472,7 +5494,7 @@ class MainWindow(QMainWindow):
         self._append_log(f"✗ 行為警覺錯誤：{msg}")
         self._stop_fatigue_worker()
         self._chk_behavior.setChecked(False)
-        QMessageBox.warning(self, "行為警覺錯誤", msg)
+        self._notify_user("行為警覺錯誤", msg)
 
     def _on_camera_info(self, codec: str, w: int, h: int, fps: float) -> None:
         """Called once after camera opens — shows actual driver-reported settings."""
@@ -5534,7 +5556,8 @@ class MainWindow(QMainWindow):
         self._sync_overlay_visibility()
         self._update_device_status()
         self._emit_web_metrics(force=True)
-        if self._engine_mode and not self.isVisible():
+        if self._engine_mode:
+            self._publish_desktop_notice(f"攝影機錯誤：{msg}")
             return
         dlg = QMessageBox(self)
         dlg.setWindowTitle("攝影機錯誤")
@@ -5617,15 +5640,15 @@ class MainWindow(QMainWindow):
 
     def _toggle_recording(self) -> None:
         if not self._pipeline_running and not self._recording:
-            QMessageBox.information(self, "記錄", "請先啟動管線再開始記錄（示範規則）。")
+            self._notify_user("記錄", "請先啟動管線再開始記錄（示範規則）。", level="info")
             return
         self._recording = not self._recording
         if self._recording:
             try:
                 self._start_recording()
             except Exception as exc:
-                QMessageBox.warning(self, "記錄", f"無法啟動記錄：{exc}")
                 self._recording = False
+                self._notify_user("記錄", f"無法啟動記錄：{exc}")
                 return
             self._btn_record.setText("停止記錄")
             self._lbl_record.setText("記錄狀態：進行中")
@@ -5692,7 +5715,9 @@ class MainWindow(QMainWindow):
         if not self._pipeline_running:
             self._toggle_pipeline()
             if not self._pipeline_running:
-                self._append_log("⚠ 自動採集：管線未能啟動，已中止（請先選擇攝影機）。")
+                message = "自動採集：管線未能啟動，已中止（請先選擇攝影機）。"
+                self._append_log(f"⚠ {message}")
+                self._notify_user("自動採集", message)
                 self._rollback_auto_capture_toggles()
                 return
             pipeline_started_by_this_call = True
@@ -5775,11 +5800,11 @@ class MainWindow(QMainWindow):
         if belt_path is not None:
             lines.append(f"心跳帶 belt-truth capture → {belt_path}")
         self._append_log("● " + "  ".join(lines))
-        QMessageBox.information(self, "自動採集完成", "\n".join(lines))
+        self._notify_user("自動採集完成", "\n".join(lines), level="info")
 
     def _toggle_benchmark(self) -> None:
         if not self._pipeline_running:
-            QMessageBox.information(self, "基準測試", "請先啟動管線再執行基準測試（示範）。")
+            self._notify_user("基準測試", "請先啟動管線再執行基準測試（示範）。", level="info")
             return
         self._benchmark_active = not self._benchmark_active
         if self._benchmark_active:
