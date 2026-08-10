@@ -69,6 +69,13 @@ from gui.desktop_control import (
     DesktopCommandBroker,
     desktop_dialog_parent,
 )
+from gui.engine_controller import (
+    CAMERA_BACKENDS,
+    CAMERA_FPS_OPTIONS,
+    CAMERA_RESOLUTIONS,
+    CameraDevice,
+    EngineController,
+)
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
@@ -934,6 +941,7 @@ class MainWindow(QMainWindow):
     def __init__(self, *, engine_mode: bool = False) -> None:
         super().__init__()
         self._engine_mode = bool(engine_mode)
+        self._engine_controller = EngineController()
         self.setWindowTitle("NCFD System — 非接觸式疲勞監測系統 V2")
         self.resize(1420, 900)
         self.setMinimumSize(1080, 620)
@@ -983,7 +991,6 @@ class MainWindow(QMainWindow):
         self._global_hotkeys_registered = False
         self._global_hotkey_id_map: dict[int, QAction] = {}
         self._hotkey_failed_once: set[str] = set()
-        self._pending_camera_index: int | None = None
         self._web_metrics_buffer = MetricsBuffer(maxsize=300)
         self._web_server: WebServerThread | None = None
         self._desktop_control_broker = DesktopCommandBroker(timeout_seconds=10.0)
@@ -2391,12 +2398,13 @@ class MainWindow(QMainWindow):
         cam_l.addWidget(self._lbl_cam_hint)
 
         row2 = QHBoxLayout()
+        camera_defaults = self._engine_controller.camera_snapshot()
         self._cmb_resolution = QComboBox()
-        self._cmb_resolution.addItems(["640×480", "800×600", "1280×720（720p）", "1280×800", "1920×1080（1080p）"])
-        self._cmb_resolution.setCurrentText("1280×720（720p）")
+        self._cmb_resolution.addItems(CAMERA_RESOLUTIONS)
+        self._cmb_resolution.setCurrentText(camera_defaults.resolution)
         self._cmb_fps = QComboBox()
-        self._cmb_fps.addItems(["15", "24", "30", "60"])
-        self._cmb_fps.setCurrentText("30")
+        self._cmb_fps.addItems(CAMERA_FPS_OPTIONS)
+        self._cmb_fps.setCurrentText(camera_defaults.fps)
         row2.addWidget(QLabel("解析度："))
         row2.addWidget(self._cmb_resolution, 1)
         row2.addSpacing(16)
@@ -2406,14 +2414,29 @@ class MainWindow(QMainWindow):
 
         row3 = QHBoxLayout()
         self._cmb_backend = QComboBox()
-        self._cmb_backend.addItem("FFMPEG", "ffmpeg")
-        self._cmb_backend.setCurrentIndex(0)
+        for backend in CAMERA_BACKENDS:
+            self._cmb_backend.addItem(backend.upper(), backend)
+        self._select_combo_by_data(self._cmb_backend, camera_defaults.backend)
         self._cmb_backend.setToolTip(
             "FFMPEG — 嘗試 FFMPEG 後再回退到平台後端"
         )
         self._chk_horizontal_flip = QCheckBox("水平翻轉（鏡像校正）")
         self._chk_horizontal_flip.setChecked(True)
         self._chk_horizontal_flip.setToolTip("相機畫面左右相反時啟用；預覽、錄影與分析會使用同一個翻轉後畫面。")
+        self._cmb_resolution.currentTextChanged.connect(
+            lambda value: self._on_camera_config_changed(resolution=value)
+        )
+        self._cmb_fps.currentTextChanged.connect(
+            lambda value: self._on_camera_config_changed(fps=value)
+        )
+        self._cmb_backend.currentIndexChanged.connect(
+            lambda _index: self._on_camera_config_changed(
+                backend=self._cmb_backend.currentData()
+            )
+        )
+        self._chk_horizontal_flip.toggled.connect(
+            lambda checked: self._on_camera_config_changed(horizontal_flip=checked)
+        )
         row3.addWidget(QLabel("後端："))
         row3.addWidget(self._cmb_backend, 1)
         row3.addSpacing(16)
@@ -2818,9 +2841,52 @@ class MainWindow(QMainWindow):
     def _select_camera_by_index(self, cam_idx: int) -> bool:
         for i in range(self._cmb_camera.count()):
             if self._cmb_camera.itemData(i) == cam_idx:
+                try:
+                    self._engine_controller.select_camera(cam_idx)
+                except ValueError:
+                    return False
                 self._cmb_camera.setCurrentIndex(i)
                 return True
         return False
+
+    def _sync_camera_widgets(self) -> None:
+        """Mirror controller-owned camera state into the legacy widgets."""
+        camera = self._engine_controller.camera_snapshot()
+        for widget in (
+            self._cmb_resolution,
+            self._cmb_fps,
+            self._cmb_backend,
+            self._chk_horizontal_flip,
+        ):
+            widget.blockSignals(True)
+        try:
+            self._cmb_resolution.setCurrentText(camera.resolution)
+            self._cmb_fps.setCurrentText(camera.fps)
+            self._select_combo_by_data(self._cmb_backend, camera.backend)
+            self._chk_horizontal_flip.setChecked(camera.horizontal_flip)
+        finally:
+            for widget in (
+                self._cmb_resolution,
+                self._cmb_fps,
+                self._cmb_backend,
+                self._chk_horizontal_flip,
+            ):
+                widget.blockSignals(False)
+
+        self._cmb_camera.blockSignals(True)
+        try:
+            target = 0
+            for i in range(self._cmb_camera.count()):
+                if self._cmb_camera.itemData(i) == camera.selected_index:
+                    target = i
+                    break
+            self._cmb_camera.setCurrentIndex(target)
+        finally:
+            self._cmb_camera.blockSignals(False)
+        self._on_camera_combo_changed(self._cmb_camera.currentIndex())
+
+    def _on_camera_config_changed(self, **changes: object) -> None:
+        self._engine_controller.configure_camera(**changes)
 
     def _apply_overlay_state(self) -> None:
         self._preview_overlay.set_opacity(self._sld_opacity.value() / 100.0)
@@ -2895,18 +2961,21 @@ class MainWindow(QMainWindow):
             cam_idx = camera.get("index")
             horizontal_flip = camera.get("horizontal_flip")
 
-            if isinstance(resolution, str):
-                self._cmb_resolution.setCurrentText(resolution)
-            if isinstance(fps, str):
-                self._cmb_fps.setCurrentText(fps)
-            if isinstance(backend, str):
-                if not self._select_combo_by_data(self._cmb_backend, backend):
-                    self._cmb_backend.setCurrentIndex(0)
+            for key, value in (
+                ("resolution", resolution),
+                ("fps", fps),
+                ("backend", backend),
+            ):
+                if isinstance(value, str):
+                    try:
+                        self._engine_controller.configure_camera(**{key: value})
+                    except ValueError:
+                        pass
             if isinstance(horizontal_flip, bool):
-                self._chk_horizontal_flip.setChecked(horizontal_flip)
+                self._engine_controller.configure_camera(horizontal_flip=horizontal_flip)
             if isinstance(cam_idx, int):
-                if not self._select_camera_by_index(cam_idx):
-                    self._pending_camera_index = cam_idx
+                self._engine_controller.restore_camera(cam_idx)
+            self._sync_camera_widgets()
 
         toggles = data.get("toggles", {})
         if isinstance(toggles, dict):
@@ -2944,6 +3013,7 @@ class MainWindow(QMainWindow):
 
     def _save_settings(self) -> Path:
         path = self._settings_path()
+        camera = self._engine_controller.camera_snapshot()
         data = {
             "window": {
                 "geometry": self._encode_bytes(self.saveGeometry()),
@@ -2954,11 +3024,11 @@ class MainWindow(QMainWindow):
                 "opacity": int(self._sld_opacity.value()),
             },
             "camera": {
-                "index": self.selected_camera_index,
-                "resolution": self._cmb_resolution.currentText(),
-                "fps": self._cmb_fps.currentText(),
-                "backend": self._cmb_backend.currentData(),
-                "horizontal_flip": self._chk_horizontal_flip.isChecked(),
+                "index": camera.selected_index,
+                "resolution": camera.resolution,
+                "fps": camera.fps,
+                "backend": camera.backend,
+                "horizontal_flip": camera.horizontal_flip,
             },
             "toggles": {
                 "all": self._chk_all.isChecked(),
@@ -3006,40 +3076,24 @@ class MainWindow(QMainWindow):
 
     def _finish_camera_scan_ui(self, dev_list: list[tuple[int, str]]) -> None:
         """Populate combo from scan result (runs on GUI thread)."""
-        prev: object | None = None
+        self._engine_controller.replace_cameras(
+            CameraDevice(index, f"[{index}] {name}") for index, name in dev_list
+        )
+        camera = self._engine_controller.camera_snapshot()
         self._cmb_camera.blockSignals(True)
         try:
-            prev = self._cmb_camera.currentData()
-        except Exception:
-            prev = None
-
-        self._cmb_camera.clear()
-        placeholder = "── 請選擇攝影機 ──"
-        self._cmb_camera.addItem(placeholder, None)
-        for index, name in dev_list:
-            self._cmb_camera.addItem(f"[{index}] {name}", index)
-
-        self._lbl_cam_hint.setText(f"偵測：{len(dev_list)} 台")
-        self._cmb_camera.setEnabled(True)
-
-        restored = False
-        if prev is not None:
-            for i in range(self._cmb_camera.count()):
-                if self._cmb_camera.itemData(i) == prev:
-                    self._cmb_camera.setCurrentIndex(i)
-                    restored = True
-                    break
-        if not restored:
-            if dev_list:
-                self._cmb_camera.setCurrentIndex(1)
-            else:
+            self._cmb_camera.clear()
+            self._cmb_camera.addItem("── 請選擇攝影機 ──", None)
+            for device in camera.devices:
+                self._cmb_camera.addItem(device.label, device.index)
+            self._lbl_cam_hint.setText(f"偵測：{len(camera.devices)} 台")
+            self._cmb_camera.setEnabled(True)
+            if camera.selected_index is None:
                 self._cmb_camera.setCurrentIndex(0)
-
-        if self._pending_camera_index is not None:
-            if self._select_camera_by_index(self._pending_camera_index):
-                self._pending_camera_index = None
-
-        self._cmb_camera.blockSignals(False)
+            else:
+                self._select_camera_by_index(camera.selected_index)
+        finally:
+            self._cmb_camera.blockSignals(False)
         self._on_camera_combo_changed(self._cmb_camera.currentIndex())
 
         if dev_list:
@@ -3194,7 +3248,7 @@ class MainWindow(QMainWindow):
             "camera_running": bool(self._cam_worker is not None),
             "recording": bool(self._recording),
             "fps": float(self._last_fps or 0.0),
-            "camera_label": str(self._cmb_camera.currentText() or ""),
+            "camera_label": self._engine_controller.selected_camera_label(),
             "camera_codec": str(info.get("codec") or ""),
             "camera_width": int(info.get("width") or 0),
             "camera_height": int(info.get("height") or 0),
@@ -3326,13 +3380,13 @@ class MainWindow(QMainWindow):
         return value
 
     def _desktop_control_state(self) -> dict[str, Any]:
+        camera = self._engine_controller.camera_snapshot()
         cameras = [
             {
-                "index": int(self._cmb_camera.itemData(i)),
-                "label": str(self._cmb_camera.itemText(i)),
+                "index": device.index,
+                "label": device.label,
             }
-            for i in range(self._cmb_camera.count())
-            if self._cmb_camera.itemData(i) is not None
+            for device in camera.devices
         ]
         return {
             "desktop_api_version": DESKTOP_CONTROL_API_VERSION,
@@ -3345,21 +3399,21 @@ class MainWindow(QMainWindow):
             "auto_capture_include_belt": self._chk_auto_capture_belt.isChecked(),
             "benchmark_active": bool(self._benchmark_active),
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
-            "selected_camera_index": self.selected_camera_index,
+            "selected_camera_index": camera.selected_index,
             "cameras": cameras,
             "behavior_enabled": self._chk_behavior.isChecked(),
             "rppg_enabled": self._chk_stress.isChecked(),
             "auto_record": self._chk_auto_record.isChecked(),
             "belt_calibration": self._chk_belt_calib.isChecked(),
-            "horizontal_flip": self._chk_horizontal_flip.isChecked(),
+            "horizontal_flip": camera.horizontal_flip,
             "overlay_preview": self._chk_preview.isChecked(),
             "overlay_metrics": self._chk_metrics.isChecked(),
             "overlay_locked": self._chk_lock.isChecked(),
             "overlay_all": self._chk_all.isChecked(),
             "overlay_opacity": int(self._sld_opacity.value()),
-            "resolution": str(self._cmb_resolution.currentText()),
-            "fps": str(self._cmb_fps.currentText()),
-            "backend": str(self._cmb_backend.currentData() or "auto"),
+            "resolution": camera.resolution,
+            "fps": camera.fps,
+            "backend": camera.backend,
             "web_allow_lan": self._act_web_allow_lan.isChecked(),
             "profile_loaded": self._personal_profile is not None,
             "replay_running": self._replay_thread is not None,
@@ -3414,8 +3468,8 @@ class MainWindow(QMainWindow):
             raw_index = args.get("index")
             if isinstance(raw_index, bool) or not isinstance(raw_index, int):
                 raise ValueError("index must be an integer")
-            if not self._select_camera_by_index(raw_index):
-                raise ValueError(f"Camera index is unavailable: {raw_index}")
+            self._engine_controller.select_camera(raw_index)
+            self._sync_camera_widgets()
 
         elif command == "camera.refresh":
             if self._pipeline_running:
@@ -3425,14 +3479,15 @@ class MainWindow(QMainWindow):
         elif command == "camera.configure":
             if self._pipeline_running:
                 raise ValueError("Stop the pipeline before changing camera settings")
-            if "resolution" in args:
-                self._set_combo_value(self._cmb_resolution, args["resolution"])
-            if "fps" in args:
-                self._set_combo_value(self._cmb_fps, args["fps"])
-            if "backend" in args:
-                self._set_combo_value(self._cmb_backend, args["backend"], by_data=True)
+            camera_args: dict[str, object] = {
+                key: args[key]
+                for key in ("resolution", "fps", "backend")
+                if key in args
+            }
             if "horizontal_flip" in args:
-                self._chk_horizontal_flip.setChecked(self._require_bool(args, "horizontal_flip"))
+                camera_args["horizontal_flip"] = self._require_bool(args, "horizontal_flip")
+            self._engine_controller.configure_camera(**camera_args)
+            self._sync_camera_widgets()
 
         elif command == "analysis.configure":
             behavior_enabled = (
@@ -3699,7 +3754,7 @@ class MainWindow(QMainWindow):
             "frame_width": int(info.get("width") or 0),
             "frame_height": int(info.get("height") or 0),
             "codec": str(info.get("codec") or ""),
-            "camera_label": str(self._cmb_camera.currentText() or ""),
+            "camera_label": self._engine_controller.selected_camera_label(),
             "rppg_face_detected": 1 if getattr(r, "face_detected", False) else 0,
             "bpm": float(getattr(r, "bpm", 0.0) or 0.0),
             "bpm_calibrated": float(getattr(r, "bpm_calibrated", 0.0) or 0.0),
@@ -4200,22 +4255,13 @@ class MainWindow(QMainWindow):
             self._lbl_pipeline.setText("管線：停止")
             return
 
-        res_map = {
-            "640×480": (640, 480),
-            "800×600": (800, 600),
-            "1280×720（720p）": (1280, 720),
-            "1280×800": (1280, 800),
-            "1920×1080（1080p）": (1920, 1080),
-        }
-        w, h = res_map.get(self._cmb_resolution.currentText(), (1280, 720))
-        try:
-            target_fps = int(self._cmb_fps.currentText())
-        except (ValueError, AttributeError):
-            target_fps = 30
-
-        backend = self._cmb_backend.currentData() or "auto"
-        backend_label = self._cmb_backend.currentText().split("（")[0].strip()
-        horizontal_flip = self._chk_horizontal_flip.isChecked()
+        spec = self._engine_controller.camera_start_spec()
+        cam_idx = spec.index
+        w, h = spec.width, spec.height
+        target_fps = spec.target_fps
+        backend = spec.backend
+        backend_label = backend.upper()
+        horizontal_flip = spec.horizontal_flip
 
         thread = QThread(self)
         worker = CameraStreamWorker(cam_idx, width=w, height=h,
@@ -5166,7 +5212,7 @@ class MainWindow(QMainWindow):
         self._lbl_codec.setText(f"編碼：{codec}")
         self._lbl_fps.setText(f"FPS：{fps_str}")
         self._last_camera_info = {"codec": codec, "width": w, "height": h}
-        cam_text = self._cmb_camera.currentText()
+        cam_text = self._engine_controller.selected_camera_label()
         self._append_log(
             f"[相機] 實際格式 → 編碼：{codec}  解析度：{w}×{h}  FPS：{fps_str}"
         )
@@ -5481,20 +5527,22 @@ class MainWindow(QMainWindow):
         data = self._cmb_camera.currentData()
         text = self._cmb_camera.currentText()
         if data is None:
+            self._engine_controller.select_camera(None)
             self._lbl_camera.setText("相機：未選擇")
         else:
+            try:
+                selected = self._engine_controller.camera_snapshot().selected_index
+                if int(data) != selected:
+                    self._engine_controller.select_camera(int(data))
+            except (TypeError, ValueError):
+                self._lbl_camera.setText("相機：未選擇")
+                return
             self._lbl_camera.setText(f"相機：{text}")
 
     @property
     def selected_camera_index(self) -> int | None:
-        """OpenCV device index for the current combo selection, or None if placeholder."""
-        d = self._cmb_camera.currentData()
-        if d is None:
-            return None
-        try:
-            return int(d)
-        except (TypeError, ValueError):
-            return None
+        """OpenCV device index owned by the headless engine controller."""
+        return self._engine_controller.camera_snapshot().selected_index
 
     def _desktop_dialog_parent(self):
         return desktop_dialog_parent(self, engine_mode=self._engine_mode)
@@ -5568,8 +5616,8 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if r == QMessageBox.StandardButton.Yes:
-            self._cmb_resolution.setCurrentText("1280×720（720p）")
-            self._cmb_fps.setCurrentText("30")
+            self._engine_controller.reset_camera_settings()
+            self._sync_camera_widgets()
             self._sld_opacity.setValue(55)
             self._chk_metrics.setChecked(True)
             self._chk_preview.setChecked(False)

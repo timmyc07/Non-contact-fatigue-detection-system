@@ -64,6 +64,19 @@ Windows 一鍵啟動（會自動設定 Flutter PATH、檢查 Python engine 並�
 powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
 ```
 
+桌面重構效能基準（不需要相機；結果為 JSON）：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark
+.\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark --synthetic-only --samples 10
+```
+
+預設量測 Python engine 啟動至 control API 就緒時間、就緒時 RSS、唯讀
+`state.get` command latency，以及固定合成影像的 JPEG payload、encode latency 與
+Socket.IO server dispatch rate。Preview 數字是無相機、in-process 微基準，不包含
+實際網路、Tauri WebView 解碼或 Flutter 繪製；比較重構前後結果時應使用相同機器、
+Python/套件版本與 `--samples`，並確保 TCP 5000 沒有其他 engine。
+
 產生 Windows NSIS 安裝包：
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
