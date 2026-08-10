@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewWindow};
 
 struct BackendProcess(Mutex<Option<Child>>);
+
+const DESKTOP_CONTROL_API_VERSION: u64 = 1;
 
 #[derive(Debug, Serialize)]
 struct SystemInfo {
@@ -76,6 +78,38 @@ fn backend_available() -> bool {
     TcpStream::connect_timeout(&backend_address(), Duration::from_millis(250)).is_ok()
 }
 
+fn backend_api_version_from_response(response: &str) -> Option<u64> {
+    let (headers, body) = response.split_once("\r\n\r\n")?;
+    if !headers.lines().next()?.contains(" 200 ") {
+        return None;
+    }
+    let payload: serde_json::Value = serde_json::from_str(body).ok()?;
+    payload
+        .get("data")?
+        .get("desktop_api_version")?
+        .as_u64()
+}
+
+fn backend_api_compatible() -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&backend_address(), Duration::from_millis(500)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let request = format!(
+        "GET /api/control/state HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        backend_address()
+    );
+    if stream.write_all(request.as_bytes()).is_err() || stream.flush().is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    backend_api_version_from_response(&response) == Some(DESKTOP_CONTROL_API_VERSION)
+}
+
 fn project_root() -> PathBuf {
     if let Ok(configured) = std::env::var("NCFD_ENGINE_ROOT") {
         let path = PathBuf::from(configured);
@@ -134,7 +168,20 @@ fn hide_backend_console(_command: &mut Command) {}
 
 fn spawn_backend() -> Result<Option<Child>, String> {
     if backend_available() {
-        return Ok(None);
+        if backend_api_compatible() {
+            return Ok(None);
+        }
+        request_backend_shutdown();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while backend_available() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(100));
+        }
+        if backend_available() {
+            return Err(
+                "An outdated Python engine is already using port 5000. Close it and restart the application."
+                    .to_owned(),
+            );
+        }
     }
     let root = project_root();
     let mut command = Command::new(python_executable(&root));
@@ -152,7 +199,7 @@ fn spawn_backend() -> Result<Option<Child>, String> {
 
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if backend_available() {
+        if backend_api_compatible() {
             return Ok(Some(child));
         }
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
@@ -241,4 +288,23 @@ pub fn run_app() {
 
 fn main() {
     run_app();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::backend_api_version_from_response;
+
+    #[test]
+    fn parses_desktop_api_version_from_control_state() {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true,\"data\":{\"desktop_api_version\":1}}";
+
+        assert_eq!(backend_api_version_from_response(response), Some(1));
+    }
+
+    #[test]
+    fn rejects_control_state_without_desktop_api_version() {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true,\"data\":{\"pipeline_running\":false}}";
+
+        assert_eq!(backend_api_version_from_response(response), None);
+    }
 }

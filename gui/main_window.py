@@ -64,7 +64,11 @@ from gui.alarm_player import FatigueAlarmController
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.combined_worker import CombinedWorker
 from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserProfileDialog
-from gui.desktop_control import DesktopCommandBroker
+from gui.desktop_control import (
+    DESKTOP_CONTROL_API_VERSION,
+    DesktopCommandBroker,
+    desktop_dialog_parent,
+)
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
@@ -3331,6 +3335,7 @@ class MainWindow(QMainWindow):
             if self._cmb_camera.itemData(i) is not None
         ]
         return {
+            "desktop_api_version": DESKTOP_CONTROL_API_VERSION,
             "engine_mode": self._engine_mode,
             "pipeline_running": bool(self._pipeline_running),
             "recording": bool(self._recording),
@@ -5500,9 +5505,17 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             return None
 
+    def _desktop_dialog_parent(self):
+        return desktop_dialog_parent(self, engine_mode=self._engine_mode)
+
+    def _exec_desktop_dialog(self, dialog: QDialog) -> int:
+        if self._desktop_dialog_parent() is None:
+            dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        return dialog.exec()
+
     def _on_hotkeys(self) -> None:
-        dlg = HotkeySettingsDialog(self._hotkeys, self)
-        if dlg.exec():
+        dlg = HotkeySettingsDialog(self._hotkeys, self._desktop_dialog_parent())
+        if self._exec_desktop_dialog(dlg):
             self._hotkeys = dlg.get_config()
             self._apply_hotkey_shortcuts()
             if self._global_hotkey_enabled:
@@ -5511,8 +5524,8 @@ class MainWindow(QMainWindow):
                 self._append_log("快捷鍵已更新（非 Windows 平台無全域熱鍵）。")
 
     def _on_user_profile(self) -> None:
-        dlg = UserProfileDialog(self._user, self)
-        if dlg.exec():
+        dlg = UserProfileDialog(self._user, self._desktop_dialog_parent())
+        if self._exec_desktop_dialog(dlg):
             self._user = dlg.get_profile()
             self._append_log(
                 f"使用者資料已更新：年齡 {self._user.age}，"
@@ -5520,14 +5533,16 @@ class MainWindow(QMainWindow):
             )
 
     def _on_alarm_settings(self) -> None:
-        dlg = AlarmSettingsDialog(self._alarm_config, self)
-        if not dlg.exec():
+        dlg = AlarmSettingsDialog(self._alarm_config, self._desktop_dialog_parent())
+        if not self._exec_desktop_dialog(dlg):
             return
         self._alarm_config = dlg.get_config()
         self._alarm_controller.set_config(self._alarm_config)
         try:
             path = self._save_settings()
         except OSError as exc:
+            if self._engine_mode:
+                raise
             QMessageBox.warning(
                 self,
                 "保存失敗",
@@ -5615,6 +5630,8 @@ class MainWindow(QMainWindow):
             return None
         if not self._web_allow_lan_enabled() or len(options) == 1:
             return options[0][1]
+        if self._engine_mode:
+            return options[0][1]
 
         display_labels = [label for label, _url in options]
         default_index = 0
@@ -5642,6 +5659,8 @@ class MainWindow(QMainWindow):
         if self._web_server is None:
             self._start_web_server()
         if self._web_server is None:
+            if self._engine_mode:
+                raise RuntimeError("Web dashboard failed to start")
             QMessageBox.warning(
                 self,
                 "Web 儀表板",
@@ -5652,6 +5671,8 @@ class MainWindow(QMainWindow):
         if url_str is None:
             return
         QDesktopServices.openUrl(QUrl(url_str))
+        if self._engine_mode:
+            return
         all_urls = "\n".join(self._web_dashboard_urls())
         QMessageBox.information(
             self,

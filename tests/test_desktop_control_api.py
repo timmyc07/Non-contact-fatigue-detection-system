@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from gui.desktop_control import DesktopCommandBroker
+from gui.desktop_control import DesktopCommandBroker, desktop_dialog_parent
 from gui.web_server import MetricsBuffer, PlaybackManager, create_app
 
 
@@ -144,3 +144,19 @@ def test_command_broker_skips_request_that_timed_out_before_drain() -> None:
     assert processed == 1
     assert calls == []
     assert "timed out" in str(result["error"])
+
+
+def test_engine_dialogs_do_not_use_hidden_legacy_window_as_parent() -> None:
+    class Window:
+        def __init__(self, visible: bool) -> None:
+            self.visible = visible
+
+        def isVisible(self) -> bool:  # noqa: N802 - Mirrors Qt API.
+            return self.visible
+
+    visible = Window(True)
+    hidden = Window(False)
+
+    assert desktop_dialog_parent(visible, engine_mode=True) is None
+    assert desktop_dialog_parent(hidden, engine_mode=False) is None
+    assert desktop_dialog_parent(visible, engine_mode=False) is visible

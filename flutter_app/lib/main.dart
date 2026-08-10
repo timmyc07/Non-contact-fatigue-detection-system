@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -145,12 +144,51 @@ class _MonitorShellState extends State<MonitorShell> {
     });
     try {
       final state = await _backend.command(command, args);
-      if (mounted) setState(() => _engineState = state);
+      if (mounted) {
+        setState(() => _engineState = state);
+        final message = _commandSuccessMessage(command, args);
+        if (message != null) _showCommandMessage(message);
+      }
     } catch (error) {
-      if (mounted) setState(() => _error = '操作失敗：$error');
+      if (mounted) {
+        setState(() => _error = '操作失敗：$error');
+        _showCommandMessage('操作失敗：$error', isError: true);
+      }
     } finally {
       if (mounted) setState(() => _commandBusy = false);
     }
+  }
+
+  String? _commandSuccessMessage(String command, Map<String, dynamic>? args) {
+    if (command == 'settings.save') return '設定已儲存';
+    if (command == 'baseline.start') return '已開始記錄清醒基線';
+    if (command == 'monitor.layout') {
+      return args?['focus'] == true ? '已切換為專注模式' : '已切換為分割模式';
+    }
+    if (command == 'settings.action') {
+      return switch (args?['action']) {
+        'recordings' => '已開啟記錄目錄',
+        'hotkeys' => '快捷鍵設定已完成',
+        'profile' => '使用者資料設定已完成',
+        'alarm' => '警報器設定已完成',
+        'web' => '已開啟 Web 儀表板',
+        'web_lan' => 'Web 區域網設定已更新',
+        _ => '操作已完成',
+      };
+    }
+    return null;
+  }
+
+  void _showCommandMessage(String message, {bool isError = false}) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: Duration(seconds: isError ? 4 : 2),
+        backgroundColor: isError ? const Color(0xff8f3f4d) : kSurfaceElevated,
+      ),
+    );
   }
 
   Future<void> _loadRecordings() async {
@@ -308,7 +346,7 @@ class AppTitleBar extends StatelessWidget {
     return MouseRegion(
       cursor: SystemMouseCursors.basic,
       child: GestureDetector(
-        onPanStart: (_) => onDrag(),
+        onPanDown: (_) => onDrag(),
         behavior: HitTestBehavior.opaque,
         child: Container(
           height: 56,
@@ -1183,7 +1221,11 @@ class SettingsView extends StatelessWidget {
           const Divider(color: Colors.white12),
           _SettingSwitch(title: 'Overlay 點擊穿透', subtitle: '鎖定後不攔截桌面滑鼠操作', value: state['overlay_locked'] == true, enabled: !busy, onChanged: (value) => onCommand('preferences.configure', <String, dynamic>{'overlay_locked': value})),
           const SizedBox(height: 6),
-          Row(children: [const SizedBox(width: 102, child: Text('透明度', style: TextStyle(fontSize: 12))), Expanded(child: Slider(value: opacity.clamp(0, 100).toDouble(), min: 0, max: 100, divisions: 100, label: '${opacity.toStringAsFixed(0)}%', onChanged: busy ? null : (value) => onCommand('overlay.configure', <String, dynamic>{'opacity': value.round()}))), SizedBox(width: 42, child: Text('${opacity.toStringAsFixed(0)}%', textAlign: TextAlign.right))]),
+          _OverlayOpacityControl(
+            value: opacity,
+            enabled: !busy,
+            onChanged: (value) => onCommand('overlay.configure', <String, dynamic>{'opacity': value}),
+          ),
         ])),
         const SizedBox(height: 18),
         Wrap(spacing: 10, runSpacing: 10, children: [
@@ -1200,6 +1242,62 @@ class SettingsView extends StatelessWidget {
         if (running) Padding(padding: const EdgeInsets.only(top: 14), child: Text('監測運作中：攝影機解析度、FPS 與 backend 需停止管線後調整。', style: TextStyle(color: const Color(0xffe0a35d).withValues(alpha: .9), fontSize: 12))),
       ]),
     );
+  }
+}
+
+class _OverlayOpacityControl extends StatefulWidget {
+  const _OverlayOpacityControl({required this.value, required this.enabled, required this.onChanged});
+
+  final double value;
+  final bool enabled;
+  final ValueChanged<int> onChanged;
+
+  @override
+  State<_OverlayOpacityControl> createState() => _OverlayOpacityControlState();
+}
+
+class _OverlayOpacityControlState extends State<_OverlayOpacityControl> {
+  late double _value;
+  bool _dragging = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _value = widget.value.clamp(0, 100).toDouble();
+  }
+
+  @override
+  void didUpdateWidget(covariant _OverlayOpacityControl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_dragging && oldWidget.value != widget.value) {
+      _value = widget.value.clamp(0, 100).toDouble();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      const SizedBox(width: 102, child: Text('透明度', style: TextStyle(fontSize: 12))),
+      Expanded(
+        child: Slider(
+          value: _value,
+          min: 0,
+          max: 100,
+          divisions: 100,
+          label: '${_value.toStringAsFixed(0)}%',
+          onChangeStart: widget.enabled ? (_) => _dragging = true : null,
+          onChanged: widget.enabled ? (value) => setState(() => _value = value) : null,
+          onChangeEnd: widget.enabled
+              ? (value) {
+                  _dragging = false;
+                  setState(() => _value = value);
+                  widget.onChanged(value.round());
+                }
+              : null,
+        ),
+      ),
+      SizedBox(width: 42, child: Text('${_value.toStringAsFixed(0)}%', textAlign: TextAlign.right)),
+    ]);
   }
 }
 
@@ -1250,19 +1348,20 @@ class GlassPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(12);
-    return ClipRRect(
-      borderRadius: radius,
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: kSurface.withValues(alpha: .78),
-            border: const Border(top: BorderSide(color: kAccentLine), left: BorderSide(color: kLine), right: BorderSide(color: kLine), bottom: BorderSide(color: kLine)),
-            borderRadius: radius,
+    return Material(
+      color: kSurface.withValues(alpha: .92),
+      shape: RoundedRectangleBorder(borderRadius: radius, side: const BorderSide(color: kLine)),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Padding(padding: const EdgeInsets.all(20), child: child),
+          const Positioned(
+            top: 0,
+            left: 12,
+            right: 12,
+            child: SizedBox(height: 1, child: ColoredBox(color: kAccentLine)),
           ),
-          child: child,
-        ),
+        ],
       ),
     );
   }

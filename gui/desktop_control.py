@@ -9,6 +9,14 @@ from typing import Any, Callable
 
 
 ControlHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
+DESKTOP_CONTROL_API_VERSION = 1
+
+
+def desktop_dialog_parent(window: Any, *, engine_mode: bool) -> Any | None:
+    """Keep engine-mode dialogs independent from the hidden legacy window."""
+    if engine_mode or not window.isVisible():
+        return None
+    return window
 
 
 @dataclass(slots=True)
