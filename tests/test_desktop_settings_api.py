@@ -553,6 +553,73 @@ def test_web_lan_marks_dirty_and_schedules_nonblocking_restart(
     assert restarted == []
 
 
+@pytest.mark.parametrize(
+    ("command", "args", "error"),
+    [
+        ("replay.choose", {}, "Unsupported desktop command"),
+        ("settings.action", {"action": "hotkeys"}, "Unsupported settings action"),
+        ("settings.action", {"action": "profile"}, "Unsupported settings action"),
+        ("settings.action", {"action": "alarm"}, "Unsupported settings action"),
+        ("settings.action", {"action": "reset"}, "Unsupported settings action"),
+    ],
+)
+def test_engine_rejects_retired_qt_visible_actions(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    args: dict[str, object],
+    error: str,
+) -> None:
+    monkeypatch.setattr(settings_window, "_choose_replay_dir", lambda: None, raising=False)
+    monkeypatch.setattr(settings_window, "_on_hotkeys", lambda: None, raising=False)
+    monkeypatch.setattr(settings_window, "_on_user_profile", lambda: None, raising=False)
+    monkeypatch.setattr(settings_window, "_on_alarm_settings", lambda: None, raising=False)
+    monkeypatch.setattr(settings_window, "_on_reset_layout", lambda: None, raising=False)
+
+    with pytest.raises(ValueError, match=error):
+        settings_window._handle_desktop_command(command, args)
+
+
+@pytest.mark.parametrize("mode", ["single", "parallel"])
+def test_replay_commands_configure_start_and_stop(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(
+        settings_window,
+        "_start_replay",
+        lambda: events.append("single"),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_start_replay_parallel",
+        lambda *, notify=True: events.append(f"parallel:{notify}"),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_stop_replay",
+        lambda: events.append("stop"),
+    )
+
+    configured = settings_window._handle_desktop_command(
+        "replay.configure",
+        {"path": str(tmp_path), "jobs": 3, "annotated": True},
+    )
+    settings_window._handle_desktop_command(
+        "replay.set", {"enabled": True, "mode": mode}
+    )
+    settings_window._handle_desktop_command("replay.set", {"enabled": False})
+
+    assert configured["replay_dataset_dir"] == str(tmp_path)
+    assert configured["replay_jobs"] == 3
+    assert configured["replay_annotated"] is True
+    expected_start = "single" if mode == "single" else "parallel:False"
+    assert events == [expected_start, "stop"]
+
+
 def test_web_reset_updates_state_and_schedules_nonblocking_restart(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:

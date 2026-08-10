@@ -14,7 +14,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - LAN 模式啟用 shared-token 認證：伺服器綁定區域網時會自動產生 access token，GUI 顯示的網址會自動附上 `?token=`；同區域網裝置需使用該完整網址（含 token）才能存取首頁與 API，否則回應 401。本機（127.0.0.1）連線不受影響、免 token。
 - **警告**：LAN 模式沒有 TLS，仍會將人臉影像與生理數據以未加密 HTTP 廣播給同網段裝置（僅以 token 防止未授權存取），請只在受信任網路開啟。
 - Web dashboard 會在新連線與重新整理後同步 GUI 最新狀態，live camera preview 目標為 30 FPS；UTA-RLDD 離線 replay 預覽仍約 20 FPS。
-- 疲勞警報器：GUI「設定 → 警報器設定…」可依 `LOW_VIGILANCE` / `DROWSY` / `CRITICAL` / `MICROSLEEP` 指定不同音效（預設路徑 `assets/alerts/*.wav`）
+- 疲勞警報器：正式 Flutter 面板的「設定 → 警報器」可依 `LOW_VIGILANCE` / `DROWSY` / `CRITICAL` / `MICROSLEEP` 指定不同音效（預設路徑 `assets/alerts/*.wav`）
 - rPPG BPM 估測回到第一版基準：有效 ROI 等權平均、Welch peak 直接輸出，並用峰值插值與輕量平滑補足 71/72/73 這類細節。
 - 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
 - MediaPipe 姿態補償、ROI 動態權重、遮擋降權與品質診斷
@@ -23,6 +23,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 
 ## Requirements
 - Python 3.10+ recommended
+- Node.js/npm、Rust stable toolchain 與 Flutter SDK（建置 Tauri v2 + Flutter Web 正式桌面面板）
 - Windows and Ubuntu Linux supported
 - Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
 - 心跳帶真值校準需要主機具備 Bluetooth LE 介面（Windows 10 1903+ 使用 WinRT；Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
@@ -63,6 +64,8 @@ Windows 一鍵啟動（會自動設定 Flutter PATH、檢查 Python engine 並�
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
 ```
+
+影片回放的「選擇資料夾」由 Tauri 原生 dialog 提供；取消不會修改目前設定。若原生 picker 無法使用，面板會顯示錯誤，仍可在同一區塊手動輸入完整資料夾路徑並套用。
 
 桌面重構效能基準（不需要相機；結果為 JSON）：
 

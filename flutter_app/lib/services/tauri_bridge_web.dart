@@ -12,7 +12,9 @@ class TauriBridge {
 
   Future<dynamic> invoke(String command, [Map<String, dynamic>? args]) async {
     try {
-      final result = await _tauriInvoke(command, (args ?? <String, dynamic>{}).jsify()).toDart;
+      final result =
+          await _tauriInvoke(command, (args ?? <String, dynamic>{}).jsify())
+              .toDart;
       return result?.dartify();
     } catch (error) {
       throw StateError('Tauri bridge unavailable or command failed: $error');
@@ -46,5 +48,10 @@ class TauriBridge {
       return Map<String, dynamic>.from(value);
     }
     return <String, dynamic>{};
+  }
+
+  Future<String?> pickReplayFolder() async {
+    final value = await invoke('pick_replay_folder');
+    return value is String && value.isNotEmpty ? value : null;
   }
 }

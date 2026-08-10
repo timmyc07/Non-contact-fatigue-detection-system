@@ -4,7 +4,8 @@ class TauriBridge {
   static final TauriBridge instance = TauriBridge._();
 
   Future<dynamic> invoke(String command, [Map<String, dynamic>? args]) async {
-    throw UnsupportedError('Tauri command "$command" is only available on Web.');
+    throw UnsupportedError(
+        'Tauri command "$command" is only available on Web.');
   }
 
   Future<void> minimizeWindow() async => invoke('minimize_window');
@@ -27,4 +28,6 @@ class TauriBridge {
     }
     return <String, dynamic>{};
   }
+
+  Future<String?> pickReplayFolder() async => null;
 }

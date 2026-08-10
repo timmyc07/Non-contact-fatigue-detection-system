@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QFileDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -66,11 +65,10 @@ from gui.alarm_config import (
     ALARM_SCENARIO_KEYS,
     AlarmConfig,
 )
-from gui.alarm_dialog import AlarmSettingsDialog
 from gui.alarm_player import FatigueAlarmController
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.combined_worker import CombinedWorker
-from gui.dialogs import HotkeyConfig, HotkeySettingsDialog, UserProfile, UserProfileDialog
+from gui.dialogs import HotkeyConfig, UserProfile
 from gui.desktop_control import (
     AlarmUnplayableError,
     BusyError,
@@ -78,7 +76,6 @@ from gui.desktop_control import (
     DesktopCommandBroker,
     HotkeyApplyError,
     SettingsWriteError,
-    desktop_dialog_parent,
 )
 from gui.desktop_settings_contract import (
     parse_alarm_config,
@@ -1135,15 +1132,6 @@ class MainWindow(QMainWindow):
             pass
 
     def _build_menu(self) -> None:
-        act_hotkeys = QAction("快捷鍵設定…", self)
-        act_hotkeys.triggered.connect(self._on_hotkeys)
-
-        act_profile = QAction("使用者資料…", self)
-        act_profile.triggered.connect(self._on_user_profile)
-
-        act_alarm = QAction("警報器設定…", self)
-        act_alarm.triggered.connect(self._on_alarm_settings)
-
         act_refresh = QAction("刷新攝影機列表", self)
         act_refresh.triggered.connect(self._start_camera_scan)
 
@@ -1152,9 +1140,6 @@ class MainWindow(QMainWindow):
 
         act_save = QAction("保存配置與布局", self)
         act_save.triggered.connect(self._on_save_layout)
-
-        act_reset = QAction("重置至原廠設定", self)
-        act_reset.triggered.connect(self._on_reset_layout)
 
         act_web = QAction("開啟Web 儀表板頁面", self)
         act_web.triggered.connect(self._on_web_info)
@@ -1168,15 +1153,10 @@ class MainWindow(QMainWindow):
         self._act_web_allow_lan.toggled.connect(self._on_web_allow_lan_toggled)
 
         m_settings = self.menuBar().addMenu("設定")
-        m_settings.addAction(act_hotkeys)
-        m_settings.addAction(act_profile)
-        m_settings.addAction(act_alarm)
-        m_settings.addSeparator()
         m_settings.addAction(act_refresh)
         m_settings.addAction(act_recordings)
         m_settings.addSeparator()
         m_settings.addAction(act_save)
-        m_settings.addAction(act_reset)
         m_settings.addSeparator()
         m_settings.addAction(self._act_web_allow_lan)
         m_settings.addAction(act_web)
@@ -2140,7 +2120,7 @@ class MainWindow(QMainWindow):
         page_l.setContentsMargins(20, 16, 20, 16)
         page_l.setSpacing(14)
 
-        # 頁首：kicker/大標 + 右側（資料夾路徑 mono + 選擇資料夾鈕）
+        # 頁首：資料夾路徑由正式 Flutter/Tauri 面板設定。
         header = QHBoxLayout()
         header.setSpacing(14)
         header.addWidget(self._page_header("03 / BATCH REPLAY", "影片回測"))
@@ -2150,9 +2130,6 @@ class MainWindow(QMainWindow):
         self._lbl_replay_dir.setWordWrap(True)
         self._lbl_replay_dir.setMaximumWidth(360)
         header.addWidget(self._lbl_replay_dir, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._btn_replay_choose = QPushButton("選擇資料夾")
-        self._btn_replay_choose.clicked.connect(self._choose_replay_dir)
-        header.addWidget(self._btn_replay_choose, 0, Qt.AlignmentFlag.AlignVCenter)
         page_l.addLayout(header)
 
         # 工具列卡（hero，橫向）：主要動作 + 平行數 + 標註 chk + 右側進度區
@@ -3808,9 +3785,6 @@ class MainWindow(QMainWindow):
                 self._sld_opacity.setValue(opacity)
             self._settings_dirty = True
 
-        elif command == "replay.choose":
-            self._choose_replay_dir()
-
         elif command == "replay.configure":
             if self._replay_thread is not None:
                 raise BusyError("Stop the replay before changing replay settings")
@@ -3903,12 +3877,8 @@ class MainWindow(QMainWindow):
         elif command == "settings.action":
             action = str(args.get("action", ""))
             actions = {
-                "hotkeys": self._on_hotkeys,
-                "profile": self._on_user_profile,
-                "alarm": self._on_alarm_settings,
                 "recordings": self._open_recordings_dir,
                 "save": self._on_save_layout,
-                "reset": self._on_reset_layout,
                 "web": self._on_web_info,
             }
             if action == "web_lan":
@@ -4222,21 +4192,6 @@ class MainWindow(QMainWindow):
         )
         self._log.append(line)
 
-    def _choose_replay_dir(self) -> None:
-        start_dir = Path.home()
-        candidate = Path.home() / "Downloads" / "Fold1_part1"
-        if self._replay_dataset_dir is not None:
-            start_dir = self._replay_dataset_dir
-        elif candidate.exists():
-            start_dir = candidate
-
-        selected = QFileDialog.getExistingDirectory(self, "選擇影片回測資料夾", str(start_dir))
-        if not selected:
-            return
-        self._replay_dataset_dir = Path(selected)
-        self._lbl_replay_dir.setText(str(self._replay_dataset_dir))
-        self._append_log(f"[影片回測] 已選擇資料夾：{self._replay_dataset_dir}")
-
     def _start_replay(self) -> None:
         self._start_replay_run(jobs=1, preview_enabled=True, mode_label="回放中")
 
@@ -4265,9 +4220,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "影片回測", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。")
             return
         if self._replay_dataset_dir is None:
-            self._choose_replay_dir()
-            if self._replay_dataset_dir is None:
-                return
+            self._append_log("[影片回測] 尚未由正式桌面面板設定資料夾")
+            return
         if not self._replay_dataset_dir.exists():
             QMessageBox.warning(self, "影片回測", f"找不到資料夾：\n{self._replay_dataset_dir}")
             return
@@ -4337,7 +4291,6 @@ class MainWindow(QMainWindow):
         self._append_log("[影片回測] 已送出停止請求，等待目前 frame 安全收尾")
 
     def _set_replay_controls_running(self, running: bool) -> None:
-        self._btn_replay_choose.setEnabled(not running)
         self._btn_replay_start.setEnabled(not running)
         self._btn_replay_parallel.setEnabled(not running)
         self._btn_replay_stop.setEnabled(running)
@@ -5859,54 +5812,6 @@ class MainWindow(QMainWindow):
         """OpenCV device index owned by the headless engine controller."""
         return self._engine_controller.camera_snapshot().selected_index
 
-    def _desktop_dialog_parent(self):
-        return desktop_dialog_parent(self, engine_mode=self._engine_mode)
-
-    def _exec_desktop_dialog(self, dialog: QDialog) -> int:
-        if self._desktop_dialog_parent() is None:
-            dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        return dialog.exec()
-
-    def _on_hotkeys(self) -> None:
-        dlg = HotkeySettingsDialog(self._hotkeys, self._desktop_dialog_parent())
-        if self._exec_desktop_dialog(dlg):
-            self._hotkeys = dlg.get_config()
-            self._apply_hotkey_shortcuts()
-            if self._global_hotkey_enabled:
-                self._append_log("快捷鍵已更新（全域熱鍵已重新註冊）。")
-            else:
-                self._append_log("快捷鍵已更新（非 Windows 平台無全域熱鍵）。")
-
-    def _on_user_profile(self) -> None:
-        dlg = UserProfileDialog(self._user, self._desktop_dialog_parent())
-        if self._exec_desktop_dialog(dlg):
-            self._user = dlg.get_profile()
-            self._append_log(
-                f"使用者資料已更新：年齡 {self._user.age}，"
-                f"{self._user.height_cm} cm / {self._user.weight_kg} kg"
-            )
-
-    def _on_alarm_settings(self) -> None:
-        dlg = AlarmSettingsDialog(self._alarm_config, self._desktop_dialog_parent())
-        if not self._exec_desktop_dialog(dlg):
-            return
-        self._alarm_config = dlg.get_config()
-        self._alarm_controller.set_config(self._alarm_config)
-        try:
-            path = self._save_settings()
-        except OSError as exc:
-            if self._engine_mode:
-                raise
-            QMessageBox.warning(
-                self,
-                "保存失敗",
-                f"警報器設定已套用，但無法寫入 settings.json：{exc}",
-            )
-            self._append_log(f"⚠ 警報器設定已套用，但保存失敗：{exc}")
-            return
-        state = "已啟用" if self._alarm_config.enabled else "已關閉"
-        self._append_log(f"🔔 警報器設定已更新（{state}）並保存 → {path}")
-
     def _open_recordings_dir(self) -> None:
         root = Path(__file__).resolve().parents[1]
         rec = root / "recordings"
@@ -5922,31 +5827,6 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.information(self, "保存", f"配置與布局已保存：\n{path}")
         self._append_log(f"💾 已保存配置與布局 → {path}")
-
-    def _on_reset_layout(self) -> None:
-        r = QMessageBox.question(
-            self,
-            "重置",
-            "確定要重置為原廠設定嗎？（示範）",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if r == QMessageBox.StandardButton.Yes:
-            self._engine_controller.reset_camera_settings()
-            self._sync_camera_widgets()
-            self._sld_opacity.setValue(55)
-            self._chk_metrics.setChecked(True)
-            self._chk_preview.setChecked(False)
-            self._chk_lock.setChecked(True)
-            self._chk_stress.setChecked(False)
-            self._act_web_allow_lan.setChecked(False)
-            self._alarm_config = AlarmConfig.defaults()
-            self._alarm_controller.set_config(self._alarm_config)
-            self._restart_web_server()
-            try:
-                self._save_settings()
-            except OSError as exc:
-                self._append_log(f"⚠ 重置後保存 settings.json 失敗：{exc}")
-            self._append_log("🔄 已重置為示範預設值。")
 
     def _on_web_allow_lan_toggled(self, checked: bool) -> None:
         self._restart_web_server()

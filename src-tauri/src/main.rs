@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 
 struct BackendProcess(Mutex<Option<Child>>);
 
@@ -63,6 +64,26 @@ fn toggle_always_on_top(window: WebviewWindow) -> Result<bool, String> {
         .set_always_on_top(next)
         .map_err(|error| error.to_string())?;
     Ok(next)
+}
+
+fn path_to_frontend_string(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "selected folder path is not valid UTF-8".to_owned())
+}
+
+#[tauri::command]
+async fn pick_replay_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(file_path) = selected else {
+        return Ok(None);
+    };
+    let path = file_path.into_path().map_err(|error| error.to_string())?;
+    path_to_frontend_string(&path).map(Some)
 }
 
 fn backend_address() -> SocketAddr {
@@ -252,6 +273,7 @@ fn stop_owned_backend(state: &BackendProcess) {
 
 fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(BackendProcess(Mutex::new(None)))
         .setup(|app: &mut tauri::App| {
             let child = spawn_backend().map_err(std::io::Error::other)?;
@@ -270,7 +292,8 @@ fn run() {
             toggle_maximize_window,
             close_window,
             start_dragging,
-            toggle_always_on_top
+            toggle_always_on_top,
+            pick_replay_folder
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");
@@ -292,7 +315,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::backend_api_version_from_response;
+    use super::{backend_api_version_from_response, path_to_frontend_string};
+    use std::path::Path;
 
     #[test]
     fn parses_desktop_api_version_from_control_state() {
@@ -306,5 +330,15 @@ mod tests {
         let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"success\":true,\"data\":{\"pipeline_running\":false}}";
 
         assert_eq!(backend_api_version_from_response(response), None);
+    }
+
+    #[test]
+    fn converts_native_replay_folder_path_for_flutter() {
+        let path = Path::new(r"C:\datasets\UTA-RLDD");
+
+        assert_eq!(
+            path_to_frontend_string(path),
+            Ok(r"C:\datasets\UTA-RLDD".to_owned())
+        );
     }
 }

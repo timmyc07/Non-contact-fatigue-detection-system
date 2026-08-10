@@ -10,12 +10,17 @@ const _backendBaseUrl = String.fromEnvironment(
 );
 
 class BackendService {
-  BackendService({this.baseUrl = _backendBaseUrl});
+  BackendService({this.baseUrl = _backendBaseUrl, http.Client? client})
+      : _client = client ?? http.Client(),
+        _ownsClient = client == null;
 
   final String baseUrl;
+  final http.Client _client;
+  final bool _ownsClient;
   io.Socket? _socket;
   Timer? _poller;
-  final StreamController<String> _previewFrames = StreamController<String>.broadcast();
+  final StreamController<String> _previewFrames =
+      StreamController<String>.broadcast();
 
   Stream<String> get previewFrames => _previewFrames.stream;
 
@@ -27,6 +32,9 @@ class BackendService {
     _socket = null;
     if (!_previewFrames.isClosed) {
       await _previewFrames.close();
+    }
+    if (_ownsClient) {
+      _client.close();
     }
   }
 
@@ -67,28 +75,33 @@ class BackendService {
   }
 
   Future<List<Map<String, dynamic>>> recordings() async {
-    final response = await http.get(Uri.parse('$baseUrl/api/recordings'));
+    final response = await _client.get(Uri.parse('$baseUrl/api/recordings'));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError('Backend returned HTTP ${response.statusCode}.');
     }
     final body = jsonDecode(response.body);
     final data = body is Map ? body['data'] : null;
     if (data is! List) return <Map<String, dynamic>>[];
-    return data.whereType<Map>().map((row) => Map<String, dynamic>.from(row)).toList();
+    return data
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
   }
 
-  Future<Map<String, dynamic>> playback(String dbPath, {int limit = 100}) async {
+  Future<Map<String, dynamic>> playback(String dbPath,
+      {int limit = 100}) async {
     final uri = Uri.parse('$baseUrl/api/playback').replace(
       queryParameters: <String, String>{
         'db_path': dbPath,
         'limit': limit.toString(),
       },
     );
-    final response = await http.get(uri);
+    final response = await _client.get(uri);
     final payload = jsonDecode(response.body);
-    if (response.statusCode < 200 || response.statusCode >= 300 || payload is! Map) {
-      final error = payload is Map ? payload['error'] : null;
-      throw StateError(error?.toString() ?? 'Backend returned HTTP ${response.statusCode}.');
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        payload is! Map) {
+      throw StateError(_errorMessage(payload, response.statusCode));
     }
     return Map<String, dynamic>.from(payload);
   }
@@ -118,16 +131,17 @@ class BackendService {
   }) async {
     final uri = Uri.parse('$baseUrl$path');
     final response = method == 'POST'
-        ? await http.post(
+        ? await _client.post(
             uri,
             headers: const <String, String>{'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-        : await http.get(uri);
+        : await _client.get(uri);
     final payload = jsonDecode(response.body);
-    if (response.statusCode < 200 || response.statusCode >= 300 || payload is! Map) {
-      final error = payload is Map ? payload['error'] : null;
-      throw StateError(error?.toString() ?? 'Backend returned HTTP ${response.statusCode}.');
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        payload is! Map) {
+      throw StateError(_errorMessage(payload, response.statusCode));
     }
     final data = payload['data'];
     return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
@@ -137,7 +151,7 @@ class BackendService {
     if (_poller != null) return;
     _poller = Timer.periodic(const Duration(seconds: 2), (_) async {
       try {
-        final response = await http.get(Uri.parse('$baseUrl/api/metrics'));
+        final response = await _client.get(Uri.parse('$baseUrl/api/metrics'));
         if (response.statusCode == 200) {
           final packet = _packet(jsonDecode(response.body));
           if (packet != null && !controller.isClosed) controller.add(packet);
@@ -149,7 +163,17 @@ class BackendService {
   }
 
   Map<String, dynamic>? _packet(dynamic payload) {
-    final value = payload is Map && payload['metrics'] is Map ? payload['metrics'] : payload;
+    final value = payload is Map && payload['metrics'] is Map
+        ? payload['metrics']
+        : payload;
     return value is Map ? Map<String, dynamic>.from(value) : null;
+  }
+
+  String _errorMessage(dynamic payload, int statusCode) {
+    final error = payload is Map ? payload['error'] : null;
+    if (error is Map && error['message'] is String) {
+      return error['message'] as String;
+    }
+    return error?.toString() ?? 'Backend returned HTTP $statusCode.';
   }
 }
