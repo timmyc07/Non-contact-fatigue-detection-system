@@ -1,4 +1,4 @@
-"""Launch the rPPG v2 PySide6 control console."""
+"""Launch the Tauri/Flutter shell or its hidden Python engine."""
 
 from __future__ import annotations
 
@@ -78,36 +78,41 @@ _prefer_pyside6_qt_plugins()
 from gui.main_window import MainWindow, application_stylesheet
 
 
+def _legacy_ui_requested() -> bool:
+    return "--legacy-ui" in sys.argv
+
+
 def _should_launch_tauri() -> bool:
-    return (
-        "--engine" not in sys.argv
-        and "--legacy-ui" not in sys.argv
-        and os.environ.get("NCFD_LEGACY_UI") != "1"
-    )
+    return "--engine" not in sys.argv
 
 
-def _launch_tauri() -> int | None:
+def _launch_tauri() -> int:
     npx = shutil.which("npx")
     flutter = shutil.which("flutter")
     root = Path(__file__).resolve().parent
     if npx is None or flutter is None or not (root / "src-tauri" / "tauri.conf.json").exists():
         print(
-            "[Launcher] Flutter/Tauri toolchain unavailable; falling back to the legacy Qt panel. "
-            "Install Flutter and use `python main.py --legacy-ui` to select Qt explicitly."
+            "[Launcher] Flutter/Tauri toolchain unavailable. "
+            "Install Flutter and Node.js, then run `npm run desktop`."
         )
-        return None
+        return 78
     try:
         return subprocess.call([npx, "tauri", "dev"], cwd=root)
     except OSError as exc:
-        print(f"[Launcher] Unable to start Tauri: {exc}; falling back to the legacy Qt panel.")
-        return None
+        print(f"[Launcher] Unable to start Tauri: {exc}")
+        return 78
 
 
 def main() -> int:
+    if _legacy_ui_requested():
+        print(
+            "[Launcher] 舊版 PySide 主面板已移除。"
+            "請使用 `npm run desktop` 啟動正式 Tauri/Flutter 面板；"
+            "若只需背景服務，請使用 `python main.py --engine`."
+        )
+        return 2
     if _should_launch_tauri():
-        tauri_result = _launch_tauri()
-        if tauri_result is not None:
-            return tauri_result
+        return _launch_tauri()
     _prefer_pyside6_qt_plugins()
     missing_packages = _missing_linux_qt_runtime_libraries()
     if missing_packages:

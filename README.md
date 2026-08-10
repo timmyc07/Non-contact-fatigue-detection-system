@@ -57,9 +57,6 @@ If the virtual environment already exists, reinstall/update Python dependencies 
 ## Run
 ```bash
 npm run desktop
-
-# 舊版 PySide6 面板（進階工具 fallback）
-python main.py --legacy-ui
 ```
 
 Windows 一鍵啟動（會自動設定 Flutter PATH、檢查 Python engine 並啟動 Tauri）：
@@ -73,9 +70,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
 ```
 輸出位於 `src-tauri\target\release\bundle\nsis\`。安裝包包含 Tauri/Flutter 外殼；Python engine 仍需與安裝包一起部署，或透過 `NCFD_ENGINE_ROOT` 和 `NCFD_ENGINE_PYTHON` 指向包含 `.venv`、`main.py`、`models` 的 engine 目錄。
 
-Ubuntu:
+Ubuntu engine（供 Tauri 背景服務使用）：
 ```bash
-.venv/bin/python main.py --legacy-ui
+.venv/bin/python main.py --engine
 ```
 
 Ubuntu GUI 若出現 `Could not load the Qt platform plugin "xcb"`，先重新執行 setup 補齊 Qt xcb runtime：
@@ -87,10 +84,10 @@ bash scripts/setup_ubuntu.sh
 若仍需追蹤 Qt plugin 載入路徑，可用：
 
 ```bash
-QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py --legacy-ui
+QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py --engine
 ```
 
-正式主面板使用 Tauri v2 + Flutter Web；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。舊版 PySide6 面板仍可用 `python main.py --legacy-ui` 開啟，作為進階 replay 與診斷 fallback。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
+正式產品只有 Tauri v2 + Flutter Web 面板；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。PySide6 僅作為隱藏 engine runtime（Qt worker/thread、影像、音效與桌面 Overlay），不再提供可見的舊主面板。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
 
 Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機、分析端或 Qt 預覽訊號累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，讓分析 worker 永遠取最新幀，並限制預覽影像訊號輸出避免主執行緒堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 GUI 後端手動切換比較穩定性。
 

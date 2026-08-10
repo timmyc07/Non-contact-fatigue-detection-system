@@ -503,58 +503,217 @@ class DashboardView extends StatelessWidget {
   final Future<void> Function() onRetry;
   final Future<void> Function(String, [Map<String, dynamic>?]) onCommand;
 
-  double _number(String key, [double fallback = 0]) => (metrics[key] as num?)?.toDouble() ?? fallback;
-  String _text(String key, [String fallback = '--']) => metrics[key]?.toString() ?? fallback;
+  double _number(String key, [double fallback = 0]) =>
+      (metrics[key] as num?)?.toDouble() ?? fallback;
+  String _text(String key, [String fallback = '--']) =>
+      metrics[key]?.toString() ?? fallback;
+  bool get _focus => engineState['monitor_focus'] == true;
 
   @override
   Widget build(BuildContext context) {
     final fatigue = _text('status', connected ? '等待資料' : '尚未連線');
-    final fatigueColor = fatigue.contains('警') || fatigue.contains('疲') ? const Color(0xffe77b78) : kAccent;
+    final fatigueColor = fatigue.contains('警') || fatigue.contains('疲')
+        ? const Color(0xffe77b78)
+        : kAccent;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 34),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('即時監測', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)), const SizedBox(height: 7), Text('以臉部行為與 rPPG 訊號交叉檢視操作者狀態。', style: TextStyle(color: Colors.white.withValues(alpha: .5), fontSize: 13))])),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text('即時監測',
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 7),
+                Text('以臉部行為與 rPPG 訊號交叉檢視操作者狀態。',
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: .5),
+                        fontSize: 13))
+              ])),
           _ConnectionPill(connected: connected),
         ]),
-        if (error != null) Padding(padding: const EdgeInsets.only(top: 16), child: _InlineNotice(message: error!, onRetry: onRetry)),
+        if (error != null)
+          Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: _InlineNotice(message: error!, onRetry: onRetry)),
         const SizedBox(height: 24),
-        IntrinsicHeight(
-          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(flex: 5, child: CameraPreview(frame: previewFrame, running: engineState['pipeline_running'] == true)),
-            const SizedBox(width: 16),
-            Expanded(
-              flex: 3,
-              child: DesktopControlPanel(
-                state: engineState,
-                busy: busy,
-                onCommand: onCommand,
+        if (_focus)
+          _FocusDashboard(
+            previewFrame: previewFrame,
+            running: engineState['pipeline_running'] == true,
+            status: fatigue,
+            statusColor: fatigueColor,
+            connected: connected,
+            busy: busy,
+            onExit: () =>
+                onCommand('monitor.layout', <String, dynamic>{'focus': false}),
+          )
+        else ...[
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final preview = CameraPreview(
+                  frame: previewFrame,
+                  running: engineState['pipeline_running'] == true);
+              final controls = DesktopControlPanel(
+                  state: engineState, busy: busy, onCommand: onCommand);
+              if (constraints.maxWidth < 820) {
+                return Column(
+                    children: [preview, const SizedBox(height: 16), controls]);
+              }
+              return IntrinsicHeight(
+                child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 5, child: preview),
+                      const SizedBox(width: 16),
+                      Expanded(flex: 3, child: controls),
+                    ]),
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final statusPanel = _StatusPanel(
+                  status: fatigue, color: fatigueColor, metrics: metrics);
+              final signalPanel = _SignalPanel(
+                  bpm: _number('stress_bpm'),
+                  sqi: _number('stress_sqi'),
+                  fps: _number('fps'));
+              if (constraints.maxWidth < 820) {
+                return Column(children: [
+                  statusPanel,
+                  const SizedBox(height: 16),
+                  signalPanel
+                ]);
+              }
+              return IntrinsicHeight(
+                child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 5, child: statusPanel),
+                      const SizedBox(width: 16),
+                      Expanded(flex: 3, child: signalPanel),
+                    ]),
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          HeartRateBeltPanel(
+              metrics: metrics,
+              engineState: engineState,
+              busy: busy,
+              onCommand: onCommand),
+          const SizedBox(height: 16),
+          Wrap(spacing: 12, runSpacing: 12, children: [
+            MetricTile(
+                label: '眼瞼閉合 EAR',
+                value: _number('ear').toStringAsFixed(2),
+                suffix: 'ratio',
+                icon: Icons.remove_red_eye_outlined),
+            MetricTile(
+                label: 'PERCLOS',
+                value: _number('perclos').toStringAsFixed(1),
+                suffix: '%',
+                icon: Icons.timer_outlined),
+            MetricTile(
+                label: '眨眼次數',
+                value: _text('blink_count'),
+                suffix: '次',
+                icon: Icons.visibility_off_outlined),
+            MetricTile(
+                label: '頭部俯仰',
+                value: _number('head_pitch').toStringAsFixed(1),
+                suffix: 'deg',
+                icon: Icons.threed_rotation),
+          ]),
+          const SizedBox(height: 24),
+          Text('訊號品質', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          _QualityStrip(metrics: metrics),
+        ],
+      ]),
+    );
+  }
+}
+
+class _FocusDashboard extends StatelessWidget {
+  const _FocusDashboard({
+    required this.previewFrame,
+    required this.running,
+    required this.status,
+    required this.statusColor,
+    required this.connected,
+    required this.busy,
+    required this.onExit,
+  });
+
+  final Uint8List? previewFrame;
+  final bool running;
+  final String status;
+  final Color statusColor;
+  final bool connected;
+  final bool busy;
+  final VoidCallback onExit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(
+              'FOCUS PREVIEW',
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: .38),
+                  fontSize: 10,
+                  letterSpacing: 1.4),
+            ),
+            const Spacer(),
+            Tooltip(
+              message: '切回分割模式',
+              child: IconButton(
+                onPressed: busy ? null : onExit,
+                icon: const Icon(Icons.fullscreen_exit),
+                color: kAccentBright,
               ),
             ),
-          ]),
+          ],
         ),
-        const SizedBox(height: 16),
-        IntrinsicHeight(
-          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(flex: 5, child: _StatusPanel(status: fatigue, color: fatigueColor, metrics: metrics)),
-            const SizedBox(width: 16),
-            Expanded(flex: 3, child: _SignalPanel(bpm: _number('stress_bpm'), sqi: _number('stress_sqi'), fps: _number('fps'))),
-          ]),
-        ),
-        const SizedBox(height: 16),
-        HeartRateBeltPanel(metrics: metrics, engineState: engineState, busy: busy, onCommand: onCommand),
-        const SizedBox(height: 16),
-        Wrap(spacing: 12, runSpacing: 12, children: [
-          MetricTile(label: '眼瞼閉合 EAR', value: _number('ear').toStringAsFixed(2), suffix: 'ratio', icon: Icons.remove_red_eye_outlined),
-          MetricTile(label: 'PERCLOS', value: _number('perclos').toStringAsFixed(1), suffix: '%', icon: Icons.timer_outlined),
-          MetricTile(label: '眨眼次數', value: _text('blink_count'), suffix: '次', icon: Icons.visibility_off_outlined),
-          MetricTile(label: '頭部俯仰', value: _number('head_pitch').toStringAsFixed(1), suffix: 'deg', icon: Icons.threed_rotation),
-        ]),
-        const SizedBox(height: 24),
-        Text('訊號品質', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        CameraPreview(frame: previewFrame, running: running),
         const SizedBox(height: 12),
-        _QualityStrip(metrics: metrics),
-      ]),
+        GlassPanel(
+          child: Wrap(
+            spacing: 20,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.monitor_heart_outlined,
+                      size: 18, color: statusColor),
+                  const SizedBox(width: 8),
+                  Text(status,
+                      style: TextStyle(
+                          color: statusColor, fontWeight: FontWeight.w700)),
+                ],
+              ),
+              _ConnectionPill(connected: connected),
+              Text(running ? '正在擷取即時影像' : '擷取尚未啟動',
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: .55),
+                      fontSize: 12)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -712,7 +871,7 @@ class _SignalPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('PHYSIOLOGY / rPPG', style: TextStyle(color: Colors.white.withValues(alpha: .38), fontSize: 10, letterSpacing: 1.4)),
-          const Spacer(),
+          const SizedBox(height: 20),
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Text(bpm > 0 ? bpm.toStringAsFixed(0) : '--', style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800)),
             const SizedBox(width: 8),

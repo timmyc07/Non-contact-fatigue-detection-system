@@ -3360,7 +3360,6 @@ class MainWindow(QMainWindow):
             "resolution": str(self._cmb_resolution.currentText()),
             "fps": str(self._cmb_fps.currentText()),
             "backend": str(self._cmb_backend.currentData() or "auto"),
-            "legacy_panel_visible": self.isVisible(),
             "web_allow_lan": self._act_web_allow_lan.isChecked(),
             "profile_loaded": self._personal_profile is not None,
             "replay_running": self._replay_thread is not None,
@@ -3569,14 +3568,6 @@ class MainWindow(QMainWindow):
 
         elif command == "settings.save":
             self._save_settings()
-
-        elif command == "legacy.show":
-            self.show()
-            self.raise_()
-            self.activateWindow()
-
-        elif command == "legacy.hide":
-            self.hide()
 
         elif command == "app.shutdown":
             QTimer.singleShot(0, self._shutdown_engine)

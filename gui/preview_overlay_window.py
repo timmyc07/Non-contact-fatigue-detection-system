@@ -246,6 +246,13 @@ class PreviewOverlayWindow(QWidget):
         self.setMinimumSize(480, 320)
         self.resize(640, 460)
         self._locked = True
+        # Keep the global metrics toggle separate from the individual panel
+        # state.  Analysis workers can start/stop while the overlay remains
+        # hidden, so their requested visibility must survive that toggle.
+        self._metrics_visible = True
+        self._rppg_enabled = False
+        self._fatigue_enabled = False
+        self._fused_enabled = False
 
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -611,7 +618,8 @@ class PreviewOverlayWindow(QWidget):
 
     def show_rppg_panel(self, visible: bool) -> None:
         """Show or hide the rPPG metrics panel below the video."""
-        self._rppg_panel.setVisible(visible)
+        self._rppg_enabled = bool(visible)
+        self._rppg_panel.setVisible(self._metrics_visible and self._rppg_enabled)
         self._resize_to_content()
 
     # Panel height constants (approximate, based on row counts + margins)
@@ -715,7 +723,8 @@ class PreviewOverlayWindow(QWidget):
 
     def show_fused_panel(self, visible: bool) -> None:
         """Show or hide the combined fatigue score panel."""
-        self._fused_panel.setVisible(visible)
+        self._fused_enabled = bool(visible)
+        self._fused_panel.setVisible(self._metrics_visible and self._fused_enabled)
         self._resize_to_content()
 
     def update_fused_score(self, score: "FusedFatigueScore") -> None:
@@ -791,7 +800,8 @@ class PreviewOverlayWindow(QWidget):
 
     def show_fatigue_panel(self, visible: bool) -> None:
         """Show or hide the behaviour alertness metrics panel."""
-        self._fatigue_panel.setVisible(visible)
+        self._fatigue_enabled = bool(visible)
+        self._fatigue_panel.setVisible(self._metrics_visible and self._fatigue_enabled)
         self._resize_to_content()
 
     def update_fatigue_metrics(self, metrics: "FatigueMetrics") -> None:
@@ -945,8 +955,22 @@ class PreviewOverlayWindow(QWidget):
             )
 
     def set_metrics_visible(self, visible: bool) -> None:
-        """Legacy: controls the old metrics placeholder (kept for compatibility)."""
-        pass
+        """Show or hide every metrics panel in the overlay.
+
+        The main window uses this as a global display toggle while each
+        analysis worker controls its own panel through ``show_*_panel``.  We
+        therefore keep both pieces of state: turning the toggle off hides all
+        panels without forgetting which workers are active, and turning it
+        back on restores exactly those panels.
+        """
+        self._metrics_visible = bool(visible)
+        for panel, enabled in (
+            (self._rppg_panel, self._rppg_enabled),
+            (self._fatigue_panel, self._fatigue_enabled),
+            (self._fused_panel, self._fused_enabled),
+        ):
+            panel.setVisible(self._metrics_visible and enabled)
+        self._resize_to_content()
 
     def update_frame(self, image: QImage) -> None:
         if not self._preview_on:

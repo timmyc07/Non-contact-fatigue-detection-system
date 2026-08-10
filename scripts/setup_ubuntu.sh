@@ -54,4 +54,6 @@ echo
 echo "Done. Activate with:"
 echo "  source $VENV_DIR/bin/activate"
 echo "Run the app with:"
-echo "  $VENV_DIR/bin/python main.py"
+echo "  $VENV_DIR/bin/python main.py --engine"
+echo "Then start the Tauri/Flutter panel from the repository root with:"
+echo "  npm run desktop"
