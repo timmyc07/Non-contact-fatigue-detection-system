@@ -78,7 +78,8 @@ QThread/signal/Qt multimedia adapter；Overlay 偏好由 Qt-free `OverlayRuntime
 engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter；replay 的資料夾、jobs、
 annotated 與進度投影由 Qt-free `ReplayRuntimeState` 保存，engine mode 不建立 replay
 spinbox/checkbox/label 假元件；自動記錄、心跳帶校準與自動採集偏好由 Qt-free
-`CapturePreferencesState` 保存，engine mode 不建立其 checkbox/spinbox/button 假元件）：
+`CapturePreferencesState` 保存，engine mode 不建立其 checkbox/spinbox/button 假元件；Web LAN
+偏好由 Qt-free `WebPreferencesState` 保存，engine mode 不建立 QAction 假元件）：
 
 ```
 CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  →  MainWindow adapter
@@ -112,6 +113,9 @@ progress payload 由 `ReplayRuntimeState` 提供，legacy Qt widgets 僅為 mirr
 session-only，不新增 schema。BLE 啟停、錄影與 `QTimer` side effect 仍由 `MainWindow` adapter
 執行；狀態層只保存意圖，adapter 失敗時回滾狀態。此抽取不修改 BLE 樣本、校準器、錄影
 worker、相機／分析 worker topology 或任何 rPPG／疲勞數值路徑。
+Web LAN 偏好由 `WebPreferencesState` 提供 runtime、desktop state 與 settings JSON `web.allow_lan`
+投影；engine mode 不建立 legacy QAction。Web server 建立、shared-token URL 與非阻塞 restart
+仍由 `MainWindow` adapter 執行，預設維持 localhost-only。
 
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。

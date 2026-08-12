@@ -105,6 +105,7 @@ from gui.replay_runtime_state import ReplayRuntimeState
 from gui.runtime_paths import data_path
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
+from gui.web_preferences_state import WebPreferencesState
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
 from rppg.hr_belt_ble import HrBeltConfig, hr_is_stale, load_hr_belt_config
 from rppg.watch_physio import compute_watch_physio
@@ -1145,6 +1146,7 @@ class MainWindow(QMainWindow):
         self._user = UserProfile()
         self._overlay_state = OverlayRuntimeState()
         self._capture_preferences = CapturePreferencesState()
+        self._web_preferences = WebPreferencesState()
 
         self._preview_overlay = None if self._engine_mode else PreviewOverlayWindow()
         if not self._engine_mode:
@@ -1287,7 +1289,6 @@ class MainWindow(QMainWindow):
 
     def _install_headless_controls(self) -> None:
         """Install state-only controls so desktop commands keep their contracts."""
-        self._act_web_allow_lan = _HeadlessControl()
         self._log = _HeadlessControl()
         self._mon_contrib_bars: dict[str, Any] = {}
         self._layout_seg_buttons: dict[str, Any] = {}
@@ -1435,6 +1436,31 @@ class MainWindow(QMainWindow):
             self._spn_auto_capture_seconds.setValue(state.auto_capture_seconds)
         finally:
             self._spn_auto_capture_seconds.blockSignals(False)
+
+    def _sync_web_preference_control(self) -> None:
+        if self._engine_mode:
+            return
+        self._act_web_allow_lan.blockSignals(True)
+        try:
+            self._act_web_allow_lan.setChecked(
+                self._web_preferences.snapshot().allow_lan
+            )
+        finally:
+            self._act_web_allow_lan.blockSignals(False)
+
+    def _configure_web_preferences(
+        self,
+        *,
+        allow_lan: bool,
+        mark_dirty: bool = True,
+        restart_server: bool = True,
+    ) -> None:
+        self._web_preferences.configure(allow_lan=allow_lan)
+        self._sync_web_preference_control()
+        if mark_dirty:
+            self._settings_dirty = True
+        if restart_server:
+            self._schedule_web_server_restart()
 
     def _configure_capture_preferences(
         self,
@@ -3482,13 +3508,8 @@ class MainWindow(QMainWindow):
             )
         self._sync_overlay_controls()
 
-        web = data.get("web", {})
-        if isinstance(web, dict):
-            allow_lan = web.get("allow_lan")
-            if isinstance(allow_lan, bool):
-                self._act_web_allow_lan.blockSignals(True)
-                self._act_web_allow_lan.setChecked(allow_lan)
-                self._act_web_allow_lan.blockSignals(False)
+        self._web_preferences.load(web=data.get("web", {}))
+        self._sync_web_preference_control()
 
         alarm = data.get("alarm", {})
         if isinstance(alarm, dict):
@@ -3546,7 +3567,7 @@ class MainWindow(QMainWindow):
                 "weight_kg": self._user.weight_kg,
             },
             "web": {
-                "allow_lan": self._act_web_allow_lan.isChecked(),
+                **self._web_preferences.to_settings(),
             },
             "alarm": self._alarm_config.to_dict(),
         }
@@ -3664,7 +3685,7 @@ class MainWindow(QMainWindow):
         return rec
 
     def _web_allow_lan_enabled(self) -> bool:
-        return self._act_web_allow_lan.isChecked()
+        return self._web_preferences.snapshot().allow_lan
 
     def _web_bind_host(self) -> str:
         return "0.0.0.0" if self._web_allow_lan_enabled() else "127.0.0.1"
@@ -3719,9 +3740,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._append_log(f"⚠ Web 儀表板啟動失敗：{exc}")
             self._web_server = None
-
-    def _restart_web_server(self) -> None:
-        self._schedule_web_server_restart()
 
     def _schedule_web_server_restart(self) -> None:
         if self._web_restart_shutdown or self._web_restart_scheduled or self._web_restart_in_progress:
@@ -4050,10 +4068,7 @@ class MainWindow(QMainWindow):
         if overlay_changes:
             self._configure_overlay(**overlay_changes)
         if "web" in selected:
-            self._act_web_allow_lan.blockSignals(True)
-            self._act_web_allow_lan.setChecked(False)
-            self._act_web_allow_lan.blockSignals(False)
-            self._schedule_web_server_restart()
+            self._configure_web_preferences(allow_lan=False, mark_dirty=False)
         if "replay" in selected:
             self._replay_state.reset_configuration()
             self._sync_replay_controls()
@@ -4088,7 +4103,7 @@ class MainWindow(QMainWindow):
             "resolution": camera.resolution,
             "fps": camera.fps,
             "backend": camera.backend,
-            "web_allow_lan": self._act_web_allow_lan.isChecked(),
+            **self._web_preferences.to_desktop_state(),
             "hotkeys": {
                 "toggle_metrics": self._hotkeys.toggle_metrics,
                 "toggle_preview": self._hotkeys.toggle_preview,
@@ -4394,11 +4409,7 @@ class MainWindow(QMainWindow):
             }
             if action == "web_lan":
                 enabled = self._require_bool(args, "enabled")
-                self._act_web_allow_lan.blockSignals(True)
-                self._act_web_allow_lan.setChecked(enabled)
-                self._act_web_allow_lan.blockSignals(False)
-                self._settings_dirty = True
-                self._schedule_web_server_restart()
+                self._configure_web_preferences(allow_lan=enabled)
             elif action in actions:
                 actions[action]()
             else:
@@ -6652,7 +6663,7 @@ class MainWindow(QMainWindow):
         self._append_log(f"💾 已保存配置與布局 → {path}")
 
     def _on_web_allow_lan_toggled(self, checked: bool) -> None:
-        self._restart_web_server()
+        self._configure_web_preferences(allow_lan=checked)
         try:
             self._save_settings()
         except OSError as exc:

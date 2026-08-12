@@ -11,7 +11,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtGui import QImage  # noqa: E402
+from PySide6.QtGui import QAction, QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication, QStatusBar  # noqa: E402
 
 from gui.alarm_config import AlarmConfig  # noqa: E402
@@ -110,6 +110,7 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_btn_auto_capture",
         "_chk_behavior",
         "_chk_stress",
+        "_act_web_allow_lan",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
@@ -1460,17 +1461,11 @@ def test_web_lan_marks_dirty_and_schedules_nonblocking_restart(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     scheduled: list[bool] = []
-    restarted: list[bool] = []
     monkeypatch.setattr(
         settings_window,
         "_schedule_web_server_restart",
         lambda: scheduled.append(True),
         raising=False,
-    )
-    monkeypatch.setattr(
-        settings_window,
-        "_restart_web_server",
-        lambda: restarted.append(True),
     )
 
     state = settings_window._handle_desktop_command(
@@ -1480,7 +1475,55 @@ def test_web_lan_marks_dirty_and_schedules_nonblocking_restart(
     assert state["web_allow_lan"] is True
     assert state["settings_dirty"] is True
     assert scheduled == [True]
-    assert restarted == []
+
+
+def test_headless_web_preference_round_trip_preserves_bind_contract(
+    settings_window: MainWindow,
+) -> None:
+    settings_window._settings_path().write_text(
+        json.dumps({"web": {"allow_lan": True}}),
+        encoding="utf-8",
+    )
+
+    settings_window._load_settings()
+
+    assert settings_window._web_bind_host() == "0.0.0.0"
+    state = settings_window._handle_desktop_command("settings.save", {})
+    persisted = json.loads(
+        settings_window._settings_path().read_text(encoding="utf-8")
+    )
+    assert state["web_allow_lan"] is True
+    assert persisted["web"] == {"allow_lan": True}
+
+
+def test_legacy_web_action_updates_state_saves_and_schedules_restart(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    action = QAction(settings_window)
+    action.setCheckable(True)
+    settings_window._act_web_allow_lan = action
+    action.toggled.connect(settings_window._on_web_allow_lan_toggled)
+    scheduled: list[bool] = []
+    monkeypatch.setattr(
+        settings_window,
+        "_schedule_web_server_restart",
+        lambda: scheduled.append(True),
+    )
+
+    settings_window._engine_mode = False
+    try:
+        action.setChecked(True)
+    finally:
+        settings_window._engine_mode = True
+
+    persisted = json.loads(
+        settings_window._settings_path().read_text(encoding="utf-8")
+    )
+    assert settings_window._web_preferences.snapshot().allow_lan is True
+    assert action.isChecked() is True
+    assert persisted["web"] == {"allow_lan": True}
+    assert settings_window._settings_dirty is False
+    assert scheduled == [True]
 
 
 @pytest.mark.parametrize(
@@ -2240,9 +2283,7 @@ def test_analysis_command_allows_raw_camera_mode(
 def test_web_reset_updates_state_and_schedules_nonblocking_restart(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings_window._act_web_allow_lan.blockSignals(True)
-    settings_window._act_web_allow_lan.setChecked(True)
-    settings_window._act_web_allow_lan.blockSignals(False)
+    settings_window._web_preferences.configure(allow_lan=True)
     scheduled: list[bool] = []
     monkeypatch.setattr(
         settings_window,

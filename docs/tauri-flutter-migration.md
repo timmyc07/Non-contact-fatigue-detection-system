@@ -74,6 +74,11 @@ Qt resource state, not command/API authorities. Engine mode does not construct
 analysis checkbox stand-ins; the legacy analysis checkboxes exist only as
 non-production presentation mirrors. Settings load/save, `state.get`, worker
 failure recovery, and auto-capture read the controller-owned analysis state.
+Web LAN access now lives in the Qt-free `WebPreferencesState`. Engine mode does
+not construct a QAction stand-in; settings load/save, desktop state, bind-host
+selection, and dashboard URL formatting read the state directly. The existing
+web-server thread, shared-token URL, and non-blocking restart coordination stay
+in the `MainWindow` runtime adapter, with localhost-only remaining the default.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is part of the same state model as a platform-neutral
 physical-pixel `{x, y, width, height}` object. The shell applies geometry when
