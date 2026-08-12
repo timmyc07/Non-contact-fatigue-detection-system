@@ -113,12 +113,35 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_act_web_allow_lan",
         "_log",
         "_menu_actions_hotkeys",
+        "_mon_blink",
+        "_mon_bpm",
+        "_mon_bpm_delta",
+        "_mon_contrib_bars",
+        "_mon_ear",
+        "_mon_expr",
+        "_mon_fused_level",
+        "_mon_fused_score",
+        "_mon_gaze",
+        "_mon_head",
+        "_mon_hrv_conf",
+        "_mon_lfhf",
+        "_mon_perclos",
+        "_mon_rec_pill",
+        "_mon_rmssd",
+        "_mon_score_bar",
+        "_mon_score_big",
+        "_mon_sdnn",
+        "_mon_sqi",
+        "_mon_trend",
+        "_mon_warmup",
+        "_mon_wave",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
     assert settings_window.minimumWidth() == 0
     assert settings_window.minimumHeight() == 0
     assert settings_window.findChildren(QStatusBar) == []
+    assert settings_window._rec_ui_timer is None
 
 
 def test_engine_log_messages_use_python_logger(
@@ -1037,6 +1060,55 @@ def test_headless_replay_preview_and_queue_are_engine_safe(
     )
     settings_window._update_belt_panel()
     settings_window._refresh_monitor_metrics()
+
+
+def test_engine_metric_callbacks_keep_non_visual_side_effects(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rppg_metrics = object()
+    fatigue_metrics = object()
+    fused_score = object()
+    events: list[tuple[str, object]] = []
+    settings_window._combined_worker = object()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        settings_window._alarm_controller,
+        "on_metrics",
+        lambda metrics: events.append(("alarm", metrics)),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_feed_baseline_collectors",
+        lambda metrics: events.append(("baseline", metrics)),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_record_metrics",
+        lambda: events.append(("record", None)),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_emit_web_metrics",
+        lambda **_kwargs: events.append(("emit", None)),
+    )
+
+    settings_window._on_rppg_metrics(rppg_metrics)
+    assert settings_window._latest_rppg_metrics is rppg_metrics
+    assert events == [("record", None), ("emit", None)]
+
+    events.clear()
+    settings_window._on_fatigue_metrics(fatigue_metrics)
+    assert settings_window._latest_fatigue_metrics is fatigue_metrics
+    assert events == [
+        ("alarm", fatigue_metrics),
+        ("baseline", fatigue_metrics),
+        ("record", None),
+        ("emit", None),
+    ]
+
+    events.clear()
+    settings_window._on_fused_score(fused_score)
+    assert settings_window._latest_fused_score is fused_score
+    assert events == [("record", None), ("emit", None)]
 
 
 @pytest.mark.parametrize(

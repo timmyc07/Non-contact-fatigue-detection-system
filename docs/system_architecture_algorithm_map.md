@@ -18,6 +18,7 @@
 - Web LAN 存取偏好由 Qt-free web preference state 保存；engine mode 不建立 QAction 假元件。設定讀寫、desktop state、bind host 與 URL 投影直接讀取該狀態；Web server thread、shared token 與非阻塞 restart 仍留在 Qt adapter，預設僅綁定 localhost。
 - engine mode 的 runtime 訊息直接送入 Python logger，不建立 QTextEdit 日誌假元件；rich-text console 與 status bar 只存在於非 production legacy Qt 路徑。
 - engine mode 的全域快捷鍵使用 sequence/callback binding，不建立 QAction 假元件；Windows 註冊與 native event dispatch 仍由 Qt adapter 執行，legacy 選單捷徑仍使用真實 QAction。engine mode 不再提供假的 status bar sink。
+- engine mode 不建立監測頁 `_mon_*` label、progress bar、sparkline 或 legacy REC pill timer；rPPG、行為與融合 callback 仍依原順序更新 `_latest_*` 快照、觸發警報／基線採集／記錄並推播 Web metrics，監測視覺只由 Flutter 消費同一份 metrics payload。
 
 ## 整體資料流
 

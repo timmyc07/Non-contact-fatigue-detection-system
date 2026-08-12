@@ -1249,10 +1249,12 @@ class MainWindow(QMainWindow):
         self._belt_ui_timer = QTimer(self)
         self._belt_ui_timer.setInterval(1000)
         self._belt_ui_timer.timeout.connect(self._tick_belt_calibration)
-        # 純 UI 顯示用：REC 錄影指示 pill 的 elapsed 計時（1s，僅在錄製中運行）。
-        self._rec_ui_timer = QTimer(self)
-        self._rec_ui_timer.setInterval(1000)
-        self._rec_ui_timer.timeout.connect(self._update_rec_pill)
+        # 純 legacy UI 顯示用：REC pill 的 elapsed 計時；engine mode 不建立。
+        self._rec_ui_timer: QTimer | None = None
+        if not self._engine_mode:
+            self._rec_ui_timer = QTimer(self)
+            self._rec_ui_timer.setInterval(1000)
+            self._rec_ui_timer.timeout.connect(self._update_rec_pill)
         # 自動採集：一鍵串接既有「開始」/「開始記錄」/「心跳帶真值校準」觸發點，
         # 不重寫任何 worker 啟停或記錄/校準邏輯本身（見 _on_auto_capture_clicked）。
         self._auto_capture_timer: QTimer | None = None
@@ -1298,7 +1300,6 @@ class MainWindow(QMainWindow):
 
     def _install_headless_controls(self) -> None:
         """Install state-only controls so desktop commands keep their contracts."""
-        self._mon_contrib_bars: dict[str, Any] = {}
         self._layout_seg_buttons: dict[str, Any] = {}
         self._theme_seg_buttons: dict[str, Any] = {}
 
@@ -1322,18 +1323,12 @@ class MainWindow(QMainWindow):
             "_lbl_camera", "_lbl_codec", "_lbl_dev_belt", "_lbl_dev_cam",
             "_lbl_dev_mp", "_lbl_face", "_lbl_fps", "_lbl_opacity", "_lbl_pipeline",
             "_lbl_preview_telemetry", "_lbl_profile_status", "_lbl_record",
-            "_mon_blink", "_mon_bpm",
-            "_mon_bpm_delta", "_mon_ear", "_mon_expr", "_mon_fused_level",
-            "_mon_fused_score", "_mon_gaze", "_mon_head", "_mon_hrv_conf", "_mon_lfhf",
-            "_mon_perclos", "_mon_rec_pill", "_mon_rmssd", "_mon_score_bar",
-            "_mon_score_big", "_mon_sdnn", "_mon_sqi", "_mon_trend", "_mon_warmup",
             "_tag_mesh", "_tag_rppg",
         )
         for name in control_names:
             self.__dict__[name] = _HeadlessControl()
         self._belt_bpm_spark = _HeadlessControl()
         self._belt_calib_bar = _HeadlessControl()
-        self._mon_wave = _HeadlessControl()
         self._brand_dot = _HeadlessControl()
         self._belt_banner_dot = _HeadlessControl()
 
@@ -3011,6 +3006,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_monitor_metrics(self) -> None:
         """把最新一筆 rPPG / 疲勞 / 融合快照渲染到監測頁卡片（唯讀，不改任何數值）。"""
+        if self._engine_mode:
+            return
         if not hasattr(self, "_mon_fused_level"):
             return
         r = self._latest_rppg_metrics
@@ -3121,6 +3118,8 @@ class MainWindow(QMainWindow):
 
     def _update_bpm_delta(self, rppg_bpm: float) -> None:
         """rPPG vs 心跳帶真值差值（Δ）：僅心跳帶連線且雙方 BPM 有效時顯示，否則隱藏。"""
+        if self._engine_mode:
+            return
         if not hasattr(self, "_mon_bpm_delta"):
             return
         belt_bpm = 0.0
@@ -3143,6 +3142,8 @@ class MainWindow(QMainWindow):
 
     def _update_rec_pill(self) -> None:
         """REC 錄影指示 pill：錄製中顯示 ● REC mm:ss（elapsed 來自 _recording_started_at）。"""
+        if self._engine_mode:
+            return
         if not hasattr(self, "_mon_rec_pill"):
             return
         if self._recording and self._recording_started_at is not None:
@@ -4523,8 +4524,9 @@ class MainWindow(QMainWindow):
         self._recording_db_path = db_path
         self._recording_started_at = time.time()
         self._recording_count = 0
-        self._rec_ui_timer.start()
-        self._update_rec_pill()
+        if self._rec_ui_timer is not None:
+            self._rec_ui_timer.start()
+            self._update_rec_pill()
 
         self._video_queue = queue.Queue(maxsize=8)
         video_path = rec_dir / f"video_{stamp}.mp4"
@@ -4549,7 +4551,8 @@ class MainWindow(QMainWindow):
 
     def _stop_recording(self) -> bool:
         self._engine_controller.stop_recording()
-        self._rec_ui_timer.stop()
+        if self._rec_ui_timer is not None:
+            self._rec_ui_timer.stop()
         if hasattr(self, "_mon_rec_pill"):
             self._mon_rec_pill.setVisible(False)
         if self._metrics_recorder is not None:

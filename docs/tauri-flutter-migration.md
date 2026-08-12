@@ -86,6 +86,10 @@ Engine-mode global hotkeys now use sequence-and-callback bindings instead of
 QAction-shaped stand-ins. Windows registration/native-event dispatch remains a
 `MainWindow` adapter responsibility, while legacy menu shortcuts still use real
 QActions. Engine mode also no longer overrides `statusBar()` with a fake sink.
+Engine mode no longer creates hidden monitor labels, progress bars, sparklines,
+or the legacy REC-pill timer.
+The rPPG, behavior, and fusion callbacks retain their snapshot, alarm, baseline,
+recording, and Web-metrics side effects; Flutter renders the shared metrics payload.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is part of the same state model as a platform-neutral
 physical-pixel `{x, y, width, height}` object. The shell applies geometry when

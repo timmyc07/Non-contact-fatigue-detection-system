@@ -120,6 +120,9 @@ engine mode 的 runtime 訊息直接寫入 Python logger，不建立 QTextEdit �
 QTextEdit 與 status bar 僅保留在非 production Qt 路徑。
 engine mode 的全域快捷鍵以 `sequence + callback` binding 註冊與分派，不建立 QAction 假元件；
 Windows `RegisterHotKey`、`nativeEvent` 與 legacy 選單 QAction 仍留在 `MainWindow` adapter。
+engine mode 不建立監測頁 `_mon_*` label、bar 或 sparkline 假元件；worker callback 只更新
+`_latest_*` 快照並維持警報、記錄與 Web metrics side effect，且不建立 legacy REC pill timer；
+監測視覺完全由 Flutter 呈現。
 
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。
