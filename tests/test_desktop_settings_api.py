@@ -172,6 +172,25 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_lbl_belt_stale",
         "_lbl_belt_status",
         "_lbl_dev_belt",
+        "_brand_dot",
+        "_btn_bench",
+        "_btn_record",
+        "_btn_record_baseline",
+        "_btn_start",
+        "_lbl_bench",
+        "_lbl_camera",
+        "_lbl_codec",
+        "_lbl_dev_cam",
+        "_lbl_dev_mp",
+        "_lbl_face",
+        "_lbl_fps",
+        "_lbl_opacity",
+        "_lbl_pipeline",
+        "_lbl_preview_telemetry",
+        "_lbl_profile_status",
+        "_lbl_record",
+        "_tag_mesh",
+        "_tag_rppg",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
@@ -1080,6 +1099,7 @@ def test_legacy_hotkeys_update_real_actions_and_dispatch(
         before = list(calls)
         settings_window._on_global_hotkey(hotkey_id)
         assert calls == [*before, name]
+    settings_window._engine_mode = True
 
 
 def test_headless_replay_preview_and_queue_are_engine_safe(
@@ -1169,6 +1189,34 @@ def test_engine_belt_tick_keeps_calibration_and_coordinator_side_effects(
     _, bpm, contact_ok, fresh, observed_metrics = calibrator.observations[0]
     assert (bpm, contact_ok, fresh, observed_metrics) == (72.0, True, True, metrics)
     assert coordinator_ticks == [calibrator, calibrator]
+
+
+def test_engine_runtime_callbacks_do_not_require_legacy_status_controls(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    emitted: list[bool] = []
+    monkeypatch.setattr(
+        settings_window,
+        "_emit_web_metrics",
+        lambda *args, **kwargs: emitted.append(bool(kwargs.get("force", False))),
+    )
+
+    settings_window._on_combined_status("ready")
+    settings_window._on_face_detected(True)
+    settings_window._on_rppg_status("running")
+    settings_window._on_fatigue_face_detected(False)
+    settings_window._on_fatigue_status("running")
+    settings_window._on_camera_info("MJPG", 1280, 720, 30.0)
+    settings_window._on_fps(29.5)
+    settings_window._set_profile_status("個人基線：測試")
+
+    assert settings_window._last_camera_info == {
+        "codec": "MJPG",
+        "width": 1280,
+        "height": 720,
+    }
+    assert settings_window._last_fps == 29.5
+    assert emitted == [True, False]
 
 
 def test_engine_metric_callbacks_keep_non_visual_side_effects(

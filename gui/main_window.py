@@ -160,153 +160,6 @@ class _GlobalHotkeyBinding:
     callback: Callable[[], None]
 
 
-class _HeadlessControl:
-    """Small state-only adapter for engine mode; it has no visual Qt object."""
-
-    def __init__(
-        self,
-        *,
-        text: str = "",
-        checked: bool = False,
-        value: int | float = 0,
-    ) -> None:
-        self._text = text
-        self._checked = checked
-        self._value = value
-        self._enabled = True
-        self._visible = True
-        self._items: list[tuple[str, object]] = []
-        self._index = -1
-
-    def setChecked(self, value: bool) -> None:
-        self._checked = bool(value)
-
-    def isChecked(self) -> bool:
-        return self._checked
-
-    def setValue(self, value: int | float) -> None:
-        self._value = value
-
-    def value(self) -> int | float:
-        return self._value
-
-    def setText(self, value: object) -> None:
-        self._text = str(value)
-
-    def showMessage(self, value: object, _timeout: int = 0) -> None:
-        self._text = str(value)
-
-    def text(self) -> str:
-        return self._text
-
-    def setCurrentText(self, value: object) -> None:
-        wanted = str(value)
-        for index, (text, _data) in enumerate(self._items):
-            if text == wanted:
-                self._index = index
-                break
-        self._text = wanted
-
-    def currentText(self) -> str:
-        if 0 <= self._index < len(self._items):
-            return self._items[self._index][0]
-        return self._text
-
-    def setCurrentIndex(self, index: int) -> None:
-        self._index = int(index)
-        if 0 <= self._index < len(self._items):
-            self._text = self._items[self._index][0]
-
-    def currentIndex(self) -> int:
-        return self._index
-
-    def currentData(self) -> object:
-        if 0 <= self._index < len(self._items):
-            return self._items[self._index][1]
-        return None
-
-    def addItem(self, text: object, data: object = None) -> None:
-        self._items.append((str(text), data))
-        if self._index < 0:
-            self._index = 0
-            self._text = str(text)
-
-    def addItems(self, values: list[object] | tuple[object, ...]) -> None:
-        for value in values:
-            self.addItem(value)
-
-    def clear(self) -> None:
-        self._items.clear()
-        self._index = -1
-        self._text = ""
-
-    def count(self) -> int:
-        return len(self._items)
-
-    def itemData(self, index: int) -> object:
-        return self._items[index][1]
-
-    def itemText(self, index: int) -> str:
-        return self._items[index][0]
-
-    def setRange(self, minimum: int | float, maximum: int | float) -> None:
-        self._value = max(minimum, min(maximum, self._value))
-
-    def setEnabled(self, value: bool) -> None:
-        self._enabled = bool(value)
-
-    def isEnabled(self) -> bool:
-        return self._enabled
-
-    def setVisible(self, value: bool) -> None:
-        self._visible = bool(value)
-
-    def isVisible(self) -> bool:
-        return self._visible
-
-    def blockSignals(self, _blocked: bool) -> None:
-        return
-
-    def setProperty(self, _name: str, _value: object) -> None:
-        return
-
-    def setStyleSheet(self, _value: str) -> None:
-        return
-
-    def append(self, _value: str) -> None:
-        return
-
-    def clearContents(self) -> None:
-        return
-
-    def setPixmap(self, _value: object) -> None:
-        return
-
-    def contentsRect(self) -> QRect:
-        return QRect(0, 0, 640, 360)
-
-    def set_colors(self, _primary: object, _secondary: object) -> None:
-        return
-
-    def set_grid_color(self, _color: object) -> None:
-        return
-
-    def add_value(self, _value: object) -> None:
-        return
-
-    def set_value(self, _value: object) -> None:
-        return
-
-    def set_data(self, _data: object) -> None:
-        return
-
-    def set_fraction(self, _fraction: object) -> None:
-        return
-
-    def size(self) -> QSize:
-        return QSize(640, 360)
-
-
 # ── 視覺主題 token（僅影響 QSS 外觀，絕不影響任何 signal/slot 或數值行為） ──
 # 轉譯自 claude.ai/design 設計稿（Industry design system）：深色為預設，另備淺色。
 # 語意色（ok/warn/bad、綜合疲勞等級動態色）由資料驅動，不放進 palette。
@@ -1275,7 +1128,6 @@ class MainWindow(QMainWindow):
         self._replay_queue_table = None
 
         if self._engine_mode:
-            self._install_headless_controls()
             self._start_camera_scan()
         else:
             self._build_menu()
@@ -1298,25 +1150,15 @@ class MainWindow(QMainWindow):
         if not self._engine_mode:
             self._apply_native_titlebar_theme()
 
-    def _install_headless_controls(self) -> None:
-        """Install state-only controls so desktop commands keep their contracts."""
-        self._layout_seg_buttons: dict[str, Any] = {}
-        self._theme_seg_buttons: dict[str, Any] = {}
+    def _set_legacy_text(self, name: str, text: object) -> None:
+        """Update a real Qt label/button without creating an engine-mode mirror."""
+        if not self._engine_mode:
+            getattr(self, name).setText(str(text))
 
-        # Explicit state-only fields used by engine callbacks.  These are not
-        # visual widgets; keeping the names explicit makes missing runtime
-        # contracts fail loudly instead of being hidden by a dynamic adapter.
-        control_names = (
-            "_btn_bench", "_btn_record", "_btn_record_baseline",
-            "_btn_start",
-            "_lbl_bench", "_lbl_camera", "_lbl_codec", "_lbl_dev_cam",
-            "_lbl_dev_mp", "_lbl_face", "_lbl_fps", "_lbl_opacity", "_lbl_pipeline",
-            "_lbl_preview_telemetry", "_lbl_profile_status", "_lbl_record",
-            "_tag_mesh", "_tag_rppg",
-        )
-        for name in control_names:
-            self.__dict__[name] = _HeadlessControl()
-        self._brand_dot = _HeadlessControl()
+    def _set_legacy_enabled(self, name: str, enabled: bool) -> None:
+        """Update a real Qt control without creating an engine-mode mirror."""
+        if not self._engine_mode:
+            getattr(self, name).setEnabled(enabled)
 
     def _toggle_overlay_preference(self, field: str) -> None:
         state = self._overlay_state.snapshot()
@@ -4693,7 +4535,9 @@ class MainWindow(QMainWindow):
         self._metrics_recorder.record(payload)
         self._recording_count += 1
         if self._recording_count % 60 == 0:
-            self._lbl_record.setText(f"記錄狀態：進行中（{self._recording_count} 筆）")
+            self._set_legacy_text(
+                "_lbl_record", f"記錄狀態：進行中（{self._recording_count} 筆）"
+            )
 
     def _on_video_recording_started(self, path: str) -> None:
         try:
@@ -4710,8 +4554,8 @@ class MainWindow(QMainWindow):
     def _on_video_recording_failed(self, msg: str) -> None:
         self._append_log(f"✗ 影片錄製失敗：{msg}")
         self._recording = False
-        self._btn_record.setText("開始記錄")
-        self._lbl_record.setText("記錄狀態：未啟動")
+        self._set_legacy_text("_btn_record", "開始記錄")
+        self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
         self._stop_recording()
         self._notify_user("影片錄製", msg)
 
@@ -4852,11 +4696,11 @@ class MainWindow(QMainWindow):
                     self._lbl_replay_preview.setText("影片預覽載入中")
                 else:
                     self._lbl_replay_preview.setText("平行驗證中：預覽停用，以提升批次速度")
-            self._lbl_pipeline.setText(f"管線：影片回測 {mode_label}")
-            self._lbl_camera.setText("影片：準備中")
-            self._lbl_face.setText("臉部：統計中")
-            self._lbl_fps.setText("FPS：—")
-            self._lbl_codec.setText("解析度：—")
+            self._set_legacy_text("_lbl_pipeline", f"管線：影片回測 {mode_label}")
+            self._set_legacy_text("_lbl_camera", "影片：準備中")
+            self._set_legacy_text("_lbl_face", "臉部：統計中")
+            self._set_legacy_text("_lbl_fps", "FPS：—")
+            self._set_legacy_text("_lbl_codec", "解析度：—")
             self._append_log(
                 f"[影片回測] 開始{mode_label}：{replay_state.dataset_dir} "
                 f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
@@ -4884,7 +4728,7 @@ class MainWindow(QMainWindow):
         if not self._engine_mode:
             self._btn_replay_stop.setEnabled(False)
             self._btn_replay_stop.setText("停止中")
-        self._lbl_pipeline.setText("管線：影片回測 停止中")
+        self._set_legacy_text("_lbl_pipeline", "管線：影片回測 停止中")
         self._append_log("[影片回測] 已送出停止請求，等待目前 frame 安全收尾")
 
     def _set_replay_controls_running(self, running: bool) -> None:
@@ -5015,6 +4859,8 @@ class MainWindow(QMainWindow):
         )
 
     def _update_replay_status_strip(self, summary: ReplayVideoSummary, *, prefix: str) -> None:
+        if self._engine_mode:
+            return
         self._lbl_pipeline.setText(f"管線：{prefix}")
         self._lbl_camera.setText(f"影片：S{summary.subject} / L{summary.label} {summary.label_name}")
         if summary.frames > 0:
@@ -5080,7 +4926,7 @@ class MainWindow(QMainWindow):
         if result.summaries:
             self._update_replay_status_strip(result.summaries[-1], prefix=f"影片回測 {state}")
         else:
-            self._lbl_pipeline.setText(f"管線：影片回測 {state}")
+            self._set_legacy_text("_lbl_pipeline", f"管線：影片回測 {state}")
         self._append_log(
             f"[影片回測] {state}，完成 {result.videos_done} 支，失敗 {result.videos_failed} 支，"
             f"摘要：{result.summary_csv}"
@@ -5095,7 +4941,7 @@ class MainWindow(QMainWindow):
                 f"處理清單：批次失敗；已完成 {replay_state.done_count}/{total_text}"
             ),
         )
-        self._lbl_pipeline.setText("管線：影片回測 失敗")
+        self._set_legacy_text("_lbl_pipeline", "管線：影片回測 失敗")
         self._append_log(f"[影片回測] 批次失敗：{msg}")
         self._notify_user("影片回測", msg)
 
@@ -5149,8 +4995,8 @@ class MainWindow(QMainWindow):
             self._append_log("⚠ 請先選擇攝影機再開始。")
             self._pipeline_running = False
             self._engine_controller.stop_pipeline()
-            self._btn_start.setText("開始")
-            self._lbl_pipeline.setText("管線：停止")
+            self._set_legacy_text("_btn_start", "開始")
+            self._set_legacy_text("_lbl_pipeline", "管線：停止")
             return
 
         spec = self._engine_controller.camera_start_spec()
@@ -5249,10 +5095,10 @@ class MainWindow(QMainWindow):
             self._engine_controller.finish_pipeline_cleanup()
         else:
             self._engine_controller.mark_pipeline_cleanup_pending()
-        self._btn_start.setText("開始")
-        self._lbl_pipeline.setText("管線：停止")
-        self._btn_record.setText("開始記錄")
-        self._lbl_record.setText("記錄狀態：未啟動")
+        self._set_legacy_text("_btn_start", "開始")
+        self._set_legacy_text("_lbl_pipeline", "管線：停止")
+        self._set_legacy_text("_btn_record", "開始記錄")
+        self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
 
     def _on_adapter_thread_finished(self, kind: str, thread: QThread) -> None:
         """Release late-finishing adapter ownership without touching a newer session."""
@@ -5951,7 +5797,7 @@ class MainWindow(QMainWindow):
         self._emit_web_metrics()
 
     def _on_combined_status(self, msg: str) -> None:
-        self._lbl_pipeline.setText(f"引擎：{msg}")
+        self._set_legacy_text("_lbl_pipeline", f"引擎：{msg}")
 
     def _on_combined_failed(self, msg: str) -> None:
         self._append_log(f"✗ 合併引擎錯誤：{msg}")
@@ -6020,7 +5866,7 @@ class MainWindow(QMainWindow):
         self._update_frame_routing()
         if self._preview_overlay is not None:
             self._preview_overlay.show_rppg_panel(False)
-        self._lbl_face.setText("臉部：—")
+        self._set_legacy_text("_lbl_face", "臉部：—")
         return True
 
     def _on_stress_toggled(self, checked: bool) -> None:
@@ -6057,10 +5903,12 @@ class MainWindow(QMainWindow):
         self._emit_web_metrics()
 
     def _on_face_detected(self, detected: bool) -> None:
-        self._lbl_face.setText("臉部：偵測中 ✓" if detected else "臉部：未偵測到")
+        self._set_legacy_text(
+            "_lbl_face", "臉部：偵測中 ✓" if detected else "臉部：未偵測到"
+        )
 
     def _on_rppg_status(self, msg: str) -> None:
-        self._lbl_pipeline.setText(f"rPPG：{msg}")
+        self._set_legacy_text("_lbl_pipeline", f"rPPG：{msg}")
 
     def _on_rppg_failed(self, msg: str) -> None:
         self._append_log(f"✗ rPPG 錯誤：{msg}")
@@ -6207,7 +6055,7 @@ class MainWindow(QMainWindow):
 
     def _finalize_manual_baseline(self, collector: PersonalBaselineCollector) -> None:
         prof = collector.finalize(source="manual")
-        self._btn_record_baseline.setEnabled(True)
+        self._set_legacy_enabled("_btn_record_baseline", True)
         if not prof.valid:
             self._set_profile_status("個人基線：樣本不足，請保持臉部在畫面內重試")
             self._append_log("[基線] 手動記錄樣本不足，未儲存")
@@ -6233,16 +6081,18 @@ class MainWindow(QMainWindow):
             return
         self._manual_baseline_collector = PersonalBaselineCollector(
             window_sec=60.0, now_iso=time.strftime("%Y-%m-%dT%H:%M:%S"))
-        self._btn_record_baseline.setEnabled(False)
+        self._set_legacy_enabled("_btn_record_baseline", False)
         self._set_profile_status("記錄清醒基線中… 0%")
         self._append_log("[基線] 開始手動記錄清醒基線（約 60 秒，請保持清醒自然狀態）")
 
     def _on_fatigue_face_detected(self, detected: bool) -> None:
         if self._rppg_worker is None:
-            self._lbl_face.setText("臉部：偵測中 ✓" if detected else "臉部：未偵測到")
+            self._set_legacy_text(
+                "_lbl_face", "臉部：偵測中 ✓" if detected else "臉部：未偵測到"
+            )
 
     def _on_fatigue_status(self, msg: str) -> None:
-        self._lbl_pipeline.setText(f"警覺：{msg}")
+        self._set_legacy_text("_lbl_pipeline", f"警覺：{msg}")
 
     def _on_fatigue_failed(self, msg: str) -> None:
         self._append_log(f"✗ 行為警覺錯誤：{msg}")
@@ -6257,8 +6107,8 @@ class MainWindow(QMainWindow):
     def _on_camera_info(self, codec: str, w: int, h: int, fps: float) -> None:
         """Called once after camera opens — shows actual driver-reported settings."""
         fps_str = f"{fps:.0f}" if fps > 0 else "—"
-        self._lbl_codec.setText(f"編碼：{codec}")
-        self._lbl_fps.setText(f"FPS：{fps_str}")
+        self._set_legacy_text("_lbl_codec", f"編碼：{codec}")
+        self._set_legacy_text("_lbl_fps", f"FPS：{fps_str}")
         self._last_camera_info = {"codec": codec, "width": w, "height": h}
         cam_text = self._engine_controller.selected_camera_label()
         self._append_log(
@@ -6286,7 +6136,7 @@ class MainWindow(QMainWindow):
     def _on_fps(self, fps: float) -> None:
         if self._preview_overlay is not None:
             self._preview_overlay.update_fps(fps)
-        self._lbl_fps.setText(f"FPS：{fps:.1f}")
+        self._set_legacy_text("_lbl_fps", f"FPS：{fps:.1f}")
         self._last_fps = float(fps)
         self._update_preview_telemetry()
         self._emit_web_metrics()
@@ -6304,8 +6154,8 @@ class MainWindow(QMainWindow):
             or self._video_worker is not None
         ):
             self._recording = False
-            self._btn_record.setText("開始記錄")
-            self._lbl_record.setText("記錄狀態：未啟動")
+            self._set_legacy_text("_btn_record", "開始記錄")
+            self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
             self._stop_recording()
             self._append_log("○ 相機中斷，已一併結束記錄。")
         self._set_record_source(None)
@@ -6322,9 +6172,9 @@ class MainWindow(QMainWindow):
         self._last_fps = 0.0
         self._last_camera_info = {"codec": "", "width": 0, "height": 0}
         self._reset_monitor_view()
-        self._btn_start.setText("開始")
-        self._lbl_pipeline.setText("管線：停止")
-        self._lbl_fps.setText("FPS：—")
+        self._set_legacy_text("_btn_start", "開始")
+        self._set_legacy_text("_lbl_pipeline", "管線：停止")
+        self._set_legacy_text("_lbl_fps", "FPS：—")
         self._sync_overlay_visibility()
         self._update_device_status()
         self._emit_web_metrics(force=True)
@@ -6351,16 +6201,16 @@ class MainWindow(QMainWindow):
             self._latest_fatigue_metrics = None
             self._latest_fused_score = None
             self._reset_monitor_view()
-            self._btn_start.setText("停止")
-            self._lbl_pipeline.setText("管線：運作中")
-            self._lbl_fps.setText("FPS：—")
-            self._lbl_face.setText("臉部：—")
+            self._set_legacy_text("_btn_start", "停止")
+            self._set_legacy_text("_lbl_pipeline", "管線：運作中")
+            self._set_legacy_text("_lbl_fps", "FPS：—")
+            self._set_legacy_text("_lbl_face", "臉部：—")
             try:
                 self._engine_controller.start_pipeline()
             except (ValueError, RuntimeError):
                 self._pipeline_running = False
-                self._btn_start.setText("開始")
-                self._lbl_pipeline.setText("管線：停止")
+                self._set_legacy_text("_btn_start", "開始")
+                self._set_legacy_text("_lbl_pipeline", "管線：停止")
                 self._engine_controller.stop_pipeline()
                 self._sync_overlay_visibility()
                 self._update_preview_telemetry()
@@ -6381,8 +6231,8 @@ class MainWindow(QMainWindow):
                     logger.warning("管線啟動失敗後清理資源失敗：%s", cleanup_exc)
                 self._engine_controller.stop_pipeline()
                 self._pipeline_running = False
-                self._btn_start.setText("開始")
-                self._lbl_pipeline.setText("管線：停止")
+                self._set_legacy_text("_btn_start", "開始")
+                self._set_legacy_text("_lbl_pipeline", "管線：停止")
                 self._notify_user("管線", f"無法啟動分析管線：{exc}")
                 self._sync_overlay_visibility()
                 self._update_device_status()
@@ -6406,10 +6256,10 @@ class MainWindow(QMainWindow):
             self._last_fps = 0.0
             self._last_camera_info = {"codec": "", "width": 0, "height": 0}
             self._reset_monitor_view()
-            self._btn_start.setText("開始")
-            self._lbl_pipeline.setText("管線：停止")
-            self._lbl_fps.setText("FPS：—")
-            self._lbl_codec.setText("編碼：—")
+            self._set_legacy_text("_btn_start", "開始")
+            self._set_legacy_text("_lbl_pipeline", "管線：停止")
+            self._set_legacy_text("_lbl_fps", "FPS：—")
+            self._set_legacy_text("_lbl_codec", "編碼：—")
             if self._belt_calibrator is not None:
                 self._stop_belt_calibration()   # 停止前先存本次 session 校準版本
             self._stop_camera_worker()
@@ -6419,15 +6269,15 @@ class MainWindow(QMainWindow):
             self._append_log("■ 管線停止。")
             if self._recording:
                 self._recording = False
-                self._btn_record.setText("開始記錄")
-                self._lbl_record.setText("記錄狀態：未啟動")
+                self._set_legacy_text("_btn_record", "開始記錄")
+                self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
                 self._stop_recording()
                 self._append_log("○ 管線停止，已一併結束記錄。")
             self._emit_web_metrics(force=True)
             if self._benchmark_active:
                 self._benchmark_active = False
-                self._btn_bench.setText("DL 基準測試（120s）")
-                self._lbl_bench.setText("")
+                self._set_legacy_text("_btn_bench", "DL 基準測試（120s）")
+                self._set_legacy_text("_lbl_bench", "")
                 self._append_log("基準測試已隨管線停止。")
 
     def _toggle_recording(self) -> None:
@@ -6449,8 +6299,8 @@ class MainWindow(QMainWindow):
                     logger.warning("記錄啟動失敗後清理資源失敗：%s", cleanup_exc)
                 self._notify_user("記錄", f"無法啟動記錄：{exc}")
                 return
-            self._btn_record.setText("停止記錄")
-            self._lbl_record.setText("記錄狀態：進行中")
+            self._set_legacy_text("_btn_record", "停止記錄")
+            self._set_legacy_text("_lbl_record", "記錄狀態：進行中")
             if self._recording_db_path is not None:
                 self._append_log(f"● 記錄開始 → {self._recording_db_path}")
             else:
@@ -6461,8 +6311,8 @@ class MainWindow(QMainWindow):
             self._engine_controller.stop_recording()
             self._cancel_pending_auto_capture_timer()
             self._rollback_auto_capture_toggles()
-            self._btn_record.setText("開始記錄")
-            self._lbl_record.setText("記錄狀態：未啟動")
+            self._set_legacy_text("_btn_record", "開始記錄")
+            self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
             if not self._stop_recording():
                 self._engine_controller.mark_pipeline_cleanup_pending()
                 self._fail_closed_pipeline_adapters()
@@ -6637,12 +6487,12 @@ class MainWindow(QMainWindow):
             return
         self._benchmark_active = not self._benchmark_active
         if self._benchmark_active:
-            self._btn_bench.setText("停止基準測試")
-            self._lbl_bench.setText("錄製中 0s／120s（示範）")
+            self._set_legacy_text("_btn_bench", "停止基準測試")
+            self._set_legacy_text("_lbl_bench", "錄製中 0s／120s（示範）")
             self._append_log("⏱ DL 基準測試開始（示範，無實際採樣）")
         else:
-            self._btn_bench.setText("DL 基準測試（120s）")
-            self._lbl_bench.setText("")
+            self._set_legacy_text("_btn_bench", "DL 基準測試（120s）")
+            self._set_legacy_text("_lbl_bench", "")
             self._append_log("基準測試已停止（示範）。")
 
     def _on_camera_combo_changed(self, _index: int) -> None:

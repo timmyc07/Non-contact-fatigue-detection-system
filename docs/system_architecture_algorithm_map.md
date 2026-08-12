@@ -20,6 +20,7 @@
 - engine mode 的全域快捷鍵使用 sequence/callback binding，不建立 QAction 假元件；Windows 註冊與 native event dispatch 仍由 Qt adapter 執行，legacy 選單捷徑仍使用真實 QAction。engine mode 不再提供假的 status bar sink。
 - engine mode 不建立監測頁 `_mon_*` label、progress bar、sparkline 或 legacy REC pill timer；rPPG、行為與融合 callback 仍依原順序更新 `_latest_*` 快照、觸發警報／基線採集／記錄並推播 Web metrics，監測視覺只由 Flutter 消費同一份 metrics payload。
 - engine mode 不建立心跳帶 label、banner、device-status、sparkline 或 calibration bar 假元件；Flutter 直接使用 Web metrics 的 BLE、HRV 與校準欄位。每秒 belt timer 仍驅動新 rPPG／心跳帶配對觀測與 ROI 參數協調器，並非 presentation timer，不得因移除 Qt 面板而停用。
+- engine mode 不建立通用 `_HeadlessControl`，也不保留 pipeline、recording、camera、profile、benchmark 的 button／label／tag 假投影。共用 lifecycle callback 仍更新 controller 快照、錄影資源、相機 telemetry、基線 collector、通知與 Web metrics；只有 legacy Qt 路徑接收文字與按鈕狀態。
 
 ## 整體資料流
 

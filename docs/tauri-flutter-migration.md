@@ -94,6 +94,11 @@ Engine mode also omits hidden belt labels, banners, device status, sparklines, a
 calibration bars. The one-second belt timer remains active because it drives new
 rPPG/belt calibration observations and the ROI coordinator; Flutter renders the
 BLE, HRV, and calibration fields already carried by Web metrics.
+Engine mode no longer creates a generic `_HeadlessControl` or fake pipeline,
+recording, camera, profile, or benchmark buttons, labels, and tags. Shared
+lifecycle callbacks keep controller snapshots, recording resources, camera
+telemetry, baseline collection, notifications, and Web metrics intact; Qt text
+and button updates are restricted to the non-production legacy path.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is part of the same state model as a platform-neutral
 physical-pixel `{x, y, width, height}` object. The shell applies geometry when
