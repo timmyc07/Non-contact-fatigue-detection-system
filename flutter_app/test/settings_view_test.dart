@@ -32,6 +32,40 @@ void main() {
     expect(opacityCalls.single.$2?['opacity'], greaterThan(55));
   });
 
+  testWidgets('analysis switches can select raw camera mode', (tester) async {
+    final calls = <(String, Map<String, dynamic>?)>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 900,
+            height: 900,
+            child: SettingsView(
+              state: const <String, dynamic>{
+                'behavior_enabled': false,
+                'rppg_enabled': false,
+              },
+              busy: false,
+              onCommand: (command, [args]) async => calls.add((command, args)),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final switches = tester.widgetList<SwitchListTile>(
+      find.byType(SwitchListTile),
+    );
+    expect(switches.length, greaterThanOrEqualTo(2));
+    expect(switches.elementAt(0).onChanged, isNotNull);
+    expect(switches.elementAt(1).onChanged, isNotNull);
+
+    await tester.tap(find.text('行為警覺分析'));
+    await tester.pump();
+    expect(calls.single.$1, 'analysis.configure');
+    expect(calls.single.$2?['behavior_enabled'], isTrue);
+  });
+
   testWidgets('hotkey dialog submits the complete replacement payload',
       (tester) async {
     final calls = <(String, Map<String, dynamic>?)>[];

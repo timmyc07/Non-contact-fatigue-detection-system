@@ -228,7 +228,7 @@ def _fake_main_window(**overrides) -> SimpleNamespace:
         _combined_worker=None,
         _rppg_worker=None,
         _belt_calibrator=None,
-        _belt_runtime=None,
+        _engine_controller=SimpleNamespace(belt_status=lambda: None),
         _rppg_calibration_store=None,
         _clear_candidate_roi_weights=lambda: None,
         _adopt_rppg_param_candidate=lambda: None,
@@ -343,7 +343,7 @@ def test_on_candidate_bpm_ready_skips_nan_samples():
     belt_status = SimpleNamespace(state="connected", bpm=70)
     fake = _fake_main_window(
         _rppg_param_coordinator=coord,
-        _belt_runtime=SimpleNamespace(belt_status=lambda: belt_status),
+        _engine_controller=SimpleNamespace(belt_status=lambda: belt_status),
     )
 
     MainWindow._on_candidate_bpm_ready(fake, 1.0, float("nan"), 71.0)
@@ -363,7 +363,7 @@ def test_on_candidate_bpm_ready_adopt_calls_adopt_helper(monkeypatch):
     adopt_calls = []
     fake = _fake_main_window(
         _rppg_param_coordinator=coord,
-        _belt_runtime=SimpleNamespace(belt_status=lambda: belt_status),
+        _engine_controller=SimpleNamespace(belt_status=lambda: belt_status),
         _adopt_rppg_param_candidate=lambda: adopt_calls.append(True),
     )
 
@@ -378,7 +378,7 @@ def test_on_candidate_bpm_ready_adopt_calls_adopt_helper(monkeypatch):
     adopt_calls2 = []
     fake2 = _fake_main_window(
         _rppg_param_coordinator=coord2,
-        _belt_runtime=SimpleNamespace(belt_status=lambda: belt_status),
+        _engine_controller=SimpleNamespace(belt_status=lambda: belt_status),
         _adopt_rppg_param_candidate=lambda: adopt_calls2.append(True),
     )
     for i in range(8):

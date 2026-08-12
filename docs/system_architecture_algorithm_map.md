@@ -1,6 +1,6 @@
 # 系統架構與演算法用途總覽
 
-更新日期：2026-06-16
+更新日期：2026-08-11
 
 本文件以「用途名稱」描述專案結構與資料流，不以實際程式檔名作為架構節點。需要回到程式時，請依「所屬區域」對照專案資料夾責任。
 
@@ -9,6 +9,7 @@
 - 「所屬區域」只標示資料夾或資源類型，避免把架構圖寫成檔名清單。
 - 本文件描述目前程式碼實作，不代表臨床醫療等級量測；rPPG 與疲勞分數仍需搭配資料集與真實裝置驗證。
 - 既有部分中文文件與註解有編碼損壞，本文件改以可讀程式邏輯、測試與設定檔為準。
+- 正式產品唯一可見主面板與 Overlay 為 Tauri v2 + Flutter Web；PySide6 `MainWindow` 僅保留隱藏的 engine runtime、Qt worker 與 adapter 責任，不是使用者操作入口。
 
 ## 整體資料流
 
@@ -21,7 +22,7 @@ flowchart TD
     D --> F[rPPG 生理訊號分析管線]
     E --> G[疲勞融合評分]
     F --> G
-    G --> H[浮動預覽與主控制台]
+    G --> H[Tauri v2 + Flutter Web 主面板與 Overlay]
     G --> I[即時告警判斷]
     G --> J[SQLite 指標記錄]
     H --> K[影片錄製]
@@ -35,9 +36,10 @@ flowchart TD
 
 | 架構用途名稱 | 所屬區域 | 主要責任 | 常見使用情境 |
 | --- | --- | --- | --- |
-| 桌面啟動與 Qt 環境守門 | 專案根目錄 | 設定 PySide6 plugin 路徑、檢查 Ubuntu Qt xcb runtime、建立主視窗 | 啟動桌面程式、處理 Linux GUI runtime 缺件 |
-| 主控制台與任務編排 | 桌面介面區 | 管理相機、分析 worker、overlay、錄製、Web server、UTA-RLDD 回放與熱鍵 | 使用者按下開始、停止、錄製、開啟 dashboard |
-| 浮動監看 Overlay | 桌面介面區 | 顯示即時影像、FPS、rPPG、疲勞分數、融合分數與簡易波形 | 操作員看即時狀態與警示 |
+| 桌面啟動與 Qt 環境守門 | 專案根目錄 | 設定隱藏 engine 的 PySide6 plugin 路徑、檢查 Ubuntu Qt xcb runtime、啟動 runtime adapter | Tauri 啟動背景 engine、處理 Linux runtime 缺件 |
+| 正式桌面主面板 | Flutter/Tauri 介面區 | 顯示狀態、相機與分析設定、錄製、校準、回放、通知與視覺化；透過 localhost API 控制 Python engine | 操作員唯一可見的開始、停止、錄製與設定入口 |
+| 正式浮動 Overlay | Flutter/Tauri 介面區 | 顯示即時影像、BPM、PERCLOS 與疲勞狀態；由 Tauri 建立透明獨立 WebView | 操作員看即時狀態與警示 |
+| 隱藏 engine runtime adapter | Python/PySide6 runtime 區 | 管理 Qt worker/thread、影像訊號、錄影 writer、Qt 音效與平台快捷鍵；不建立可見主面板 | 執行背景相機、分析、錄影、告警與校準工作 |
 | 相機裝置辨識策略 | 桌面介面區 | Windows 優先 DirectShow 名稱，Linux 優先 V4L2 與穩定裝置標籤，必要時 OpenCV probe | 相機下拉選單、跨平台攝影機相容 |
 | 影像擷取背景工作 | 桌面介面區 | OpenCV 讀取影格、套用解析度/FPS、估算即時 FPS、輸出預覽與 BGR 影格 | 即時 camera feed、餵給分析與錄影 |
 | 最新影格佇列工具 | 桌面介面區 | 佇列滿時丟棄舊影格，只保留最新畫面 | 降低分析延遲，避免 worker 追處理過期影格 |
@@ -60,13 +62,13 @@ flowchart TD
 
 ## 即時執行流程
 
-1. 使用者從主控制台選擇相機、解析度、FPS、是否水平翻轉與要啟用的分析項目。
+1. 使用者從 Flutter/Tauri 主面板選擇相機、解析度、FPS、是否水平翻轉與要啟用的分析項目。
 2. 相機擷取工作啟動 OpenCV backend，持續讀取 BGR frame，並以 30 FPS 上限輸出 live preview 影格。
 3. 分析佇列採「保留最新」策略，讓分析 worker 不追趕舊 frame。
 4. 若 rPPG 與疲勞分析都啟用，系統使用單一臉部推論協調器；若只啟用其中一條，則啟用對應的單獨分析 worker。
 5. MediaPipe Face Landmarker 以 VIDEO 模式處理 frame timestamp，輸出臉部 landmarks、blendshape scores 與 facial transformation matrix。
 6. 行為疲勞管線與 rPPG 管線各自計算 metrics，融合評分器產生總分與分級。
-7. GUI overlay、告警控制、SQLite 記錄、WebSocket 推播與影片錄製各自消費同一批 metrics 或影像來源。
+7. Flutter/Tauri Overlay、告警控制、SQLite 記錄、WebSocket 推播與影片錄製各自消費同一批 metrics 或影像來源；Qt 在隱藏 runtime adapter 中執行 worker、thread、writer、告警與校準，並轉送資料。
 
 ## 主要演算法流程
 
@@ -234,7 +236,8 @@ UTA-RLDD 回放：
 | --- | --- | --- |
 | 相機列舉 | 優先 DirectShow 裝置名稱 | 優先 V4L2 與 `/dev/v4l/by-id` |
 | 相機開啟 | DirectShow、MSMF、FFMPEG、CAP_ANY fallback | V4L2、FFMPEG、CAP_ANY fallback |
-| GUI runtime | PySide6 | 需 Qt xcb 相關 runtime packages |
+| 可見 UI runtime | Tauri + Flutter Web + WebView2 | Tauri + Flutter Web + WebKitGTK |
+| 隱藏 engine runtime | PySide6（隱藏 adapter） | PySide6，需 Qt xcb 相關 runtime packages |
 | 可選依賴 | pygrabber 只在 Windows 使用 | pygrabber 不會執行 |
 
 MediaPipe 調校目前以 `stable_indoor` profile 為預設，另有 low light 與 high motion profile 可調整偵測信心、ROI 平滑與低光門檻。
@@ -253,7 +256,7 @@ MediaPipe 調校目前以 `stable_indoor` profile 為預設，另有 low light �
 - 融合評分在 rPPG 低品質時降權、在兩管線可用時使用 15/85 權重。
 - SQLite schema migration、Web playback、UTA-RLDD discovery/report、告警觸發邏輯。
 - Socket.IO dashboard contract 測試覆蓋連線初始狀態、`request_metrics` history/latest、latest 去重、callback 失敗容錯、Web preview JPEG 編碼與 `frame_update` 推播。
-- 2026-06-16 專案審視後，`npx pyright` 為 0 errors / 0 warnings，完整 `pytest` 紀錄為 `68 passed`。
+- 2026-08-12 lifecycle 收斂後，完整 `pytest -q` 紀錄為 `611 passed, 2 skipped`；2026-06-16 的 `npx pyright` 歷史紀錄為 0 errors / 0 warnings。
 
 建議修改 Python 邏輯後至少執行：
 

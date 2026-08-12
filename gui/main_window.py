@@ -66,6 +66,7 @@ from gui.alarm_config import (
     AlarmConfig,
 )
 from gui.alarm_player import FatigueAlarmController
+from gui.belt_runtime import BeltRuntime
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.combined_worker import CombinedWorker
 from gui.dialogs import HotkeyConfig, UserProfile
@@ -83,6 +84,7 @@ from gui.desktop_settings_contract import (
     parse_user_profile,
 )
 from gui.engine_controller import (
+    AnalysisLifecyclePorts,
     CAMERA_BACKENDS,
     CAMERA_FPS_OPTIONS,
     CAMERA_RESOLUTIONS,
@@ -92,7 +94,6 @@ from gui.engine_controller import (
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
-from gui.belt_runtime import BeltRuntime
 from gui.personal_profile import (
     PersonalBaselineCollector,
     PersonalProfileStore,
@@ -1184,7 +1185,7 @@ class MainWindow(QMainWindow):
     def __init__(self, *, engine_mode: bool = False) -> None:
         super().__init__()
         self._engine_mode = bool(engine_mode)
-        self._engine_controller = EngineController()
+        self._engine_controller = EngineController(belt_runtime=BeltRuntime())
         if not self._engine_mode:
             self.setWindowTitle("NCFD System — 非接觸式疲勞監測系統 V2")
             self.resize(1420, 900)
@@ -1262,7 +1263,6 @@ class MainWindow(QMainWindow):
         self._replay_worker: VideoReplayWorker | None = None
         self._replay_dataset_dir: Path | None = None
         self._replay_stopping = False
-        self._close_after_replay = False
         self._replay_mode_label = "回放中"
         self._replay_total_count = 0
         self._replay_done_count = 0
@@ -1276,7 +1276,6 @@ class MainWindow(QMainWindow):
         # 啟動自動蒐集（暫定基線）與手動「記錄清醒基線」按鈕各自的蒐集器。
         self._auto_baseline_collector: PersonalBaselineCollector | None = None
         self._manual_baseline_collector: PersonalBaselineCollector | None = None
-        self._belt_runtime = BeltRuntime()
         # 心跳帶真值校準（背景）：心跳帶 HR 當參考，線上微調 rPPG BPM offset，
         # 不進疲勞融合分數（見 _ensure_belt_calibration / OnlineBpmCalibrator）。
         self._belt_calibrator: OnlineBpmCalibrator | None = None
@@ -1781,8 +1780,8 @@ class MainWindow(QMainWindow):
         belt_on = False
         belt_name = "OFF"
         try:
-            if self._belt_runtime.belt_running:
-                st = self._belt_runtime.belt_status()
+            if self._engine_controller.belt_running:
+                st = self._engine_controller.belt_status()
                 if st is not None and st.state == "connected":
                     belt_on = True
                     belt_name = (st.device_name or "ON")[:12]
@@ -3032,8 +3031,8 @@ class MainWindow(QMainWindow):
         belt_bpm = 0.0
         belt_name = "belt"
         try:
-            if self._belt_runtime.belt_running:
-                st = self._belt_runtime.belt_status()
+            if self._engine_controller.belt_running:
+                st = self._engine_controller.belt_status()
                 if st is not None and st.state == "connected" and st.bpm > 0 and not hr_is_stale(st):
                     belt_bpm = float(st.bpm)
                     belt_name = (st.device_name or "belt").split()[0][:6]
@@ -3668,7 +3667,8 @@ class MainWindow(QMainWindow):
                 )
 
     def _build_web_metrics(self) -> dict:
-        pipeline_running = bool(self._pipeline_running)
+        pipeline = self._engine_controller.pipeline_snapshot()
+        pipeline_running = pipeline.running
         stress_enabled = self._chk_stress.isChecked()
         behavior_enabled = self._chk_behavior.isChecked()
         r = self._latest_rppg_metrics if pipeline_running and stress_enabled else None
@@ -3684,7 +3684,7 @@ class MainWindow(QMainWindow):
         calib_samples = int(round(calib_progress * calib_target)) if f else 0
         warmup_progress = float(getattr(r, "warmup_progress", 0.0) or 0.0) if r else 0.0
         perclos_pct = float(getattr(f, "perclos", 0.0) or 0.0) * 100.0 if f else 0.0
-        belt_st = self._belt_runtime.belt_status() if self._belt_runtime.belt_running else None
+        belt_st = self._engine_controller.belt_status() if self._engine_controller.belt_running else None
         # 校準資訊僅在心跳帶已連線時視為 active（與 GUI 狀態列一致，避免掃描中
         # 就顯示「校正 +0.0｜0 配對」）。
         belt_connected = belt_st is not None and belt_st.state == "connected"
@@ -3701,7 +3701,7 @@ class MainWindow(QMainWindow):
         belt_physio = None
         if belt_st is not None:
             try:
-                belt_physio = compute_watch_physio(self._belt_runtime.hub.snapshot())
+                belt_physio = compute_watch_physio(self._engine_controller.belt_samples())
             except Exception:
                 belt_physio = None
         calib = (
@@ -3714,7 +3714,7 @@ class MainWindow(QMainWindow):
             "timestamp": time.time(),
             "pipeline_running": pipeline_running,
             "camera_running": bool(self._cam_worker is not None),
-            "recording": bool(self._recording),
+            "recording": pipeline.recording,
             "fps": float(self._last_fps or 0.0),
             "camera_label": self._engine_controller.selected_camera_label(),
             "camera_codec": str(info.get("codec") or ""),
@@ -3890,7 +3890,10 @@ class MainWindow(QMainWindow):
 
     def _reset_settings_sections(self, sections: list[str]) -> None:
         selected = set(sections)
-        if (self._pipeline_running or self._replay_thread is not None) and selected.intersection(
+        if (
+            self._engine_controller.pipeline_snapshot().running
+            or self._engine_controller.replay_snapshot().running
+        ) and selected.intersection(
             {"camera", "toggles", "replay"}
         ):
             raise BusyError("Stop the pipeline and replay before resetting runtime settings")
@@ -3935,6 +3938,8 @@ class MainWindow(QMainWindow):
 
     def _desktop_control_state(self) -> dict[str, Any]:
         camera = self._engine_controller.camera_snapshot()
+        pipeline = self._engine_controller.pipeline_snapshot()
+        replay = self._engine_controller.replay_snapshot()
         cameras = [
             {
                 "index": device.index,
@@ -3945,8 +3950,8 @@ class MainWindow(QMainWindow):
         return {
             "desktop_api_version": DESKTOP_CONTROL_API_VERSION,
             "engine_mode": self._engine_mode,
-            "pipeline_running": bool(self._pipeline_running),
-            "recording": bool(self._recording),
+            "pipeline_running": pipeline.running,
+            "recording": pipeline.recording,
             "recording_path": str(self._recording_db_path or ""),
             "auto_capture_active": self._auto_capture_timer is not None,
             "auto_capture_seconds": int(self._spn_auto_capture_seconds.value()),
@@ -3994,8 +3999,8 @@ class MainWindow(QMainWindow):
             "settings_dirty": bool(self._settings_dirty),
             "desktop_notice": self._desktop_notice,
             "profile_loaded": self._personal_profile is not None,
-            "replay_running": self._replay_thread is not None,
-            "replay_stopping": bool(self._replay_stopping),
+            "replay_running": replay.running,
+            "replay_stopping": replay.stopping,
             "replay_dataset_dir": str(self._replay_dataset_dir or ""),
             "replay_jobs": int(self._spn_replay_jobs.value()),
             "replay_annotated": self._chk_replay_annotated.isChecked(),
@@ -4030,18 +4035,30 @@ class MainWindow(QMainWindow):
             enabled = self._require_bool(args, "enabled")
             if enabled and self.selected_camera_index is None:
                 raise ValueError("Select a camera before starting the pipeline")
-            if enabled != self._pipeline_running:
+            pipeline = self._engine_controller.pipeline_snapshot()
+            if pipeline.cleanup_pending:
+                self._fail_closed_pipeline_adapters()
+                pipeline = self._engine_controller.pipeline_snapshot()
+                if pipeline.cleanup_pending:
+                    raise BusyError("Live pipeline adapter cleanup is still pending")
+            if enabled and self._engine_controller.replay_snapshot().running:
+                raise BusyError("Stop replay before starting the live pipeline")
+            if enabled != pipeline.running:
+                self._pipeline_running = pipeline.running
                 self._toggle_pipeline()
 
         elif command == "recording.set":
             enabled = self._require_bool(args, "enabled")
-            if enabled and not self._pipeline_running:
+            pipeline = self._engine_controller.pipeline_snapshot()
+            if enabled and not pipeline.running:
                 raise ValueError("Start the pipeline before recording")
-            if enabled != self._recording:
+            if enabled != pipeline.recording:
+                self._pipeline_running = pipeline.running
+                self._recording = pipeline.recording
                 self._toggle_recording()
 
         elif command == "camera.select":
-            if self._pipeline_running:
+            if self._engine_controller.pipeline_snapshot().running:
                 raise BusyError("Stop the pipeline before changing camera")
             raw_index = args.get("index")
             if isinstance(raw_index, bool) or not isinstance(raw_index, int):
@@ -4051,12 +4068,12 @@ class MainWindow(QMainWindow):
             self._settings_dirty = True
 
         elif command == "camera.refresh":
-            if self._pipeline_running:
+            if self._engine_controller.pipeline_snapshot().running:
                 raise BusyError("Stop the pipeline before refreshing cameras")
             self._start_camera_scan()
 
         elif command == "camera.configure":
-            if self._pipeline_running:
+            if self._engine_controller.pipeline_snapshot().running:
                 raise BusyError("Stop the pipeline before changing camera settings")
             camera_args: dict[str, object] = {
                 key: args[key]
@@ -4080,14 +4097,52 @@ class MainWindow(QMainWindow):
                 if "rppg_enabled" in args
                 else self._chk_stress.isChecked()
             )
-            if not behavior_enabled and not rppg_enabled:
-                raise ValueError("At least one analysis mode must remain enabled")
-            self._set_engine_checkbox(
-                self._chk_behavior, behavior_enabled, self._on_behavior_toggled
+            changes = (
+                (
+                    self._chk_behavior,
+                    behavior_enabled,
+                    self._on_behavior_toggled,
+                    "行為警覺",
+                ),
+                (
+                    self._chk_stress,
+                    rppg_enabled,
+                    self._on_stress_toggled,
+                    "壓力／HRV",
+                ),
             )
-            self._set_engine_checkbox(
-                self._chk_stress, rppg_enabled, self._on_stress_toggled
-            )
+            changed = []
+            for control, checked, handler, label in changes:
+                previous = control.isChecked()
+                if previous == checked:
+                    continue
+                control.blockSignals(True)
+                try:
+                    control.setChecked(checked)
+                finally:
+                    control.blockSignals(False)
+                changed.append((control, previous, checked, handler, label))
+            if self._engine_mode and changed:
+                try:
+                    if self._engine_controller.pipeline_snapshot().running:
+                        self._restart_analysis_workers()
+                        for _control, _previous, checked, _handler, label in changed:
+                            self._append_log(
+                                f"[UI] {label} → {'開啟' if checked else '關閉'}"
+                            )
+                    else:
+                        for _control, _previous, checked, handler, _label in changed:
+                            handler(checked)
+                except Exception:
+                    for control, previous, _checked, _handler, _label in changed:
+                        control.blockSignals(True)
+                        try:
+                            control.setChecked(previous)
+                        finally:
+                            control.blockSignals(False)
+                    if not self._engine_controller.pipeline_snapshot().running:
+                        self._fail_closed_pipeline_adapters()
+                    raise
             self._settings_dirty = True
 
         elif command == "preferences.configure":
@@ -4134,7 +4189,7 @@ class MainWindow(QMainWindow):
 
         elif command == "benchmark.set":
             enabled = self._require_bool(args, "enabled")
-            if enabled and not self._pipeline_running:
+            if enabled and not self._engine_controller.pipeline_snapshot().running:
                 raise ValueError("Start the pipeline before running the benchmark")
             if enabled != self._benchmark_active:
                 self._toggle_benchmark()
@@ -4157,7 +4212,8 @@ class MainWindow(QMainWindow):
             self._settings_dirty = True
 
         elif command == "replay.configure":
-            if self._replay_thread is not None:
+            replay = self._engine_controller.replay_snapshot()
+            if replay.running or self._replay_thread is not None:
                 raise BusyError("Stop the replay before changing replay settings")
             if "path" in args:
                 raw_path = args.get("path")
@@ -4178,10 +4234,12 @@ class MainWindow(QMainWindow):
 
         elif command == "replay.set":
             enabled = self._require_bool(args, "enabled")
+            replay = self._engine_controller.replay_snapshot()
             if not enabled:
                 self._stop_replay()
-            elif self._replay_thread is None:
-                if self._pipeline_running or self._recording:
+            elif not replay.running and self._replay_thread is None:
+                pipeline = self._engine_controller.pipeline_snapshot()
+                if pipeline.running or pipeline.recording:
                     raise BusyError("Stop the live pipeline and recording before replay")
                 if self._replay_dataset_dir is None:
                     raise ValueError("Choose a replay folder before starting replay")
@@ -4192,6 +4250,8 @@ class MainWindow(QMainWindow):
                     self._start_replay()
                 else:
                     raise ValueError("mode must be single or parallel")
+            elif not replay.running:
+                raise BusyError("Replay adapter is still shutting down")
 
         elif command == "hotkeys.configure":
             previous_hotkeys = self._hotkeys
@@ -4265,7 +4325,10 @@ class MainWindow(QMainWindow):
                 raise ValueError(f"Unsupported settings action: {action}")
 
         elif command == "baseline.start":
-            if not self._pipeline_running or not self._chk_behavior.isChecked():
+            if (
+                not self._engine_controller.pipeline_snapshot().running
+                or not self._chk_behavior.isChecked()
+            ):
                 raise ValueError("Behavior analysis must be running before baseline capture")
             self._on_record_baseline_clicked()
 
@@ -4289,8 +4352,7 @@ class MainWindow(QMainWindow):
         return self._desktop_control_state()
 
     def _shutdown_engine(self) -> None:
-        if self._replay_thread is not None:
-            self._close_after_replay = True
+        if self._engine_controller.request_shutdown() == "stop_replay":
             self._stop_replay()
             return
         self.close()
@@ -4349,6 +4411,8 @@ class MainWindow(QMainWindow):
         self._web_last_frame_emit = now
 
     def _start_recording(self) -> None:
+        if self._video_thread is not None or self._video_worker is not None:
+            raise RuntimeError("Previous video recorder cleanup is still pending")
         if self._metrics_recorder is not None:
             return
         rec_dir = self._recordings_dir()
@@ -4369,38 +4433,54 @@ class MainWindow(QMainWindow):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.started.connect(self._on_video_recording_started)
+        worker.warning.connect(self._on_video_recording_warning)
         worker.failed.connect(self._on_video_recording_failed)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(
+            lambda current=thread: self._on_adapter_thread_finished("video", current)
+        )
         thread.finished.connect(thread.deleteLater)
         self._video_thread = thread
         self._video_worker = worker
         thread.start()
         self._update_recording_routing()
 
-    def _stop_recording(self) -> None:
+    def _stop_recording(self) -> bool:
+        self._engine_controller.stop_recording()
         self._rec_ui_timer.stop()
         if hasattr(self, "_mon_rec_pill"):
             self._mon_rec_pill.setVisible(False)
-        if self._metrics_recorder is None:
-            return
-        try:
-            self._metrics_recorder.close()
-        finally:
-            self._metrics_recorder = None
-            self._recording_db_path = None
-            self._recording_started_at = None
-
+        if self._metrics_recorder is not None:
+            try:
+                self._metrics_recorder.close()
+            except Exception as exc:
+                logger.warning("關閉指標記錄器失敗：%s", exc)
+            finally:
+                self._metrics_recorder = None
         if self._video_worker is not None:
-            self._video_worker.request_stop()
+            try:
+                self._video_worker.request_stop()
+            except Exception as exc:
+                logger.warning("停止影片記錄器失敗：%s", exc)
+        stopped = True
         if self._video_thread is not None:
-            self._video_thread.quit()
-            self._video_thread.wait(2000)
-        self._video_thread = None
-        self._video_worker = None
-        self._video_queue = None
-        self._recording_video_path = None
+            try:
+                self._video_thread.quit()
+                stopped = self._video_thread.wait(2000) is not False
+            except Exception as exc:
+                stopped = False
+                logger.warning("等待影片記錄執行緒結束失敗：%s", exc)
+        self._metrics_recorder = None
+        self._recording_db_path = None
+        self._recording_started_at = None
+        if stopped:
+            self._video_thread = None
+            self._video_worker = None
+            self._video_queue = None
+            self._recording_video_path = None
         self._update_recording_routing()
+        return stopped
 
     def _build_record_payload(self) -> dict:
         r = self._latest_rppg_metrics
@@ -4531,11 +4611,16 @@ class MainWindow(QMainWindow):
         if self._recording_video_path is not None:
             self._append_log(f"● 影片錄製 → {self._recording_video_path}")
 
+    def _on_video_recording_warning(self, msg: str) -> None:
+        self._append_log(f"⚠ {msg}")
+        self._notify_user("影片錄製", msg)
+
     def _on_video_recording_failed(self, msg: str) -> None:
-        if msg.startswith("mp4v 不可用"):
-            self._append_log(f"⚠ {msg}")
-        else:
-            self._append_log(f"✗ 影片錄製失敗：{msg}")
+        self._append_log(f"✗ 影片錄製失敗：{msg}")
+        self._recording = False
+        self._btn_record.setText("開始記錄")
+        self._lbl_record.setText("記錄狀態：未啟動")
+        self._stop_recording()
         self._notify_user("影片錄製", msg)
 
     def _append_log(self, msg: str) -> None:
@@ -4608,9 +4693,11 @@ class MainWindow(QMainWindow):
         self._start_replay_run(jobs=jobs, preview_enabled=False, mode_label=f"平行驗證中 x{jobs}")
 
     def _start_replay_run(self, *, jobs: int, preview_enabled: bool, mode_label: str) -> None:
-        if self._replay_thread is not None:
+        replay = self._engine_controller.replay_snapshot()
+        if replay.running or self._replay_thread is not None:
             return
-        if self._pipeline_running or self._recording:
+        pipeline = self._engine_controller.pipeline_snapshot()
+        if pipeline.running or pipeline.recording:
             self._notify_user("影片回測", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。", level="info")
             return
         if self._replay_dataset_dir is None:
@@ -4620,61 +4707,70 @@ class MainWindow(QMainWindow):
             self._notify_user("影片回測", f"找不到資料夾：\n{self._replay_dataset_dir}")
             return
 
-        thread = QThread(self)
-        worker = VideoReplayWorker(
-            self._replay_dataset_dir,
-            write_annotated_video=self._chk_replay_annotated.isChecked(),
-            jobs=jobs,
-            preview_enabled=preview_enabled,
-        )
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._on_replay_progress)
-        if preview_enabled:
-            worker.preview_frame.connect(self._on_replay_preview_frame)
-        worker.finished_ok.connect(self._on_replay_finished_ok)
-        worker.failed.connect(self._on_replay_failed)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_replay_thread_finished)
+        self._engine_controller.start_replay()
+        try:
+            thread = QThread(self)
+            worker = VideoReplayWorker(
+                self._replay_dataset_dir,
+                write_annotated_video=self._chk_replay_annotated.isChecked(),
+                jobs=jobs,
+                preview_enabled=preview_enabled,
+            )
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._on_replay_progress)
+            if preview_enabled:
+                worker.preview_frame.connect(self._on_replay_preview_frame)
+            worker.finished_ok.connect(self._on_replay_finished_ok)
+            worker.failed.connect(self._on_replay_failed)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._on_replay_thread_finished)
 
-        self._replay_thread = thread
-        self._replay_worker = worker
-        self._replay_stopping = False
-        self._replay_mode_label = mode_label
-        self._replay_total_count = 0
-        self._replay_done_count = 0
-        self._replay_active_videos.clear()
-        self._replay_recent_done.clear()
-        self._replay_queue_reset()
-        self._set_replay_controls_running(True)
-        self._bar_replay_progress.setRange(0, 0)
-        self._lbl_replay_current.setText("目前影片：準備中")
-        self._lbl_replay_result.setText("摘要檔：--")
-        if preview_enabled:
-            self._lbl_replay_parallel_status.setText("處理清單：等待第一支影片")
-        else:
-            self._lbl_replay_parallel_status.setText("處理清單：平行驗證等待工作派發")
-        self._lbl_replay_preview.clear()
-        if preview_enabled:
-            self._lbl_replay_preview.setText("影片預覽載入中")
-        else:
-            self._lbl_replay_preview.setText("平行驗證中：預覽停用，以提升批次速度")
-        self._lbl_pipeline.setText(f"管線：影片回測 {mode_label}")
-        self._lbl_camera.setText("影片：準備中")
-        self._lbl_face.setText("臉部：統計中")
-        self._lbl_fps.setText("FPS：—")
-        self._lbl_codec.setText("解析度：—")
-        self._append_log(
-            f"[影片回測] 開始{mode_label}：{self._replay_dataset_dir} "
-            f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
-        )
-        thread.start()
+            self._replay_thread = thread
+            self._replay_worker = worker
+            self._replay_stopping = False
+            self._replay_mode_label = mode_label
+            self._replay_total_count = 0
+            self._replay_done_count = 0
+            self._replay_active_videos.clear()
+            self._replay_recent_done.clear()
+            self._replay_queue_reset()
+            self._set_replay_controls_running(True)
+            self._bar_replay_progress.setRange(0, 0)
+            self._lbl_replay_current.setText("目前影片：準備中")
+            self._lbl_replay_result.setText("摘要檔：--")
+            if preview_enabled:
+                self._lbl_replay_parallel_status.setText("處理清單：等待第一支影片")
+            else:
+                self._lbl_replay_parallel_status.setText("處理清單：平行驗證等待工作派發")
+            self._lbl_replay_preview.clear()
+            if preview_enabled:
+                self._lbl_replay_preview.setText("影片預覽載入中")
+            else:
+                self._lbl_replay_preview.setText("平行驗證中：預覽停用，以提升批次速度")
+            self._lbl_pipeline.setText(f"管線：影片回測 {mode_label}")
+            self._lbl_camera.setText("影片：準備中")
+            self._lbl_face.setText("臉部：統計中")
+            self._lbl_fps.setText("FPS：—")
+            self._lbl_codec.setText("解析度：—")
+            self._append_log(
+                f"[影片回測] 開始{mode_label}：{self._replay_dataset_dir} "
+                f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
+            )
+            thread.start()
+        except Exception:
+            self._replay_thread = None
+            self._replay_worker = None
+            self._set_replay_controls_running(False)
+            self._engine_controller.finish_replay()
+            raise
 
     def _stop_replay(self) -> None:
         if self._replay_worker is None:
             return
+        self._engine_controller.request_replay_stop()
         self._replay_stopping = True
         self._replay_worker.request_stop()
         self._btn_replay_stop.setEnabled(False)
@@ -4867,8 +4963,7 @@ class MainWindow(QMainWindow):
         self._replay_stopping = False
         self._replay_mode_label = "回放中"
         self._set_replay_controls_running(False)
-        if self._close_after_replay:
-            self._close_after_replay = False
+        if self._engine_controller.finish_replay():
             self._shutdown_engine()
 
     def _on_toggle_all(self, checked: bool) -> None:
@@ -4899,7 +4994,7 @@ class MainWindow(QMainWindow):
             self._preview_overlay.hide()
             return
         any_on = self._chk_preview.isChecked() or self._chk_metrics.isChecked()
-        if self._pipeline_running and any_on:
+        if self._engine_controller.pipeline_snapshot().running and any_on:
             self._preview_overlay.refresh_layout()
             self._preview_overlay.show()
         else:
@@ -4916,6 +5011,7 @@ class MainWindow(QMainWindow):
         if cam_idx is None:
             self._append_log("⚠ 請先選擇攝影機再開始。")
             self._pipeline_running = False
+            self._engine_controller.stop_pipeline()
             self._btn_start.setText("開始")
             self._lbl_pipeline.setText("管線：停止")
             return
@@ -4940,6 +5036,9 @@ class MainWindow(QMainWindow):
         worker.fps_ready.connect(self._on_fps)
         worker.failed.connect(self._on_camera_failed)
         worker.finished.connect(thread.quit)
+        thread.finished.connect(
+            lambda current=thread: self._on_adapter_thread_finished("camera", current)
+        )
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(worker.deleteLater)
 
@@ -4955,17 +5054,95 @@ class MainWindow(QMainWindow):
         )
 
     def _stop_camera_worker(self) -> None:
-        self._stop_analysis_workers()   # stop all analysis before camera
-        self._set_record_source(None)
-        self._set_frame_source(None)
+        self._engine_controller.mark_pipeline_cleanup_pending()
+        self._fail_closed_pipeline_adapters()
+
+    def _fail_closed_pipeline_adapters(self) -> None:
+        """Best-effort cleanup after controller can no longer restore live topology."""
+        all_stopped = True
+        cleanup_steps = [("recording", self._stop_recording)]
+        if self._combined_worker is not None or self._combined_thread is not None:
+            cleanup_steps.append(("combined", self._stop_combined_worker))
+        if self._rppg_worker is not None or self._rppg_thread is not None:
+            cleanup_steps.append(("rppg", self._stop_rppg_worker))
+        if self._fatigue_worker is not None or self._fatigue_thread is not None:
+            cleanup_steps.append(("fatigue", self._stop_fatigue_worker))
+        for label, cleanup in cleanup_steps:
+            try:
+                if cleanup() is False:
+                    all_stopped = False
+            except Exception as exc:
+                all_stopped = False
+                logger.warning("fail-closed %s cleanup failed: %s", label, exc)
+        camera_steps = [
+            ("record route", lambda: self._set_record_source(None)),
+            ("frame route", lambda: self._set_frame_source(None)),
+        ]
         if self._cam_worker is not None:
-            self._cam_worker.detach_bgr_queue()   # clear all queues
-            self._cam_worker.request_stop()
+            camera_steps.extend(
+                (
+                    ("camera queues", self._cam_worker.detach_bgr_queue),
+                    ("camera worker", self._cam_worker.request_stop),
+                )
+            )
         if self._cam_thread is not None:
-            self._cam_thread.quit()
-            self._cam_thread.wait(3000)
-        self._cam_thread = None
-        self._cam_worker = None
+            camera_steps.extend(
+                (
+                    ("camera thread quit", self._cam_thread.quit),
+                    ("camera thread wait", lambda: self._cam_thread.wait(3000)),
+                )
+            )
+        camera_thread_stopped = self._cam_thread is None
+        for label, cleanup in camera_steps:
+            try:
+                result = cleanup()
+                if label == "camera thread wait":
+                    camera_thread_stopped = result is not False
+            except Exception as exc:
+                all_stopped = False
+                logger.warning("fail-closed %s cleanup failed: %s", label, exc)
+        if camera_thread_stopped:
+            self._cam_thread = None
+            self._cam_worker = None
+        else:
+            all_stopped = False
+        self._pipeline_running = False
+        self._recording = False
+        if all_stopped:
+            self._engine_controller.finish_pipeline_cleanup()
+        else:
+            self._engine_controller.mark_pipeline_cleanup_pending()
+        self._btn_start.setText("開始")
+        self._lbl_pipeline.setText("管線：停止")
+        self._btn_record.setText("開始記錄")
+        self._lbl_record.setText("記錄狀態：未啟動")
+
+    def _on_adapter_thread_finished(self, kind: str, thread: QThread) -> None:
+        """Release late-finishing adapter ownership without touching a newer session."""
+        if kind == "video" and self._video_thread is thread:
+            self._video_thread = None
+            self._video_worker = None
+            self._video_queue = None
+            self._recording_video_path = None
+        elif kind == "camera" and self._cam_thread is thread:
+            self._cam_thread = None
+            self._cam_worker = None
+        elif kind == "combined" and self._combined_thread is thread:
+            self._combined_thread = None
+            self._combined_worker = None
+            self._combined_queue = None
+        elif kind == "rppg" and self._rppg_thread is thread:
+            self._rppg_thread = None
+            self._rppg_worker = None
+            self._bgr_queue = None
+        elif kind == "fatigue" and self._fatigue_thread is thread:
+            self._fatigue_thread = None
+            self._fatigue_worker = None
+            self._fatigue_queue = None
+        else:
+            return
+        if self._engine_controller.pipeline_snapshot().cleanup_pending:
+            self._fail_closed_pipeline_adapters()
 
     # ── Frame routing ─────────────────────────────────────────────────────────
 
@@ -5048,12 +5225,16 @@ class MainWindow(QMainWindow):
 
     def _rppg_active(self) -> bool:
         """rPPG 是否正在產生 BPM（心跳帶校準的比對前提）。"""
-        want_rppg, _ = self._analysis_needed()
-        return want_rppg
+        pipeline = self._engine_controller.pipeline_snapshot()
+        return pipeline.running and pipeline.analysis.rppg_enabled
 
     def _on_belt_calib_toggled(self, checked: bool) -> None:
         self._append_log(f"[UI] 心跳帶真值校準 → {'開啟' if checked else '關閉'}")
-        if checked and self._pipeline_running and not self._rppg_active():
+        if (
+            checked
+            and self._engine_controller.pipeline_snapshot().running
+            and not self._rppg_active()
+        ):
             self._append_log(
                 "⚠ 心跳帶校準需要 rPPG：請勾選「壓力／HRV（心率估測）」，rPPG 啟用後才會開始比對。"
             )
@@ -5062,7 +5243,7 @@ class MainWindow(QMainWindow):
     def _ensure_belt_calibration(self) -> None:
         """依勾選狀態與 rPPG 是否運行，啟停背景心跳帶校準。"""
         want = (
-            self._pipeline_running
+            self._engine_controller.pipeline_snapshot().running
             and self._chk_belt_calib.isChecked()
             and self._rppg_active()
         )
@@ -5074,9 +5255,9 @@ class MainWindow(QMainWindow):
     def _start_belt_calibration(self) -> None:
         belt_cfg = load_hr_belt_config()
         self._belt_cfg = belt_cfg
-        if not self._belt_runtime.belt_running:
-            self._belt_runtime.hub.clear()
-            err = self._belt_runtime.start_belt(belt_cfg)
+        if not self._engine_controller.belt_running:
+            self._engine_controller.clear_belt_samples()
+            err = self._engine_controller.start_belt(belt_cfg)
             if err:
                 self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
                 self._lbl_belt_status.setText("心跳帶校準：啟動失敗")
@@ -5116,7 +5297,7 @@ class MainWindow(QMainWindow):
         # worker 的 _maybe_capture_belt_truth 全部 early-return。
         if belt_cfg.capture_enabled:
             try:
-                writer = self._belt_runtime.create_truth_capture_writer()
+                writer = self._engine_controller.create_belt_truth_capture_writer()
             except OSError as exc:
                 self._belt_truth_capture = None
                 self._append_log(f"⚠ belt-truth 錄製檔建立失敗，本次停用錄製：{exc}")
@@ -5166,8 +5347,8 @@ class MainWindow(QMainWindow):
             count = writer.record_count
             writer.close()
             self._append_log(f"■ belt-truth 同步錄製已停止（{count} 筆）→ {writer.path}")
-        if self._belt_runtime.belt_running:
-            self._belt_runtime.stop_belt()
+        if self._engine_controller.belt_running:
+            self._engine_controller.stop_belt()
         self._append_log("■ 心跳帶真值校準停止。")
         self._lbl_belt_status.setText("未啟用")
         self._reset_belt_panel()
@@ -5223,7 +5404,7 @@ class MainWindow(QMainWindow):
     def _tick_belt_calibration(self) -> None:
         """QTimer 每秒：餵一筆配對觀測給校正器並更新狀態列。"""
         cal = self._belt_calibrator
-        st = self._belt_runtime.belt_status()
+        st = self._engine_controller.belt_status()
         if cal is not None and st is not None and st.state == "connected" and st.bpm > 0:
             r = self._latest_rppg_metrics
             # 只在 rPPG 產出「新」樣本時餵入：物件相同代表 rPPG 這秒沒更新
@@ -5278,7 +5459,7 @@ class MainWindow(QMainWindow):
         coord = self._rppg_param_coordinator
         if coord is None:
             return
-        st = self._belt_runtime.belt_status()
+        st = self._engine_controller.belt_status()
         if st is None or st.state != "connected" or st.bpm <= 0:
             return
         if cur_bpm != cur_bpm or cand_bpm != cand_bpm:  # NaN 檢查（NaN != NaN）
@@ -5326,7 +5507,7 @@ class MainWindow(QMainWindow):
     def _update_belt_status_label(self) -> None:
         """輪詢心跳帶連線與校準狀態並更新狀態列（QTimer 每秒觸發）。"""
         self._update_belt_panel()
-        st = self._belt_runtime.belt_status()
+        st = self._engine_controller.belt_status()
         cal = self._belt_calibrator
         if st is None:
             self._lbl_belt_status.setText("心跳帶校準：停止")
@@ -5394,7 +5575,7 @@ class MainWindow(QMainWindow):
         HRV 僅供顯示，絕不寫回任何會被疲勞融合分數讀取的欄位。
         """
         self._refresh_belt_cfg_labels()
-        st = self._belt_runtime.belt_status()
+        st = self._engine_controller.belt_status()
         cal = self._belt_calibrator
         if st is None:
             self._reset_belt_panel()
@@ -5442,7 +5623,7 @@ class MainWindow(QMainWindow):
 
         # HRV（rppg.watch_physio.compute_watch_physio，唯讀顯示、不進疲勞融合分數）
         try:
-            samples = self._belt_runtime.hub.snapshot()
+            samples = self._engine_controller.belt_samples()
             physio = compute_watch_physio(samples)
         except Exception:
             samples = []
@@ -5495,14 +5676,36 @@ class MainWindow(QMainWindow):
 
     def _analysis_needed(self) -> tuple[bool, bool]:
         """Return (want_rppg, want_fatigue) from checkbox state."""
-        want_fatigue = self._chk_behavior.isChecked()
-        return self._chk_stress.isChecked(), want_fatigue
+        plan = self._engine_controller.analysis_plan(
+            rppg_enabled=self._chk_stress.isChecked(),
+            fatigue_enabled=self._chk_behavior.isChecked(),
+        )
+        return plan.rppg_enabled, plan.fatigue_enabled
+
+    def _analysis_lifecycle_ports(self) -> AnalysisLifecyclePorts:
+        return AnalysisLifecyclePorts(
+            stop_all=self._stop_analysis_workers,
+            start_combined=lambda: self._start_combined_worker(enable_rppg=True),
+            start_rppg=self._start_rppg_worker,
+            start_fatigue=self._start_fatigue_worker,
+            restore_raw_routing=self._update_frame_routing,
+        )
 
     def _stop_analysis_workers(self) -> None:
         """Stop ALL analysis workers in the correct order."""
-        self._stop_combined_worker()
-        self._stop_rppg_worker()
-        self._stop_fatigue_worker()
+        failures = []
+        for label, stop in (
+            ("combined", self._stop_combined_worker),
+            ("rppg", self._stop_rppg_worker),
+            ("fatigue", self._stop_fatigue_worker),
+        ):
+            try:
+                if stop() is False:
+                    failures.append(f"{label} timeout")
+            except Exception as exc:
+                failures.append(f"{label}: {exc}")
+        if failures:
+            raise RuntimeError("Analysis cleanup failed: " + "; ".join(failures))
 
     def _restart_analysis_workers(self) -> None:
         """(Re)start whichever analysis workers the UI requires.
@@ -5514,21 +5717,16 @@ class MainWindow(QMainWindow):
           - fatigue only  → FatigueWorker
           - neither       → nothing (raw camera frames)
         """
-        if not self._pipeline_running:
+        if not self._engine_controller.pipeline_snapshot().running:
             return
-        self._stop_analysis_workers()
         self._latest_rppg_metrics = None
         self._latest_fatigue_metrics = None
         self._latest_fused_score = None
-        want_rppg, want_fatigue = self._analysis_needed()
-        if want_rppg and want_fatigue:
-            self._start_combined_worker(enable_rppg=True)
-        elif want_rppg:
-            self._start_rppg_worker()
-        elif want_fatigue:
-            self._start_fatigue_worker()
-        else:
-            self._update_frame_routing()   # restore raw camera feed
+        self._engine_controller.reconcile_analysis(
+            rppg_enabled=self._chk_stress.isChecked(),
+            fatigue_enabled=self._chk_behavior.isChecked(),
+            ports=self._analysis_lifecycle_ports(),
+        )
         self._ensure_belt_calibration()   # rPPG 是否運行改變時，同步啟停背景校準
         self._emit_web_metrics(force=True)
 
@@ -5565,6 +5763,9 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._on_combined_failed)
         worker.candidate_bpm_ready.connect(self._on_candidate_bpm_ready)
         worker.finished.connect(thread.quit)
+        thread.finished.connect(
+            lambda current=thread: self._on_adapter_thread_finished("combined", current)
+        )
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(worker.deleteLater)
 
@@ -5579,12 +5780,15 @@ class MainWindow(QMainWindow):
         self._preview_overlay.show_fused_panel(True)
         self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
-    def _stop_combined_worker(self) -> None:
+    def _stop_combined_worker(self) -> bool:
         if self._combined_worker is not None:
             self._combined_worker.request_stop()
+        stopped = True
         if self._combined_thread is not None:
             self._combined_thread.quit()
-            self._combined_thread.wait(5000)
+            stopped = self._combined_thread.wait(5000) is not False
+        if not stopped:
+            return False
         self._combined_thread = None
         self._combined_worker = None
         self._end_baseline_collection()
@@ -5595,6 +5799,7 @@ class MainWindow(QMainWindow):
         self._preview_overlay.show_fatigue_panel(False)
         self._preview_overlay.show_fused_panel(False)
         self._update_frame_routing()
+        return True
 
     def _on_fused_score(self, score: object) -> None:
         self._preview_overlay.update_fused_score(score)  # type: ignore[arg-type]
@@ -5643,6 +5848,9 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._on_rppg_failed)
         worker.candidate_bpm_ready.connect(self._on_candidate_bpm_ready)
         worker.finished.connect(thread.quit)
+        thread.finished.connect(
+            lambda current=thread: self._on_adapter_thread_finished("rppg", current)
+        )
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(worker.deleteLater)
 
@@ -5654,12 +5862,15 @@ class MainWindow(QMainWindow):
         self._preview_overlay.show_rppg_panel(True)
         self._append_log("▶ rPPG 引擎啟動（MediaPipe Face Landmarker + POS）")
 
-    def _stop_rppg_worker(self) -> None:
+    def _stop_rppg_worker(self) -> bool:
         if self._rppg_worker is not None:
             self._rppg_worker.request_stop()
+        stopped = True
         if self._rppg_thread is not None:
             self._rppg_thread.quit()
-            self._rppg_thread.wait(4000)
+            stopped = self._rppg_thread.wait(4000) is not False
+        if not stopped:
+            return False
         self._rppg_thread = None
         self._rppg_worker = None
         if self._bgr_queue is not None and self._cam_worker is not None:
@@ -5668,6 +5879,7 @@ class MainWindow(QMainWindow):
         self._update_frame_routing()
         self._preview_overlay.show_rppg_panel(False)
         self._lbl_face.setText("臉部：—")
+        return True
 
     def _on_stress_toggled(self, checked: bool) -> None:
         self._append_log(f"[UI] 壓力／HRV → {'開啟' if checked else '關閉'}")
@@ -5735,6 +5947,9 @@ class MainWindow(QMainWindow):
         worker.status_changed.connect(self._on_fatigue_status)
         worker.failed.connect(self._on_fatigue_failed)
         worker.finished.connect(thread.quit)
+        thread.finished.connect(
+            lambda current=thread: self._on_adapter_thread_finished("fatigue", current)
+        )
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(worker.deleteLater)
 
@@ -5747,12 +5962,15 @@ class MainWindow(QMainWindow):
         self._preview_overlay.show_fatigue_panel(True)
         self._append_log("▶ 行為警覺引擎啟動（V2：EAR + 瞳孔 + 注視 + 頭部）")
 
-    def _stop_fatigue_worker(self) -> None:
+    def _stop_fatigue_worker(self) -> bool:
         if self._fatigue_worker is not None:
             self._fatigue_worker.request_stop()
+        stopped = True
         if self._fatigue_thread is not None:
             self._fatigue_thread.quit()
-            self._fatigue_thread.wait(4000)
+            stopped = self._fatigue_thread.wait(4000) is not False
+        if not stopped:
+            return False
         self._fatigue_thread = None
         self._fatigue_worker = None
         self._end_baseline_collection()
@@ -5761,6 +5979,7 @@ class MainWindow(QMainWindow):
         self._fatigue_queue = None
         self._update_frame_routing()
         self._preview_overlay.show_fatigue_panel(False)
+        return True
 
     def _on_behavior_toggled(self, checked: bool) -> None:
         self._append_log(f"[UI] 行為警覺 → {'開啟' if checked else '關閉'}")
@@ -5920,11 +6139,22 @@ class MainWindow(QMainWindow):
         if self._belt_calibrator is not None:
             self._stop_belt_calibration()
         self._stop_analysis_workers()
+        if (
+            self._recording
+            or self._metrics_recorder is not None
+            or self._video_worker is not None
+        ):
+            self._recording = False
+            self._btn_record.setText("開始記錄")
+            self._lbl_record.setText("記錄狀態：未啟動")
+            self._stop_recording()
+            self._append_log("○ 相機中斷，已一併結束記錄。")
         self._set_record_source(None)
         self._set_frame_source(None)
         if self._cam_worker is not None:
             self._cam_worker.request_stop()
         self._pipeline_running = False
+        self._engine_controller.stop_pipeline()
         self._cam_worker = None
         self._cam_thread = None
         self._latest_rppg_metrics = None
@@ -5956,8 +6186,8 @@ class MainWindow(QMainWindow):
     # ── Pipeline toggle ───────────────────────────────────────────────────────
 
     def _toggle_pipeline(self) -> None:
-        self._pipeline_running = not self._pipeline_running
-        if self._pipeline_running:
+        pipeline_running = self._engine_controller.pipeline_snapshot().running
+        if not pipeline_running:
             self._latest_rppg_metrics = None
             self._latest_fatigue_metrics = None
             self._latest_fused_score = None
@@ -5966,21 +6196,42 @@ class MainWindow(QMainWindow):
             self._lbl_pipeline.setText("管線：運作中")
             self._lbl_fps.setText("FPS：—")
             self._lbl_face.setText("臉部：—")
-            self._start_camera_worker()
-            if not self._pipeline_running:
+            try:
+                self._engine_controller.start_pipeline(
+                    rppg_enabled=self._chk_stress.isChecked(),
+                    fatigue_enabled=self._chk_behavior.isChecked(),
+                )
+            except (ValueError, RuntimeError):
+                self._pipeline_running = False
+                self._btn_start.setText("開始")
+                self._lbl_pipeline.setText("管線：停止")
+                self._engine_controller.stop_pipeline()
                 self._sync_overlay_visibility()
                 self._update_preview_telemetry()
                 self._update_device_status()
                 self._emit_web_metrics(force=True)
                 return
-            # Start the appropriate analysis worker(s) based on checkbox state
-            want_rppg, want_fatigue = self._analysis_needed()
-            if want_rppg and want_fatigue:
-                self._start_combined_worker(enable_rppg=True)
-            elif want_rppg:
-                self._start_rppg_worker()
-            elif want_fatigue:
-                self._start_fatigue_worker()
+            self._pipeline_running = True
+            try:
+                self._start_camera_worker()
+                self._engine_controller.activate_current_analysis(
+                    self._analysis_lifecycle_ports()
+                )
+            except Exception as exc:
+                logger.exception("管線 adapter 啟動失敗")
+                try:
+                    self._stop_camera_worker()
+                except Exception as cleanup_exc:
+                    logger.warning("管線啟動失敗後清理資源失敗：%s", cleanup_exc)
+                self._engine_controller.stop_pipeline()
+                self._pipeline_running = False
+                self._btn_start.setText("開始")
+                self._lbl_pipeline.setText("管線：停止")
+                self._notify_user("管線", f"無法啟動分析管線：{exc}")
+                self._sync_overlay_visibility()
+                self._update_device_status()
+                self._emit_web_metrics(force=True)
+                return
             self._ensure_belt_calibration()   # rPPG 運行時視勾選啟動背景校準
             self._sync_overlay_visibility()
             self._update_preview_telemetry()
@@ -5989,6 +6240,8 @@ class MainWindow(QMainWindow):
                 self._toggle_recording()
             self._emit_web_metrics(force=True)
         else:
+            self._engine_controller.stop_pipeline()
+            self._pipeline_running = False
             self._cancel_pending_auto_capture_timer()
             self._rollback_auto_capture_toggles()
             self._latest_rppg_metrics = None
@@ -6022,15 +6275,22 @@ class MainWindow(QMainWindow):
                 self._append_log("基準測試已隨管線停止。")
 
     def _toggle_recording(self) -> None:
-        if not self._pipeline_running and not self._recording:
+        pipeline = self._engine_controller.pipeline_snapshot()
+        if not pipeline.running and not pipeline.recording:
             self._notify_user("記錄", "請先啟動管線再開始記錄（示範規則）。", level="info")
             return
-        self._recording = not self._recording
-        if self._recording:
+        if not pipeline.recording:
             try:
+                self._engine_controller.start_recording()
+                self._recording = True
                 self._start_recording()
             except Exception as exc:
                 self._recording = False
+                self._engine_controller.stop_recording()
+                try:
+                    self._stop_recording()
+                except Exception as cleanup_exc:
+                    logger.warning("記錄啟動失敗後清理資源失敗：%s", cleanup_exc)
                 self._notify_user("記錄", f"無法啟動記錄：{exc}")
                 return
             self._btn_record.setText("停止記錄")
@@ -6041,11 +6301,15 @@ class MainWindow(QMainWindow):
                 self._append_log("● 記錄開始 → recordings/")
             self._emit_web_metrics(force=True)
         else:
+            self._recording = False
+            self._engine_controller.stop_recording()
             self._cancel_pending_auto_capture_timer()
             self._rollback_auto_capture_toggles()
             self._btn_record.setText("開始記錄")
             self._lbl_record.setText("記錄狀態：未啟動")
-            self._stop_recording()
+            if not self._stop_recording():
+                self._engine_controller.mark_pipeline_cleanup_pending()
+                self._fail_closed_pipeline_adapters()
             self._append_log("○ 記錄停止。")
             self._emit_web_metrics(force=True)
 
@@ -6103,9 +6367,9 @@ class MainWindow(QMainWindow):
                 self._auto_capture_started_belt_calib = True
 
         pipeline_started_by_this_call = False
-        if not self._pipeline_running:
+        if not self._engine_controller.pipeline_snapshot().running:
             self._toggle_pipeline()
-            if not self._pipeline_running:
+            if not self._engine_controller.pipeline_snapshot().running:
                 message = "自動採集：管線未能啟動，已中止（請先選擇攝影機）。"
                 self._append_log(f"⚠ {message}")
                 self._notify_user("自動採集", message)
@@ -6113,9 +6377,9 @@ class MainWindow(QMainWindow):
                 return
             pipeline_started_by_this_call = True
 
-        if not self._recording:
+        if not self._engine_controller.pipeline_snapshot().recording:
             self._toggle_recording()
-            if not self._recording:
+            if not self._engine_controller.pipeline_snapshot().recording:
                 self._append_log("⚠ 自動採集：記錄未能啟動，已中止。")
                 self._rollback_auto_capture_toggles()
                 if pipeline_started_by_this_call:
@@ -6169,7 +6433,11 @@ class MainWindow(QMainWindow):
         db_path = expected_db_path
         started_recording = self._auto_capture_started_recording
         self._auto_capture_started_recording = False
-        if started_recording and self._recording and self._recording_db_path == expected_db_path:
+        if (
+            started_recording
+            and self._engine_controller.pipeline_snapshot().recording
+            and self._recording_db_path == expected_db_path
+        ):
             self._toggle_recording()
         elif not started_recording:
             self._append_log("⚠ 自動採集：錄製非本次自動採集啟動，自動採集跳過停止。")
@@ -6194,7 +6462,7 @@ class MainWindow(QMainWindow):
         self._notify_user("自動採集完成", "\n".join(lines), level="info")
 
     def _toggle_benchmark(self) -> None:
-        if not self._pipeline_running:
+        if not self._engine_controller.pipeline_snapshot().running:
             self._notify_user("基準測試", "請先啟動管線再執行基準測試（示範）。", level="info")
             return
         self._benchmark_active = not self._benchmark_active
@@ -6336,8 +6604,7 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self._replay_thread is not None:
-            self._close_after_replay = True
+        if self._engine_controller.request_shutdown() == "stop_replay":
             self._stop_replay()
             event.ignore()
             return
@@ -6346,7 +6613,7 @@ class MainWindow(QMainWindow):
         if self._belt_calibrator is not None:
             self._stop_belt_calibration()   # 存本次 session 校準版本
         self._belt_ui_timer.stop()
-        self._belt_runtime.stop_belt()
+        self._engine_controller.stop_belt()
         self._web_restart_shutdown = True
         self._web_restart_scheduled = False
         self._stop_web_server()

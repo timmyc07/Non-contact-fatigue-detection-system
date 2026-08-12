@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案定位
 
-無人機駕駛員疲勞狀態監測系統：以一般攝影機做 **非接觸式** 生理與行為監測。結合 MediaPipe 行為疲勞分析與 rPPG（remote photoplethysmography）生理訊號，提供警覺度下降提示。正式桌面面板唯一入口為 Tauri v2 + Flutter Web，Python/MediaPipe/rPPG 為隱藏 engine；PySide6 與 Flask/Socket.IO 僅作 engine runtime、桌面 Overlay 與診斷 API，不再提供舊主面板。UTA-RLDD replay 為門檻校正與可重現驗證工具，**不是**要把系統改成汽車駕駛分類器。
+無人機駕駛員疲勞狀態監測系統：以一般攝影機做 **非接觸式** 生理與行為監測。結合 MediaPipe 行為疲勞分析與 rPPG（remote photoplethysmography）生理訊號，提供警覺度下降提示。正式桌面主面板與 Overlay 的唯一入口為 Tauri v2 + Flutter Web；Python/MediaPipe/rPPG 為隱藏 engine，PySide6 與 Flask/Socket.IO 僅作隱藏 runtime adapter 與 localhost 診斷／控制 API，不再提供可見主面板或 Qt Overlay。UTA-RLDD replay 為門檻校正與可重現驗證工具，**不是**要把系統改成汽車駕駛分類器。
 
 本檔為代理工作的權威規則來源。跨專案的工作制度（模型調度、派工模板、判斷 rubric、維護協議）在 `~/.claude/rules/`，由全域 CLAUDE.md 自動載入路由，不在此重複。
 
@@ -65,10 +65,13 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 
 ## 架構總覽
 
-執行緒模型（每個 worker 跑在自己的 `QThread`，以 Qt Signal/Slot 溝通，`MainWindow` 為協調者）：
+執行緒模型（每個 worker 跑在自己的 `QThread`，以 Qt Signal/Slot 溝通；Qt-free
+`EngineController` 管理 camera config、pipeline/analysis topology、recording/replay/shutdown
+state 與 BLE runtime ownership，`MainWindow` 僅作 QThread/signal/Qt multimedia adapter）：
 
 ```
-CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  →  MainWindow
+CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  →  MainWindow adapter
+             ↑                  EngineController lifecycle ports                  ↑
                                                           ├→ Overlay（標註預覽）
                                                           ├→ MetricsRecorder（SQLite .db）
                                                           ├→ VideoRecorderWorker（.mp4）

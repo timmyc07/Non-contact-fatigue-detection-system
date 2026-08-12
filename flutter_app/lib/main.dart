@@ -2327,9 +2327,7 @@ class SettingsView extends StatelessWidget {
             title: '行為警覺分析',
             subtitle: '頭部姿態、眨眼、哈欠、注視與疲勞融合',
             value: state['behavior_enabled'] == true,
-            enabled: !busy &&
-                (state['rppg_enabled'] == true ||
-                    state['behavior_enabled'] != true),
+            enabled: !busy,
             onChanged: (value) => onCommand('analysis.configure',
                 <String, dynamic>{'behavior_enabled': value}),
           ),
@@ -2338,9 +2336,7 @@ class SettingsView extends StatelessWidget {
             title: 'rPPG / HRV 分析',
             subtitle: '非接觸式心率、HRV 與訊號品質',
             value: state['rppg_enabled'] == true,
-            enabled: !busy &&
-                (state['behavior_enabled'] == true ||
-                    state['rppg_enabled'] != true),
+            enabled: !busy,
             onChanged: (value) => onCommand(
                 'analysis.configure', <String, dynamic>{'rppg_enabled': value}),
           ),

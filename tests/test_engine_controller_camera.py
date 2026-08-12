@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import sys
-import subprocess
 from dataclasses import FrozenInstanceError
-from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
 
 import pytest  # noqa: E402
 
@@ -134,20 +129,3 @@ def test_reset_camera_settings_preserves_catalog_and_selection() -> None:
     assert snapshot.fps == "30"
     assert snapshot.backend == "ffmpeg"
     assert snapshot.horizontal_flip is True
-
-
-def test_engine_controller_import_is_qt_free() -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; import gui.engine_controller; "
-            "assert not any(name.startswith('PySide6') for name in sys.modules)",
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr

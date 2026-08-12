@@ -17,6 +17,7 @@ from PySide6.QtGui import QImage
 
 class VideoRecorderWorker(QObject):
     started = Signal(str)
+    warning = Signal(str)
     failed = Signal(str)
     finished = Signal()
 
@@ -88,7 +89,6 @@ class VideoRecorderWorker(QObject):
                 stderr=subprocess.DEVNULL,
             )
         except Exception:
-            self.failed.emit("無法啟動 ffmpeg。")
             return None
 
     def _start_opencv_writer(self, width: int, height: int) -> Optional[object]:
@@ -109,9 +109,17 @@ class VideoRecorderWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        try:
+            self._record_frames()
+        except Exception as exc:
+            self.failed.emit(f"影片錄製發生未預期錯誤：{exc}")
+        finally:
+            self._release_encoders()
+            self.finished.emit()
+
+    def _record_frames(self) -> None:
         if np is None:
             self.failed.emit("NumPy 未安裝，無法錄製影片。")
-            self.finished.emit()
             return
 
         first_frame_deadline = time.monotonic() + 3.0
@@ -157,7 +165,7 @@ class VideoRecorderWorker(QObject):
                 if self._proc is not None and self._proc.poll() is not None:
                     self._proc = self._start_ffmpeg(self._width, self._height, "mpeg4")
                     if self._proc is not None:
-                        self.failed.emit("libx264 不可用，已改用 mpeg4。")
+                        self.warning.emit("libx264 不可用，已改用 mpeg4。")
 
                 if self._proc is None:
                     self._writer = self._start_opencv_writer(self._width, self._height)
@@ -175,7 +183,7 @@ class VideoRecorderWorker(QObject):
                 except Exception:
                     pass
                 self._proc = None
-                self.failed.emit("ffmpeg 已中止，嘗試改用 OpenCV。")
+                self.warning.emit("ffmpeg 已中止，嘗試改用 OpenCV。")
                 if self._writer is None:
                     self._writer = self._start_opencv_writer(int(frame.shape[1]), int(frame.shape[0]))
                 if self._writer is None:
@@ -192,6 +200,7 @@ class VideoRecorderWorker(QObject):
                 self.failed.emit("寫入影片失敗，請確認 ffmpeg 狀態與磁碟空間。")
                 break
 
+    def _release_encoders(self) -> None:
         if self._proc is not None:
             try:
                 if self._proc.stdin is not None:
@@ -209,6 +218,3 @@ class VideoRecorderWorker(QObject):
             except Exception:
                 pass
             self._writer = None
-
-        if self._started:
-            self.finished.emit()

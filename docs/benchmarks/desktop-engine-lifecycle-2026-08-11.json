@@ -1,0 +1,52 @@
+{
+  "capture": {
+    "date": "2026-08-11",
+    "source_revision": "7aeb7df",
+    "working_tree_changes": [
+      "Qt-free pipeline and analysis lifecycle controller",
+      "recording and replay shutdown state ownership",
+      "injected BLE runtime ownership"
+    ],
+    "command": ".venv\\Scripts\\python -m scripts.desktop_engine_benchmark --port 5003 --samples 10 --output build\\benchmark-lifecycle.json"
+  },
+  "engine": {
+    "command": {
+      "latency_ms": {
+        "max": 40.728,
+        "mean": 26.04,
+        "min": 19.055,
+        "p50": 20.636,
+        "p95": 40.728
+      },
+      "samples": 10
+    },
+    "rss_bytes_at_ready": 267120640,
+    "rss_mib_at_ready": 254.746,
+    "startup_to_api_ready_ms": 1848.248
+  },
+  "noise_control": {
+    "loopback_only": true,
+    "samples": 10,
+    "warmup_discarded": 5
+  },
+  "platform": "win32",
+  "preview": {
+    "base64_bytes": 12156,
+    "dimensions": [640, 360],
+    "dispatch_delivered": 10,
+    "dispatch_frames_per_second": 13642.565,
+    "encode_latency_ms": {
+      "max": 1.438,
+      "mean": 1.222,
+      "min": 1.139,
+      "p50": 1.167,
+      "p95": 1.438
+    },
+    "jpeg_bytes": 9115,
+    "kind": "synthetic_in_process",
+    "limitations": "Excludes camera, network, Tauri WebView decode, and Flutter rendering",
+    "samples": 10
+  },
+  "python": "3.11.9",
+  "schema_version": 1
+}

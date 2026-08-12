@@ -40,10 +40,15 @@ This boundary is deliberately additive. The numeric paths in `rppg/`, `gui/fatig
 The production path starts `main.py --engine`. In this mode `MainWindow` no
 longer constructs the legacy Qt menu, central dashboard, or Qt overlay, and the
 engine path does not apply the visual QSS, window size, title bar, or status bar.
-The remaining Qt object is an internal event-loop/runtime adapter: it owns the
-existing worker, camera, recording, alarm, BLE, replay, rPPG, fatigue scoring,
-and calibration lifecycles while the desktop command API exposes explicit state
-to Flutter/Tauri.
+The remaining Qt `MainWindow` is an internal event-loop/runtime adapter. The
+Qt-free `EngineController` is the product-state authority for camera
+configuration, pipeline state, the Combined/RPPG/Fatigue worker topology,
+recording and replay/shutdown lifecycle state, and the injected BLE runtime.
+`MainWindow` still constructs the concrete QThreads, recording writers, Qt
+multimedia alarm backend, calibration adapters, and signal callbacks. Its
+`_pipeline_running` and `_recording` fields are transitional mirrors of concrete
+Qt resource state, not command/API authorities. The desktop command API exposes
+the controller-backed state to Flutter/Tauri.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:
@@ -66,6 +71,17 @@ and sample settings when comparing future changes rather than treating these
 values as hard product limits.
 The raw result and capture metadata are retained in
 `docs/benchmarks/desktop-engine-2026-08-10.json`.
+
+After extracting pipeline, analysis topology, recording/replay state, shutdown
+sequencing, and BLE ownership into the Qt-free controller, the 2026-08-11 run
+measured 254.746 MiB RSS, 1848.248 ms startup, `state.get` p50 20.636 ms / p95
+40.728 ms, and JPEG encode mean 1.222 ms. A later single run measured 255.059
+MiB RSS, 2476.652 ms startup, `state.get` p50 19.789 ms / p95 40.929 ms, and
+JPEG encode mean 1.473 ms. This small sample is suitable for detecting large
+lifecycle regressions only; startup and encoding variance must not be treated
+as a performance improvement or regression without repeated measurements. Raw
+baseline data is retained in
+`docs/benchmarks/desktop-engine-lifecycle-2026-08-11.json`.
 
 ## Build prerequisites
 
