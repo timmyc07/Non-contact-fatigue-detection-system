@@ -1312,7 +1312,7 @@ class MainWindow(QMainWindow):
             "_lbl_belt_hrv_sdnn", "_lbl_belt_hrv_warmup", "_lbl_belt_last_error",
             "_lbl_belt_location", "_lbl_belt_notifications", "_lbl_belt_rr",
             "_lbl_belt_rssi", "_lbl_belt_stale", "_lbl_belt_status", "_lbl_bench",
-            "_lbl_cam_hint", "_lbl_camera", "_lbl_codec", "_lbl_dev_belt", "_lbl_dev_cam",
+            "_lbl_camera", "_lbl_codec", "_lbl_dev_belt", "_lbl_dev_cam",
             "_lbl_dev_mp", "_lbl_face", "_lbl_fps", "_lbl_opacity", "_lbl_pipeline",
             "_lbl_preview_telemetry", "_lbl_profile_status", "_lbl_record",
             "_mon_blink", "_mon_bpm",
@@ -1329,21 +1329,6 @@ class MainWindow(QMainWindow):
         self._mon_wave = _HeadlessControl()
         self._brand_dot = _HeadlessControl()
         self._belt_banner_dot = _HeadlessControl()
-
-        camera = self._engine_controller.camera_snapshot()
-        self._cmb_camera = _HeadlessControl()
-        self._cmb_camera.addItem("-- select camera --", None)
-        self._cmb_resolution = _HeadlessControl()
-        self._cmb_resolution.addItems(list(CAMERA_RESOLUTIONS))
-        self._cmb_resolution.setCurrentText(camera.resolution)
-        self._cmb_fps = _HeadlessControl()
-        self._cmb_fps.addItems(list(CAMERA_FPS_OPTIONS))
-        self._cmb_fps.setCurrentText(camera.fps)
-        self._cmb_backend = _HeadlessControl()
-        for backend in CAMERA_BACKENDS:
-            self._cmb_backend.addItem(backend.upper(), backend)
-        self._select_combo_by_data(self._cmb_backend, camera.backend)
-        self._chk_horizontal_flip = _HeadlessControl(checked=camera.horizontal_flip)
 
         callbacks = (
             lambda: self._toggle_overlay_preference("metrics"),
@@ -3325,6 +3310,8 @@ class MainWindow(QMainWindow):
         return False
 
     def _select_camera_by_index(self, cam_idx: int) -> bool:
+        if self._engine_mode:
+            raise RuntimeError("Camera widgets are unavailable in engine mode")
         for i in range(self._cmb_camera.count()):
             if self._cmb_camera.itemData(i) == cam_idx:
                 try:
@@ -3337,6 +3324,8 @@ class MainWindow(QMainWindow):
 
     def _sync_camera_widgets(self) -> None:
         """Mirror controller-owned camera state into the legacy widgets."""
+        if self._engine_mode:
+            return
         camera = self._engine_controller.camera_snapshot()
         for widget in (
             self._cmb_resolution,
@@ -3603,22 +3592,36 @@ class MainWindow(QMainWindow):
 
     def _start_camera_scan(self) -> None:
         """Refresh camera list (same strategy as V1: DirectShow names first, no OpenCV open)."""
-        self._lbl_cam_hint.setText("載入中…")
-        self._cmb_camera.setEnabled(False)
+        if not self._engine_mode:
+            self._lbl_cam_hint.setText("載入中…")
+            self._cmb_camera.setEnabled(False)
         dev_list: list[tuple[int, str]] = []
         try:
             from gui.camera_devices import list_camera_devices
 
             dev_list = list_camera_devices(max_index=20, warmup_read=True)
         except Exception as exc:
-            self._append_log(f"攝影機列舉失敗：{exc}")
+            message = f"攝影機列舉失敗：{exc}"
+            if self._engine_mode:
+                logger.warning(message)
+            else:
+                self._append_log(message)
         self._finish_camera_scan_ui(dev_list)
 
     def _finish_camera_scan_ui(self, dev_list: list[tuple[int, str]]) -> None:
-        """Populate combo from scan result (runs on GUI thread)."""
+        """Update the controller catalog and mirror it to legacy widgets."""
         self._engine_controller.replace_cameras(
             CameraDevice(index, f"[{index}] {name}") for index, name in dev_list
         )
+        if self._engine_mode:
+            if dev_list:
+                logger.info("攝影機清單已更新：%d 個項目。", len(dev_list))
+            else:
+                logger.warning(
+                    "未取得攝影機清單。Linux 請檢查 /dev/video*、video 群組權限，"
+                    "或執行 scripts/diagnose_camera.py。"
+                )
+            return
         camera = self._engine_controller.camera_snapshot()
         self._cmb_camera.blockSignals(True)
         try:

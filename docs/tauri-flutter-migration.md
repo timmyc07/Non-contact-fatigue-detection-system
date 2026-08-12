@@ -47,6 +47,10 @@ Combined/RPPG/Fatigue worker topology, recording and replay/shutdown lifecycle
 state, and the injected BLE runtime. The desired analysis mode remains valid
 while the pipeline is stopped; starting the pipeline consumes that controller
 state instead of reading hidden Qt controls.
+Camera discovery, selection, resolution, FPS, backend, and horizontal-flip
+commands now update the controller directly in engine mode. Camera combo boxes
+and the flip checkbox exist only as legacy presentation mirrors outside the
+production path.
 Overlay visibility, lock, group-enable, and opacity preferences now live in the
 Qt-free `OverlayRuntimeState`. Engine mode does not construct the legacy Qt
 overlay, overlay checkboxes/sliders, or a no-op Qt-shaped overlay adapter. The

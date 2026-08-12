@@ -10,6 +10,7 @@
 - 本文件描述目前程式碼實作，不代表臨床醫療等級量測；rPPG 與疲勞分數仍需搭配資料集與真實裝置驗證。
 - 既有部分中文文件與註解有編碼損壞，本文件改以可讀程式邏輯、測試與設定檔為準。
 - 正式產品唯一可見主面板與 Overlay 為 Tauri v2 + Flutter Web；PySide6 `MainWindow` 僅保留隱藏的 engine runtime、Qt worker 與 adapter 責任，不是使用者操作入口。
+- 相機裝置清單、選擇、解析度、FPS、後端與水平翻轉由 Qt-free controller 保存；engine mode 的掃描與 desktop commands 直接更新 controller，不建立相機 combo/checkbox 假元件。
 - 分析模式的期望狀態由 Qt-free controller 保存；管線停止後仍保留，設定讀寫、desktop state、worker failure 與下一次啟動不再以隱藏 Qt checkbox 作為狀態來源。
 - Overlay 的顯示、數值、鎖定、總開關、透明度與 Tauri 視窗 geometry 由 Qt-free presentation state 保存；engine mode 不建立 Qt Overlay、假 checkbox/slider 或 no-op adapter。Geometry 使用 physical pixel `{x,y,width,height}`，支援多螢幕負座標，原生視窗回報實際值後由 Flutter 同步回 Python runtime。
 - 回放資料夾、平行數、標註開關與進度投影由 Qt-free replay state 保存；engine mode 不建立 replay spinbox、checkbox、狀態 label 或按鈕。Replay lifecycle 仍由 controller 管理，QThread 與既有 worker 建立留在 Qt adapter。

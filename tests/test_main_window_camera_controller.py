@@ -87,8 +87,15 @@ def test_camera_settings_commands_state_and_scan_use_controller(
     assert configured.resolution == "1280×800"
     assert configured.fps == "60"
     assert configured.horizontal_flip is True
-    assert window._cmb_camera.currentData() == 0
-    assert window._cmb_resolution.currentText() == "1280×800"
+    for name in (
+        "_cmb_camera",
+        "_cmb_resolution",
+        "_cmb_fps",
+        "_cmb_backend",
+        "_chk_horizontal_flip",
+        "_lbl_cam_hint",
+    ):
+        assert name not in window.__dict__
 
     saved_path = window._save_settings()
     saved_camera = json.loads(saved_path.read_text(encoding="utf-8"))["camera"]
