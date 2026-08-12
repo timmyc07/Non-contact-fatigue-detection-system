@@ -97,6 +97,12 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_chk_metrics",
         "_chk_lock",
         "_sld_opacity",
+        "_chk_replay_annotated",
+        "_spn_replay_jobs",
+        "_lbl_replay_current",
+        "_lbl_replay_dir",
+        "_lbl_replay_parallel_status",
+        "_lbl_replay_result",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
@@ -1155,6 +1161,199 @@ def test_replay_commands_configure_start_and_stop(
     assert events == [expected_start, "stop"]
 
 
+def test_headless_replay_state_does_not_depend_on_legacy_widget_mirrors(
+    settings_window: MainWindow,
+    tmp_path: Path,
+) -> None:
+    configured = settings_window._handle_desktop_command(
+        "replay.configure",
+        {"path": str(tmp_path), "jobs": 4, "annotated": True},
+    )
+
+    assert configured["replay_dataset_dir"] == str(tmp_path)
+    assert configured["replay_jobs"] == 4
+    assert configured["replay_annotated"] is True
+    assert not hasattr(settings_window, "_spn_replay_jobs")
+    assert not hasattr(settings_window, "_chk_replay_annotated")
+
+
+def test_replay_configure_is_atomic_when_later_field_is_invalid(
+    settings_window: MainWindow,
+    tmp_path: Path,
+) -> None:
+    before = settings_window._replay_state.snapshot()
+
+    with pytest.raises(ValueError, match="jobs"):
+        settings_window._handle_desktop_command(
+            "replay.configure",
+            {"path": str(tmp_path), "jobs": 9, "annotated": True},
+        )
+
+    assert settings_window._replay_state.snapshot() == before
+
+
+def test_headless_replay_progress_projects_without_qt_replay_widgets(
+    settings_window: MainWindow,
+) -> None:
+    summary = ReplayVideoSummary(
+        subject="01",
+        label="0",
+        label_name="Alert",
+        video_path="sample.mp4",
+        frames=12,
+        face_frames=10,
+        fps=30.0,
+        width=640,
+        height=480,
+    )
+    settings_window._replay_state.begin(
+        mode_label="回放中",
+        parallel_status_text="處理清單：等待第一支影片",
+    )
+
+    settings_window._on_replay_progress("video_start", 1, 2, summary)
+    settings_window._on_replay_progress("video_done", 1, 2, summary)
+
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["replay_total"] == 2
+    assert state["replay_done"] == 1
+    assert "已完成 1/2" in state["replay_current"]
+    assert "已完成：1/2" in state["replay_parallel_status"]
+
+
+def test_replay_runtime_state_supplies_existing_worker_parameters(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeSignal:
+        def connect(self, _callback) -> None:
+            pass
+
+    class FakeThread:
+        def __init__(self, _parent) -> None:
+            self.started = FakeSignal()
+            self.finished = FakeSignal()
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def quit(self) -> None:
+            pass
+
+        def deleteLater(self) -> None:
+            pass
+
+    class FakeWorker:
+        def __init__(self, dataset_root: Path, **kwargs: object) -> None:
+            captured["dataset_root"] = dataset_root
+            captured.update(kwargs)
+            self.progress = FakeSignal()
+            self.preview_frame = FakeSignal()
+            self.finished_ok = FakeSignal()
+            self.failed = FakeSignal()
+            self.finished = FakeSignal()
+
+        def moveToThread(self, _thread) -> None:
+            pass
+
+        def run(self) -> None:
+            pass
+
+        def deleteLater(self) -> None:
+            pass
+
+    monkeypatch.setattr(main_window_module, "QThread", FakeThread)
+    monkeypatch.setattr(main_window_module, "VideoReplayWorker", FakeWorker)
+    settings_window._replay_state.configure(
+        dataset_dir=tmp_path,
+        jobs=3,
+        annotated=True,
+    )
+
+    settings_window._start_replay_run(
+        jobs=3,
+        preview_enabled=False,
+        mode_label="平行驗證中 x3",
+    )
+
+    assert captured == {
+        "dataset_root": tmp_path,
+        "write_annotated_video": True,
+        "jobs": 3,
+        "preview_enabled": False,
+        "started": True,
+    }
+    assert settings_window._engine_controller.replay_snapshot().running is True
+    settings_window._replay_thread = None
+    settings_window._replay_worker = None
+    settings_window._engine_controller.finish_replay()
+
+
+def test_replay_start_failure_rolls_back_controller_and_presentation(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    before = settings_window._replay_state.configure(
+        dataset_dir=tmp_path,
+        jobs=2,
+        annotated=False,
+    )
+
+    class FailingThread:
+        def __init__(self, _parent) -> None:
+            self.started = type("Signal", (), {"connect": lambda self, callback: None})()
+            self.finished = type("Signal", (), {"connect": lambda self, callback: None})()
+
+        def start(self) -> None:
+            raise RuntimeError("thread start failed")
+
+        def quit(self) -> None:
+            pass
+
+        def deleteLater(self) -> None:
+            pass
+
+    class FakeSignal:
+        def connect(self, _callback) -> None:
+            pass
+
+    class FakeWorker:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.progress = FakeSignal()
+            self.preview_frame = FakeSignal()
+            self.finished_ok = FakeSignal()
+            self.failed = FakeSignal()
+            self.finished = FakeSignal()
+
+        def moveToThread(self, _thread) -> None:
+            pass
+
+        def run(self) -> None:
+            pass
+
+        def deleteLater(self) -> None:
+            pass
+
+    monkeypatch.setattr(main_window_module, "QThread", FailingThread)
+    monkeypatch.setattr(main_window_module, "VideoReplayWorker", FakeWorker)
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        settings_window._start_replay_run(
+            jobs=2,
+            preview_enabled=False,
+            mode_label="平行驗證中 x2",
+        )
+
+    assert settings_window._replay_state.snapshot() == before
+    assert settings_window._engine_controller.replay_snapshot().running is False
+    assert settings_window._replay_thread is None
+    assert settings_window._replay_worker is None
+
+
 def test_replay_command_uses_controller_pipeline_state(
     settings_window: MainWindow,
     monkeypatch: pytest.MonkeyPatch,
@@ -1168,7 +1367,7 @@ def test_replay_command_uses_controller_pipeline_state(
     settings_window._engine_controller.start_pipeline()
     settings_window._pipeline_running = False
     settings_window._recording = False
-    settings_window._replay_dataset_dir = tmp_path
+    settings_window._replay_state.configure(dataset_dir=tmp_path)
     starts: list[bool] = []
     monkeypatch.setattr(
         settings_window,
@@ -1192,7 +1391,7 @@ def test_replay_start_rechecks_controller_before_creating_adapter(
     tmp_path: Path,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._replay_dataset_dir = tmp_path
+    settings_window._replay_state.configure(dataset_dir=tmp_path)
     start_replay = settings_window._start_replay
     thread_created: list[bool] = []
 

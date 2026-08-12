@@ -51,6 +51,11 @@ Overlay visibility, lock, group-enable, and opacity preferences now live in the
 Qt-free `OverlayRuntimeState`. Engine mode does not construct the legacy Qt
 overlay, overlay checkboxes/sliders, or a no-op Qt-shaped overlay adapter. The
 legacy Qt widgets remain presentation mirrors only in the non-production path.
+Replay folder, jobs, annotated-output preference, and progress text/counts now
+live in the Qt-free `ReplayRuntimeState`. Engine mode no longer constructs the
+replay spinbox, checkbox, folder/current/result/status labels, or replay buttons.
+`EngineController` still owns replay lifecycle, while `MainWindow` remains the
+adapter that constructs the existing QThread and `VideoReplayWorker`.
 `MainWindow` still constructs the concrete QThreads, recording writers, Qt
 multimedia alarm backend, calibration adapters, and signal callbacks. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
@@ -61,6 +66,9 @@ The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is not yet part of this state model. Engine settings
 continue to write an empty `overlay.geometry` only for backward schema
 compatibility until a Tauri window-position bridge owns that preference.
+Replay configuration remains session-scoped as before; this extraction does
+not add a settings JSON schema. Worker parameters, deterministic timestamps,
+annotated output, UTA-RLDD validation reports, and analysis values are unchanged.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:

@@ -100,6 +100,7 @@ from gui.personal_profile import (
     PersonalProfileStore,
     resolve_active_baseline,
 )
+from gui.replay_runtime_state import ReplayRuntimeState
 from gui.runtime_paths import data_path
 from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
@@ -1201,13 +1202,12 @@ class MainWindow(QMainWindow):
         self._web_last_frame_emit = 0.0
         self._replay_thread: QThread | None = None
         self._replay_worker: VideoReplayWorker | None = None
-        self._replay_dataset_dir: Path | None = None
+        self._replay_state = ReplayRuntimeState()
         self._replay_stopping = False
-        self._replay_mode_label = "回放中"
-        self._replay_total_count = 0
-        self._replay_done_count = 0
         self._replay_active_videos: dict[str, ReplayVideoSummary] = {}
         self._replay_recent_done: list[str] = []
+        self._replay_queue_rows: dict[str, int] = {}
+        self._replay_completed_summaries: list[ReplayVideoSummary] = []
         self._alarm_config = AlarmConfig.defaults()
         self._rppg_calibration_store = CalibrationVersionStore()
         # 個人清醒基線：跨 session 載入上次的 manual profile（無則 None → 行為門檻走預設）。
@@ -1290,9 +1290,7 @@ class MainWindow(QMainWindow):
         self._chk_auto_record = _HeadlessControl()
         self._chk_belt_calib = _HeadlessControl()
         self._chk_auto_capture_belt = _HeadlessControl()
-        self._chk_replay_annotated = _HeadlessControl()
         self._spn_auto_capture_seconds = _HeadlessControl(value=60)
-        self._spn_replay_jobs = _HeadlessControl(value=2)
         self._act_web_allow_lan = _HeadlessControl()
         self._log = _HeadlessControl()
         self._mon_contrib_bars: dict[str, Any] = {}
@@ -1304,7 +1302,7 @@ class MainWindow(QMainWindow):
         # contracts fail loudly instead of being hidden by a dynamic adapter.
         control_names = (
             "_btn_auto_capture", "_btn_bench", "_btn_record", "_btn_record_baseline",
-            "_btn_replay_parallel", "_btn_replay_start", "_btn_replay_stop", "_btn_start",
+            "_btn_start",
             "_lbl_belt_address", "_lbl_belt_banner_battery", "_lbl_belt_banner_bpm",
             "_lbl_belt_banner_device", "_lbl_belt_banner_rssi", "_lbl_belt_battery",
             "_lbl_belt_bpm", "_lbl_belt_calib_confidence", "_lbl_belt_calib_corr_resid",
@@ -1319,14 +1317,12 @@ class MainWindow(QMainWindow):
             "_lbl_cam_hint", "_lbl_camera", "_lbl_codec", "_lbl_dev_belt", "_lbl_dev_cam",
             "_lbl_dev_mp", "_lbl_face", "_lbl_fps", "_lbl_opacity", "_lbl_pipeline",
             "_lbl_preview_telemetry", "_lbl_profile_status", "_lbl_record",
-            "_lbl_replay_current", "_lbl_replay_dir", "_lbl_replay_parallel_status",
-            "_lbl_replay_preview", "_lbl_replay_result", "_lbl_replay_sum_avg",
-            "_lbl_replay_sum_fail", "_lbl_replay_sum_warn", "_mon_blink", "_mon_bpm",
+            "_mon_blink", "_mon_bpm",
             "_mon_bpm_delta", "_mon_ear", "_mon_expr", "_mon_fused_level",
             "_mon_fused_score", "_mon_gaze", "_mon_head", "_mon_hrv_conf", "_mon_lfhf",
             "_mon_perclos", "_mon_rec_pill", "_mon_rmssd", "_mon_score_bar",
             "_mon_score_big", "_mon_sdnn", "_mon_sqi", "_mon_trend", "_mon_warmup",
-            "_tag_mesh", "_tag_rppg", "_frame_replay_preview",
+            "_tag_mesh", "_tag_rppg",
         )
         for name in control_names:
             self.__dict__[name] = _HeadlessControl()
@@ -1426,6 +1422,33 @@ class MainWindow(QMainWindow):
         self._sync_overlay_controls()
         self._apply_overlay_state()
         self._settings_dirty = True
+
+    def _sync_replay_controls(self) -> None:
+        if self._engine_mode:
+            return
+        state = self._replay_state.snapshot()
+        self._spn_replay_jobs.blockSignals(True)
+        self._chk_replay_annotated.blockSignals(True)
+        try:
+            self._spn_replay_jobs.setValue(state.jobs)
+            self._chk_replay_annotated.setChecked(state.annotated)
+        finally:
+            self._spn_replay_jobs.blockSignals(False)
+            self._chk_replay_annotated.blockSignals(False)
+        self._lbl_replay_dir.setText(
+            str(state.dataset_dir) if state.dataset_dir is not None else "尚未選擇資料夾"
+        )
+        self._lbl_replay_current.setText(state.current_text)
+        self._lbl_replay_result.setText(state.result_text)
+        self._lbl_replay_parallel_status.setText(state.parallel_status_text)
+
+    def _configure_replay(self, **changes: object) -> None:
+        self._replay_state.configure(**changes)
+        self._sync_replay_controls()
+
+    def _update_replay_presentation(self, **changes: object) -> None:
+        self._replay_state.update_presentation(**changes)
+        self._sync_replay_controls()
 
     def _configure_analysis(
         self,
@@ -2484,9 +2507,6 @@ class MainWindow(QMainWindow):
 
     # ── 影片回測頁 ────────────────────────────────────────────────────────────
     def _build_replay_page(self) -> QWidget:
-        self._replay_queue_rows: dict[str, int] = {}
-        self._replay_completed_summaries: list[ReplayVideoSummary] = []
-
         page = QWidget()
         page_l = QVBoxLayout(page)
         page_l.setContentsMargins(20, 16, 20, 16)
@@ -2523,7 +2543,13 @@ class MainWindow(QMainWindow):
         self._spn_replay_jobs.setRange(1, 4)
         self._spn_replay_jobs.setValue(2)
         self._spn_replay_jobs.setPrefix("平行數 ")
+        self._spn_replay_jobs.valueChanged.connect(
+            lambda value: self._configure_replay(jobs=value)
+        )
         self._chk_replay_annotated = QCheckBox("輸出標註影片")
+        self._chk_replay_annotated.toggled.connect(
+            lambda checked: self._configure_replay(annotated=checked)
+        )
         tb.addWidget(self._btn_replay_start)
         tb.addWidget(self._btn_replay_parallel)
         tb.addWidget(self._btn_replay_stop)
@@ -3970,10 +3996,8 @@ class MainWindow(QMainWindow):
             self._act_web_allow_lan.blockSignals(False)
             self._schedule_web_server_restart()
         if "replay" in selected:
-            self._replay_dataset_dir = None
-            self._spn_replay_jobs.setValue(2)
-            self._chk_replay_annotated.setChecked(False)
-            self._lbl_replay_dir.setText("尚未選擇資料夾")
+            self._replay_state.reset_configuration()
+            self._sync_replay_controls()
         self._settings_dirty = True
 
     def _desktop_control_state(self) -> dict[str, Any]:
@@ -4037,15 +4061,6 @@ class MainWindow(QMainWindow):
             "profile_loaded": self._personal_profile is not None,
             "replay_running": replay.running,
             "replay_stopping": replay.stopping,
-            "replay_dataset_dir": str(self._replay_dataset_dir or ""),
-            "replay_jobs": int(self._spn_replay_jobs.value()),
-            "replay_annotated": self._chk_replay_annotated.isChecked(),
-            "replay_mode": str(self._replay_mode_label),
-            "replay_total": int(self._replay_total_count),
-            "replay_done": int(self._replay_done_count),
-            "replay_current": self._lbl_replay_current.text(),
-            "replay_result": self._lbl_replay_result.text(),
-            "replay_parallel_status": self._lbl_replay_parallel_status.text(),
             "belt_config": {
                 "name_prefix": self._belt_cfg.name_prefix if self._belt_cfg else "",
                 "address": self._belt_cfg.address if self._belt_cfg else "",
@@ -4054,6 +4069,7 @@ class MainWindow(QMainWindow):
             },
         }
         state.update(self._overlay_state.to_desktop_state())
+        state.update(self._replay_state.to_desktop_state())
         return state
 
     def _set_combo_value(self, combo: QComboBox, value: object, *, by_data: bool = False) -> None:
@@ -4215,6 +4231,7 @@ class MainWindow(QMainWindow):
             replay = self._engine_controller.replay_snapshot()
             if replay.running or self._replay_thread is not None:
                 raise BusyError("Stop the replay before changing replay settings")
+            replay_changes: dict[str, object] = {}
             if "path" in args:
                 raw_path = args.get("path")
                 if not isinstance(raw_path, str) or not raw_path.strip():
@@ -4222,15 +4239,16 @@ class MainWindow(QMainWindow):
                 selected = Path(raw_path).expanduser()
                 if not selected.exists() or not selected.is_dir():
                     raise ValueError(f"Replay folder is unavailable: {selected}")
-                self._replay_dataset_dir = selected
-                self._lbl_replay_dir.setText(str(selected))
+                replay_changes["dataset_dir"] = selected
             if "jobs" in args:
                 jobs = args.get("jobs")
                 if isinstance(jobs, bool) or not isinstance(jobs, int) or not 1 <= jobs <= 4:
                     raise ValueError("jobs must be between 1 and 4")
-                self._spn_replay_jobs.setValue(jobs)
+                replay_changes["jobs"] = jobs
             if "annotated" in args:
-                self._chk_replay_annotated.setChecked(self._require_bool(args, "annotated"))
+                replay_changes["annotated"] = self._require_bool(args, "annotated")
+            if replay_changes:
+                self._configure_replay(**replay_changes)
 
         elif command == "replay.set":
             enabled = self._require_bool(args, "enabled")
@@ -4241,7 +4259,7 @@ class MainWindow(QMainWindow):
                 pipeline = self._engine_controller.pipeline_snapshot()
                 if pipeline.running or pipeline.recording:
                     raise BusyError("Stop the live pipeline and recording before replay")
-                if self._replay_dataset_dir is None:
+                if self._replay_state.snapshot().dataset_dir is None:
                     raise ValueError("Choose a replay folder before starting replay")
                 mode = str(args.get("mode", "single"))
                 if mode == "parallel":
@@ -4676,13 +4694,10 @@ class MainWindow(QMainWindow):
         self._start_replay_run(jobs=1, preview_enabled=True, mode_label="回放中")
 
     def _start_replay_parallel(self, *, notify: bool = True) -> None:
-        jobs = max(1, int(self._spn_replay_jobs.value()))
-        if jobs > 4:
-            jobs = 4
-            self._spn_replay_jobs.setValue(jobs)
-            self._append_log("[影片回測] 平行數已自動降為 4，避免 Windows 多進程與 MediaPipe/影片編碼器資源壓力過高")
-        if self._chk_replay_annotated.isChecked():
-            self._chk_replay_annotated.setChecked(False)
+        replay_state = self._replay_state.snapshot()
+        jobs = replay_state.jobs
+        if replay_state.annotated:
+            self._configure_replay(annotated=False)
             self._append_log("[影片回測] 平行驗證已自動關閉輸出標註影片；需要標註畫面請用「開始批次」單工模式")
             if notify:
                 self._notify_user(
@@ -4701,19 +4716,21 @@ class MainWindow(QMainWindow):
         if pipeline.running or pipeline.recording:
             self._notify_user("影片回測", "請先停止即時攝影機流程與錄影，再啟動影片批次測試。", level="info")
             return
-        if self._replay_dataset_dir is None:
+        replay_state = self._replay_state.snapshot()
+        if replay_state.dataset_dir is None:
             self._append_log("[影片回測] 尚未由正式桌面面板設定資料夾")
             return
-        if not self._replay_dataset_dir.exists():
-            self._notify_user("影片回測", f"找不到資料夾：\n{self._replay_dataset_dir}")
+        if not replay_state.dataset_dir.exists():
+            self._notify_user("影片回測", f"找不到資料夾：\n{replay_state.dataset_dir}")
             return
 
+        previous_replay_state = self._replay_state.snapshot()
         self._engine_controller.start_replay()
         try:
             thread = QThread(self)
             worker = VideoReplayWorker(
-                self._replay_dataset_dir,
-                write_annotated_video=self._chk_replay_annotated.isChecked(),
+                replay_state.dataset_dir,
+                write_annotated_video=replay_state.annotated,
                 jobs=jobs,
                 preview_enabled=preview_enabled,
             )
@@ -4732,38 +4749,41 @@ class MainWindow(QMainWindow):
             self._replay_thread = thread
             self._replay_worker = worker
             self._replay_stopping = False
-            self._replay_mode_label = mode_label
-            self._replay_total_count = 0
-            self._replay_done_count = 0
+            self._replay_state.begin(
+                mode_label=mode_label,
+                parallel_status_text=(
+                    "處理清單：等待第一支影片"
+                    if preview_enabled
+                    else "處理清單：平行驗證等待工作派發"
+                ),
+            )
             self._replay_active_videos.clear()
             self._replay_recent_done.clear()
             self._replay_queue_reset()
             self._set_replay_controls_running(True)
-            self._bar_replay_progress.setRange(0, 0)
-            self._lbl_replay_current.setText("目前影片：準備中")
-            self._lbl_replay_result.setText("摘要檔：--")
-            if preview_enabled:
-                self._lbl_replay_parallel_status.setText("處理清單：等待第一支影片")
-            else:
-                self._lbl_replay_parallel_status.setText("處理清單：平行驗證等待工作派發")
-            self._lbl_replay_preview.clear()
-            if preview_enabled:
-                self._lbl_replay_preview.setText("影片預覽載入中")
-            else:
-                self._lbl_replay_preview.setText("平行驗證中：預覽停用，以提升批次速度")
+            self._sync_replay_controls()
+            if not self._engine_mode:
+                self._bar_replay_progress.setRange(0, 0)
+                self._lbl_replay_preview.clear()
+                if preview_enabled:
+                    self._lbl_replay_preview.setText("影片預覽載入中")
+                else:
+                    self._lbl_replay_preview.setText("平行驗證中：預覽停用，以提升批次速度")
             self._lbl_pipeline.setText(f"管線：影片回測 {mode_label}")
             self._lbl_camera.setText("影片：準備中")
             self._lbl_face.setText("臉部：統計中")
             self._lbl_fps.setText("FPS：—")
             self._lbl_codec.setText("解析度：—")
             self._append_log(
-                f"[影片回測] 開始{mode_label}：{self._replay_dataset_dir} "
+                f"[影片回測] 開始{mode_label}：{replay_state.dataset_dir} "
                 f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
             )
             thread.start()
         except Exception:
             self._replay_thread = None
             self._replay_worker = None
+            self._replay_state.restore(previous_replay_state)
+            self._sync_replay_controls()
             self._set_replay_controls_running(False)
             self._engine_controller.finish_replay()
             raise
@@ -4774,14 +4794,19 @@ class MainWindow(QMainWindow):
         self._engine_controller.request_replay_stop()
         self._replay_stopping = True
         self._replay_worker.request_stop()
-        self._btn_replay_stop.setEnabled(False)
-        self._btn_replay_stop.setText("停止中")
-        self._lbl_replay_current.setText("目前影片：正在停止，請稍候")
-        self._lbl_replay_parallel_status.setText("處理清單：正在停止，已派發的影片會安全收尾")
+        self._update_replay_presentation(
+            current_text="目前影片：正在停止，請稍候",
+            parallel_status_text="處理清單：正在停止，已派發的影片會安全收尾",
+        )
+        if not self._engine_mode:
+            self._btn_replay_stop.setEnabled(False)
+            self._btn_replay_stop.setText("停止中")
         self._lbl_pipeline.setText("管線：影片回測 停止中")
         self._append_log("[影片回測] 已送出停止請求，等待目前 frame 安全收尾")
 
     def _set_replay_controls_running(self, running: bool) -> None:
+        if self._engine_mode:
+            return
         self._btn_replay_start.setEnabled(not running)
         self._btn_replay_parallel.setEnabled(not running)
         self._btn_replay_stop.setEnabled(running)
@@ -4796,25 +4821,38 @@ class MainWindow(QMainWindow):
         total: int,
         summary: ReplayVideoSummary | None,
     ) -> None:
-        self._replay_total_count = max(self._replay_total_count, total)
+        replay_state = self._replay_state.snapshot()
+        total_count = max(replay_state.total_count, total)
+        self._update_replay_presentation(total_count=total_count)
         if event == "video_start":
-            self._bar_replay_progress.setRange(0, max(total, 1))
-            self._bar_replay_progress.setValue(self._replay_done_count)
+            if not self._engine_mode:
+                self._bar_replay_progress.setRange(0, max(total, 1))
+                self._bar_replay_progress.setValue(replay_state.done_count)
             if summary is not None:
                 key = self._replay_video_key(summary)
                 self._replay_active_videos[key] = summary
                 self._replay_queue_upsert(summary, done=False)
-                self._lbl_replay_current.setText(
-                    f"目前影片：派發 {current}/{total}，正在跑 {len(self._replay_active_videos)} 支"
+                self._update_replay_presentation(
+                    current_text=(
+                        f"目前影片：派發 {current}/{total}，正在跑 "
+                        f"{len(self._replay_active_videos)} 支"
+                    )
                 )
-                self._update_replay_status_strip(summary, prefix=f"影片回測 {self._replay_mode_label}")
+                self._update_replay_status_strip(
+                    summary,
+                    prefix=f"影片回測 {self._replay_state.snapshot().mode_label}",
+                )
             else:
-                self._lbl_replay_current.setText(f"目前影片：{current}/{total}")
+                self._update_replay_presentation(
+                    current_text=f"目前影片：{current}/{total}"
+                )
             self._refresh_replay_parallel_status()
         elif event == "video_done":
-            self._bar_replay_progress.setRange(0, max(total, 1))
-            self._replay_done_count = max(self._replay_done_count, current)
-            self._bar_replay_progress.setValue(self._replay_done_count)
+            done_count = max(self._replay_state.snapshot().done_count, current)
+            self._update_replay_presentation(done_count=done_count)
+            if not self._engine_mode:
+                self._bar_replay_progress.setRange(0, max(total, 1))
+                self._bar_replay_progress.setValue(done_count)
             if summary is not None:
                 key = self._replay_video_key(summary)
                 self._replay_active_videos.pop(key, None)
@@ -4824,10 +4862,15 @@ class MainWindow(QMainWindow):
                 self._replay_recent_done.insert(0, self._format_replay_video_label(summary, include_status=True))
                 self._replay_recent_done = self._replay_recent_done[:3]
                 failed_text = "，此支失敗" if summary.status == "failed" else ""
-                self._lbl_replay_current.setText(
-                    f"目前影片：已完成 {self._replay_done_count}/{max(total, 1)}{failed_text}"
+                self._update_replay_presentation(
+                    current_text=(
+                        f"目前影片：已完成 {done_count}/{max(total, 1)}{failed_text}"
+                    )
                 )
-                self._update_replay_status_strip(summary, prefix=f"影片回測 {self._replay_mode_label}")
+                self._update_replay_status_strip(
+                    summary,
+                    prefix=f"影片回測 {self._replay_state.snapshot().mode_label}",
+                )
                 self._append_log(
                     "[影片回測] 完成 "
                     f"subject {summary.subject} label {summary.label} "
@@ -4838,16 +4881,20 @@ class MainWindow(QMainWindow):
             key = self._replay_video_key(summary)
             self._replay_active_videos[key] = summary
             if total > 0:
-                self._lbl_replay_current.setText(
+                current_text = (
                     f"目前影片：subject {summary.subject} / label {summary.label} "
                     f"{summary.frames}/{total} frames"
                 )
             else:
-                self._lbl_replay_current.setText(
+                current_text = (
                     f"目前影片：subject {summary.subject} / label {summary.label} "
                     f"{summary.frames} frames"
                 )
-            self._update_replay_status_strip(summary, prefix=f"影片回測 {self._replay_mode_label}")
+            self._update_replay_presentation(current_text=current_text)
+            self._update_replay_status_strip(
+                summary,
+                prefix=f"影片回測 {self._replay_state.snapshot().mode_label}",
+            )
             self._refresh_replay_parallel_status()
 
     def _replay_video_key(self, summary: ReplayVideoSummary) -> str:
@@ -4875,10 +4922,13 @@ class MainWindow(QMainWindow):
             active_preview.append(f"另 {len(active) - len(active_preview)} 支")
         active_text = "、".join(active_preview) if active_preview else "無"
         recent_text = "、".join(self._replay_recent_done) if self._replay_recent_done else "尚無"
-        total_text = str(self._replay_total_count) if self._replay_total_count > 0 else "?"
-        self._lbl_replay_parallel_status.setText(
-            f"進行中：{active_text}\n"
-            f"已完成：{self._replay_done_count}/{total_text}；最近完成：{recent_text}"
+        replay_state = self._replay_state.snapshot()
+        total_text = str(replay_state.total_count) if replay_state.total_count > 0 else "?"
+        self._update_replay_presentation(
+            parallel_status_text=(
+                f"進行中：{active_text}\n"
+                f"已完成：{replay_state.done_count}/{total_text}；最近完成：{recent_text}"
+            )
         )
 
     def _update_replay_status_strip(self, summary: ReplayVideoSummary, *, prefix: str) -> None:
@@ -4899,7 +4949,7 @@ class MainWindow(QMainWindow):
             self._lbl_codec.setText("解析度：—")
 
     def _on_replay_preview_frame(self, image: QImage) -> None:
-        if image.isNull():
+        if self._engine_mode or image.isNull():
             return
         pix = QPixmap.fromImage(image)
         target = self._frame_replay_preview.contentsRect().size()
@@ -4917,11 +4967,9 @@ class MainWindow(QMainWindow):
         self._lbl_replay_preview.setPixmap(scaled)
 
     def _on_replay_finished_ok(self, result: ReplayBatchResult) -> None:
-        self._bar_replay_progress.setRange(0, max(result.videos_total, 1))
-        self._bar_replay_progress.setValue(result.videos_done + result.videos_failed)
-        self._lbl_replay_result.setText(
-            f"摘要檔：{result.summary_csv}\n驗證報表：{result.validation_report_csv}\n完整欄位：{result.full_summary_csv}"
-        )
+        if not self._engine_mode:
+            self._bar_replay_progress.setRange(0, max(result.videos_total, 1))
+            self._bar_replay_progress.setValue(result.videos_done + result.videos_failed)
         stopped = any(summary.status == "stopped" for summary in result.summaries)
         if stopped or self._replay_stopping:
             state = "已停止"
@@ -4929,9 +4977,16 @@ class MainWindow(QMainWindow):
             state = "完成但有失敗"
         else:
             state = "完成"
-        self._lbl_replay_current.setText(f"目前影片：{state}")
-        self._replay_done_count = result.videos_done + result.videos_failed
-        self._replay_total_count = result.videos_total
+        self._update_replay_presentation(
+            current_text=f"目前影片：{state}",
+            result_text=(
+                f"摘要檔：{result.summary_csv}\n"
+                f"驗證報表：{result.validation_report_csv}\n"
+                f"完整欄位：{result.full_summary_csv}"
+            ),
+            done_count=result.videos_done + result.videos_failed,
+            total_count=result.videos_total,
+        )
         self._replay_active_videos.clear()
         if result.summaries and not self._replay_recent_done:
             self._replay_recent_done = [
@@ -4949,10 +5004,13 @@ class MainWindow(QMainWindow):
         )
 
     def _on_replay_failed(self, msg: str) -> None:
-        self._lbl_replay_current.setText("目前影片：批次失敗")
-        total_text = str(self._replay_total_count) if self._replay_total_count > 0 else "?"
-        self._lbl_replay_parallel_status.setText(
-            f"處理清單：批次失敗；已完成 {self._replay_done_count}/{total_text}"
+        replay_state = self._replay_state.snapshot()
+        total_text = str(replay_state.total_count) if replay_state.total_count > 0 else "?"
+        self._update_replay_presentation(
+            current_text="目前影片：批次失敗",
+            parallel_status_text=(
+                f"處理清單：批次失敗；已完成 {replay_state.done_count}/{total_text}"
+            ),
         )
         self._lbl_pipeline.setText("管線：影片回測 失敗")
         self._append_log(f"[影片回測] 批次失敗：{msg}")
@@ -4962,7 +5020,8 @@ class MainWindow(QMainWindow):
         self._replay_thread = None
         self._replay_worker = None
         self._replay_stopping = False
-        self._replay_mode_label = "回放中"
+        self._replay_state.finish_thread()
+        self._sync_replay_controls()
         self._set_replay_controls_running(False)
         if self._engine_controller.finish_replay():
             self._shutdown_engine()

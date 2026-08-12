@@ -70,7 +70,9 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 state 與 BLE runtime ownership；analysis desired state 在 pipeline 停止時仍由 controller
 保存，hidden Qt checkbox 僅為 legacy presentation mirror；`MainWindow` 僅作
 QThread/signal/Qt multimedia adapter；Overlay 偏好由 Qt-free `OverlayRuntimeState` 保存，
-engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter）：
+engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter；replay 的資料夾、jobs、
+annotated 與進度投影由 Qt-free `ReplayRuntimeState` 保存，engine mode 不建立 replay
+spinbox/checkbox/label 假元件）：
 
 ```
 CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  →  MainWindow adapter
@@ -92,6 +94,10 @@ hotkey 與 camera validation 分別保留在 Qt adapter 與 `gui/engine_controll
 Overlay 的 preview/metrics/locked/all/opacity 以 `OverlayRuntimeState` 為 runtime 與持久化來源；
 legacy Qt widgets 只在非 engine 路徑作 presentation mirror。Tauri Overlay 的位置與尺寸尚未
 接入此狀態模型，engine mode 目前僅為舊 settings schema 保留空白 `overlay.geometry`。
+Replay lifecycle 仍由 `EngineController` 管理；Flutter/Tauri 所需的 replay configuration 與
+progress payload 由 `ReplayRuntimeState` 提供，legacy Qt widgets 僅為 mirror，實際 QThread 與
+`VideoReplayWorker` 建立仍留在 `MainWindow` adapter。此狀態目前不寫入 settings JSON，維持既有
+當次執行設定契約。
 
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。
@@ -164,6 +170,9 @@ GUI/dashboard 顯示警告；免 GUI 診斷用 `python -m scripts.hr_belt_monito
 - **UTA-RLDD 情境**：`scripts/utarldd_replay.py`，`labeled=True`（預設），依 subject/label 資料夾結構解析、官方 label `0=Alert`/`5=Low Vigilant`/`10=Drowsy`、輸出 `recordings/utarldd_runs/` 並產把 `0/5/10` 當序位真值的 validation CSV。GUI 對應區塊為「影片回測」（`gui/main_window.py`，`_replay_*` 屬性）。
 
 修改 replay 路徑時：`labeled=True` 分支須維持既有 UTA-RLDD 行為（輸出路徑、檔名前綴、validation 產生），紅線仍為不改 `rppg/`/`fatigue_engine`/`fatigue_scorer` 數值行為。
+回放資料夾、平行數、標註開關與 desktop progress state 位於 Qt-free
+`gui/replay_runtime_state.py`；這只移動 presentation ownership，不改 deterministic timestamp、
+worker 參數、標註輸出、報表或分析數值。
 
 ```powershell
 .venv\Scripts\python -m scripts.video_replay "<影片檔或資料夾>" --max-frames 300 --jobs 4

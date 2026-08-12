@@ -12,6 +12,7 @@
 - 正式產品唯一可見主面板與 Overlay 為 Tauri v2 + Flutter Web；PySide6 `MainWindow` 僅保留隱藏的 engine runtime、Qt worker 與 adapter 責任，不是使用者操作入口。
 - 分析模式的期望狀態由 Qt-free controller 保存；管線停止後仍保留，設定讀寫、desktop state、worker failure 與下一次啟動不再以隱藏 Qt checkbox 作為狀態來源。
 - Overlay 的顯示、數值、鎖定、總開關與透明度偏好由 Qt-free presentation state 保存；engine mode 不建立 Qt Overlay、假 checkbox/slider 或 no-op adapter。Tauri Overlay geometry 尚未遷移，設定檔暫時保留空欄位相容舊 schema。
+- 回放資料夾、平行數、標註開關與進度投影由 Qt-free replay state 保存；engine mode 不建立 replay spinbox、checkbox、狀態 label 或按鈕。Replay lifecycle 仍由 controller 管理，QThread 與既有 worker 建立留在 Qt adapter。
 
 ## 整體資料流
 
@@ -43,6 +44,7 @@ flowchart TD
 | 正式浮動 Overlay | Flutter/Tauri 介面區 | 顯示即時影像、BPM、PERCLOS 與疲勞狀態；由 Tauri 建立透明獨立 WebView | 操作員看即時狀態與警示 |
 | 隱藏 engine runtime adapter | Python/PySide6 runtime 區 | 管理 Qt worker/thread、影像訊號、錄影 writer、Qt 音效與平台快捷鍵；不建立可見主面板、Qt Overlay 或其假控制元件 | 執行背景相機、分析、錄影、告警與校準工作 |
 | Overlay presentation state | Python Qt-free 狀態區 | 保存 preview、metrics、lock、all 與 opacity，投影到 desktop API 與 settings JSON；legacy Qt controls 僅作 mirror | Flutter/Tauri 控制 Overlay 偏好、重啟後還原設定 |
+| Replay presentation state | Python Qt-free 狀態區 | 保存當次 replay path、jobs、annotated 與進度文字／計數，投影到 desktop API；legacy Qt controls 僅作 mirror | Flutter/Tauri 選取回放資料夾、啟停回放與顯示進度 |
 | 相機裝置辨識策略 | 桌面介面區 | Windows 優先 DirectShow 名稱，Linux 優先 V4L2 與穩定裝置標籤，必要時 OpenCV probe | 相機下拉選單、跨平台攝影機相容 |
 | 影像擷取背景工作 | 桌面介面區 | OpenCV 讀取影格、套用解析度/FPS、估算即時 FPS、輸出預覽與 BGR 影格 | 即時 camera feed、餵給分析與錄影 |
 | 最新影格佇列工具 | 桌面介面區 | 佇列滿時丟棄舊影格，只保留最新畫面 | 降低分析延遲，避免 worker 追處理過期影格 |
