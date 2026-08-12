@@ -135,6 +135,43 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_mon_trend",
         "_mon_warmup",
         "_mon_wave",
+        "_belt_banner_dot",
+        "_belt_bpm_spark",
+        "_belt_calib_bar",
+        "_lbl_belt_address",
+        "_lbl_belt_banner_battery",
+        "_lbl_belt_banner_bpm",
+        "_lbl_belt_banner_device",
+        "_lbl_belt_banner_rssi",
+        "_lbl_belt_battery",
+        "_lbl_belt_bpm",
+        "_lbl_belt_calib_confidence",
+        "_lbl_belt_calib_corr_resid",
+        "_lbl_belt_calib_offset",
+        "_lbl_belt_calib_pairs",
+        "_lbl_belt_calib_raw_resid",
+        "_lbl_belt_calib_resid",
+        "_lbl_belt_calib_status",
+        "_lbl_belt_cfg_address",
+        "_lbl_belt_cfg_capture",
+        "_lbl_belt_cfg_name_prefix",
+        "_lbl_belt_cfg_tuning",
+        "_lbl_belt_connected_since",
+        "_lbl_belt_contact",
+        "_lbl_belt_device",
+        "_lbl_belt_hrv_conf",
+        "_lbl_belt_hrv_lfhf",
+        "_lbl_belt_hrv_rmssd",
+        "_lbl_belt_hrv_sdnn",
+        "_lbl_belt_hrv_warmup",
+        "_lbl_belt_last_error",
+        "_lbl_belt_location",
+        "_lbl_belt_notifications",
+        "_lbl_belt_rr",
+        "_lbl_belt_rssi",
+        "_lbl_belt_stale",
+        "_lbl_belt_status",
+        "_lbl_dev_belt",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
@@ -1060,6 +1097,78 @@ def test_headless_replay_preview_and_queue_are_engine_safe(
     )
     settings_window._update_belt_panel()
     settings_window._refresh_monitor_metrics()
+
+
+def test_engine_belt_renderers_do_not_read_presentation_data(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        settings_window._engine_controller,
+        "belt_status",
+        lambda: (_ for _ in ()).throw(AssertionError("belt status must not be rendered")),
+    )
+    monkeypatch.setattr(
+        settings_window._engine_controller,
+        "belt_samples",
+        lambda: (_ for _ in ()).throw(AssertionError("belt samples must not be rendered")),
+    )
+
+    settings_window._refresh_belt_cfg_labels()
+    settings_window._update_belt_status_label()
+    settings_window._reset_belt_panel()
+    settings_window._update_belt_panel()
+
+
+def test_engine_belt_tick_keeps_calibration_and_coordinator_side_effects(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Calibrator:
+        def __init__(self) -> None:
+            self.observations: list[tuple[float, float, bool, bool, object]] = []
+
+        def observe(
+            self,
+            timestamp: float,
+            bpm: float,
+            contact_ok: bool,
+            fresh: bool,
+            metrics: object,
+        ) -> None:
+            self.observations.append((timestamp, bpm, contact_ok, fresh, metrics))
+
+    status = type(
+        "BeltStatus",
+        (),
+        {
+            "state": "connected",
+            "bpm": 72,
+            "sensor_contact_detected": True,
+            "sensor_contact_supported": True,
+        },
+    )()
+    metrics = object()
+    calibrator = Calibrator()
+    coordinator_ticks: list[object] = []
+
+    with monkeypatch.context() as patch:
+        patch.setattr(settings_window, "_belt_calibrator", calibrator)
+        patch.setattr(settings_window, "_latest_rppg_metrics", metrics)
+        patch.setattr(settings_window._engine_controller, "belt_status", lambda: status)
+        patch.setattr(main_window_module, "hr_is_stale", lambda _status: False)
+        patch.setattr(main_window_module, "metrics_to_feed_dict", lambda value: value)
+        patch.setattr(
+            settings_window,
+            "_tick_rppg_param_coordinator",
+            lambda value: coordinator_ticks.append(value),
+        )
+
+        settings_window._tick_belt_calibration()
+        settings_window._tick_belt_calibration()
+
+    assert len(calibrator.observations) == 1
+    _, bpm, contact_ok, fresh, observed_metrics = calibrator.observations[0]
+    assert (bpm, contact_ok, fresh, observed_metrics) == (72.0, True, True, metrics)
+    assert coordinator_ticks == [calibrator, calibrator]
 
 
 def test_engine_metric_callbacks_keep_non_visual_side_effects(

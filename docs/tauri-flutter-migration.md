@@ -90,6 +90,10 @@ Engine mode no longer creates hidden monitor labels, progress bars, sparklines,
 or the legacy REC-pill timer.
 The rPPG, behavior, and fusion callbacks retain their snapshot, alarm, baseline,
 recording, and Web-metrics side effects; Flutter renders the shared metrics payload.
+Engine mode also omits hidden belt labels, banners, device status, sparklines, and
+calibration bars. The one-second belt timer remains active because it drives new
+rPPG/belt calibration observations and the ROI coordinator; Flutter renders the
+BLE, HRV, and calibration fields already carried by Web metrics.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is part of the same state model as a platform-neutral
 physical-pixel `{x, y, width, height}` object. The shell applies geometry when

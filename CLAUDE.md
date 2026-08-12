@@ -123,6 +123,9 @@ Windows `RegisterHotKey`、`nativeEvent` 與 legacy 選單 QAction 仍留在 `Ma
 engine mode 不建立監測頁 `_mon_*` label、bar 或 sparkline 假元件；worker callback 只更新
 `_latest_*` 快照並維持警報、記錄與 Web metrics side effect，且不建立 legacy REC pill timer；
 監測視覺完全由 Flutter 呈現。
+engine mode 不建立心跳帶 label、banner、sparkline、calibration bar 或 device-status 假元件；
+`_belt_ui_timer` 仍保留為校準觀測與 ROI 協調器的必要 runtime driver，Flutter 直接消費
+Web metrics 中的 BLE、HRV 與校準狀態。
 
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。

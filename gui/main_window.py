@@ -1309,28 +1309,14 @@ class MainWindow(QMainWindow):
         control_names = (
             "_btn_bench", "_btn_record", "_btn_record_baseline",
             "_btn_start",
-            "_lbl_belt_address", "_lbl_belt_banner_battery", "_lbl_belt_banner_bpm",
-            "_lbl_belt_banner_device", "_lbl_belt_banner_rssi", "_lbl_belt_battery",
-            "_lbl_belt_bpm", "_lbl_belt_calib_confidence", "_lbl_belt_calib_corr_resid",
-            "_lbl_belt_calib_offset", "_lbl_belt_calib_pairs", "_lbl_belt_calib_raw_resid",
-            "_lbl_belt_calib_resid", "_lbl_belt_calib_status", "_lbl_belt_cfg_address",
-            "_lbl_belt_cfg_capture", "_lbl_belt_cfg_name_prefix", "_lbl_belt_cfg_tuning",
-            "_lbl_belt_connected_since", "_lbl_belt_contact", "_lbl_belt_device",
-            "_lbl_belt_hrv_conf", "_lbl_belt_hrv_lfhf", "_lbl_belt_hrv_rmssd",
-            "_lbl_belt_hrv_sdnn", "_lbl_belt_hrv_warmup", "_lbl_belt_last_error",
-            "_lbl_belt_location", "_lbl_belt_notifications", "_lbl_belt_rr",
-            "_lbl_belt_rssi", "_lbl_belt_stale", "_lbl_belt_status", "_lbl_bench",
-            "_lbl_camera", "_lbl_codec", "_lbl_dev_belt", "_lbl_dev_cam",
+            "_lbl_bench", "_lbl_camera", "_lbl_codec", "_lbl_dev_cam",
             "_lbl_dev_mp", "_lbl_face", "_lbl_fps", "_lbl_opacity", "_lbl_pipeline",
             "_lbl_preview_telemetry", "_lbl_profile_status", "_lbl_record",
             "_tag_mesh", "_tag_rppg",
         )
         for name in control_names:
             self.__dict__[name] = _HeadlessControl()
-        self._belt_bpm_spark = _HeadlessControl()
-        self._belt_calib_bar = _HeadlessControl()
         self._brand_dot = _HeadlessControl()
-        self._belt_banner_dot = _HeadlessControl()
 
     def _toggle_overlay_preference(self, field: str) -> None:
         state = self._overlay_state.snapshot()
@@ -3156,6 +3142,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_belt_cfg_labels(self) -> None:
         """把 config/hr_belt.json 載入結果（self._belt_cfg）唯讀顯示到設備設定卡。"""
+        if self._engine_mode:
+            return
         if not hasattr(self, "_lbl_belt_cfg_name_prefix"):
             return
         cfg = self._belt_cfg
@@ -5409,7 +5397,8 @@ class MainWindow(QMainWindow):
             err = self._engine_controller.start_belt(belt_cfg)
             if err:
                 self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
-                self._lbl_belt_status.setText("心跳帶校準：啟動失敗")
+                if not self._engine_mode:
+                    self._lbl_belt_status.setText("心跳帶校準：啟動失敗")
                 self._capture_preferences.configure(belt_calibration=False)
                 self._sync_capture_preference_controls()
                 return
@@ -5524,7 +5513,8 @@ class MainWindow(QMainWindow):
         if self._engine_controller.belt_running:
             self._engine_controller.stop_belt()
         self._append_log("■ 心跳帶真值校準停止。")
-        self._lbl_belt_status.setText("未啟用")
+        if not self._engine_mode:
+            self._lbl_belt_status.setText("未啟用")
         self._reset_belt_panel()
         self._update_device_status()
 
@@ -5680,6 +5670,8 @@ class MainWindow(QMainWindow):
 
     def _update_belt_status_label(self) -> None:
         """輪詢心跳帶連線與校準狀態並更新狀態列（QTimer 每秒觸發）。"""
+        if self._engine_mode:
+            return
         self._update_belt_panel()
         st = self._engine_controller.belt_status()
         cal = self._belt_calibrator
@@ -5723,6 +5715,8 @@ class MainWindow(QMainWindow):
 
     def _reset_belt_panel(self) -> None:
         """把心跳帶專屬區塊所有欄位重置為「—」（未啟用／停止時呼叫）。"""
+        if self._engine_mode:
+            return
         for lbl in (
             self._lbl_belt_bpm, self._lbl_belt_rr, self._lbl_belt_contact,
             self._lbl_belt_battery, self._lbl_belt_rssi, self._lbl_belt_stale,
@@ -5748,6 +5742,8 @@ class MainWindow(QMainWindow):
         唯讀輪詢既有狀態物件，不改動任何校準/worker/BLE 邏輯與數值行為；
         HRV 僅供顯示，絕不寫回任何會被疲勞融合分數讀取的欄位。
         """
+        if self._engine_mode:
+            return
         self._refresh_belt_cfg_labels()
         st = self._engine_controller.belt_status()
         cal = self._belt_calibrator
