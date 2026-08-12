@@ -86,38 +86,19 @@ def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> N
     assert state["monitor_focus"] is False
 
 
-def test_engine_mode_keeps_legacy_qt_overlay_hidden(
-    settings_window: MainWindow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    shown: list[bool] = []
-    hidden: list[bool] = []
-    monkeypatch.setattr(
-        settings_window._preview_overlay,
-        "show",
-        lambda: shown.append(True),
-    )
-    monkeypatch.setattr(
-        settings_window._preview_overlay,
-        "hide",
-        lambda: hidden.append(True),
-    )
-    settings_window._pipeline_running = True
-    settings_window._chk_preview.blockSignals(True)
-    settings_window._chk_preview.setChecked(True)
-    settings_window._chk_preview.blockSignals(False)
-
-    settings_window._sync_overlay_visibility()
-
-    assert shown == []
-    assert hidden == [True]
-
-
 def test_engine_mode_does_not_construct_legacy_visual_shell(
     settings_window: MainWindow,
 ) -> None:
     assert settings_window.centralWidget() is None
-    assert type(settings_window._preview_overlay).__name__ == "_HeadlessOverlay"
+    assert settings_window._preview_overlay is None
+    for name in (
+        "_chk_all",
+        "_chk_preview",
+        "_chk_metrics",
+        "_chk_lock",
+        "_sld_opacity",
+    ):
+        assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
     assert settings_window.minimumWidth() == 0
     assert settings_window.minimumHeight() == 0
@@ -179,6 +160,85 @@ def test_settings_load_restores_controller_owned_analysis_state(
     state = settings_window._handle_desktop_command("state.get", {})
     assert state["behavior_enabled"] is False
     assert state["rppg_enabled"] is True
+
+
+def test_overlay_commands_state_and_saved_json_remain_in_sync(
+    settings_window: MainWindow,
+) -> None:
+    state = settings_window._handle_desktop_command(
+        "preferences.configure",
+        {
+            "overlay_preview": True,
+            "overlay_metrics": False,
+            "overlay_locked": False,
+        },
+    )
+    assert state["overlay_preview"] is True
+    assert state["overlay_metrics"] is False
+    assert state["overlay_locked"] is False
+
+    state = settings_window._handle_desktop_command(
+        "overlay.configure", {"all": False, "opacity": 73}
+    )
+    assert state["overlay_all"] is False
+    assert state["overlay_preview"] is False
+    assert state["overlay_metrics"] is False
+    assert state["overlay_opacity"] == 73
+
+    saved_state = settings_window._handle_desktop_command("settings.save", {})
+    persisted = json.loads(
+        settings_window._settings_path().read_text(encoding="utf-8")
+    )
+    assert saved_state["overlay_all"] is persisted["toggles"]["all"]
+    assert saved_state["overlay_preview"] is persisted["toggles"]["preview"]
+    assert saved_state["overlay_metrics"] is persisted["toggles"]["metrics"]
+    assert saved_state["overlay_locked"] is persisted["toggles"]["lock"]
+    assert saved_state["overlay_opacity"] == persisted["overlay"]["opacity"]
+
+
+def test_settings_load_and_reset_restore_overlay_runtime_state(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_window._settings_path().write_text(
+        json.dumps(
+            {
+                "toggles": {
+                    "all": False,
+                    "preview": True,
+                    "metrics": False,
+                    "lock": False,
+                },
+                "overlay": {"opacity": 81},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings_window._load_settings()
+
+    loaded = settings_window._handle_desktop_command("state.get", {})
+    assert loaded["overlay_all"] is False
+    assert loaded["overlay_preview"] is True
+    assert loaded["overlay_metrics"] is False
+    assert loaded["overlay_locked"] is False
+    assert loaded["overlay_opacity"] == 81
+
+    applied: list[bool] = []
+    monkeypatch.setattr(
+        settings_window,
+        "_apply_overlay_state",
+        lambda: applied.append(True),
+    )
+    reset = settings_window._handle_desktop_command(
+        "settings.reset", {"sections": ["toggles", "overlay"]}
+    )
+    assert reset["overlay_all"] is True
+    assert reset["overlay_preview"] is False
+    assert reset["overlay_metrics"] is True
+    assert reset["overlay_locked"] is True
+    assert reset["overlay_opacity"] == 55
+    assert applied == [True]
 
 
 def test_running_analysis_command_reconciles_two_changes_once(
@@ -408,17 +468,21 @@ def test_headless_hotkeys_update_overlay_state(
     settings_window: MainWindow,
 ) -> None:
     settings_window._menu_actions_hotkeys[0].trigger()
-    assert settings_window._chk_metrics.isChecked() is False
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["overlay_metrics"] is False
+    assert state["settings_dirty"] is True
 
     settings_window._menu_actions_hotkeys[4].trigger()
-    assert settings_window._chk_all.isChecked() is False
-    assert settings_window._chk_metrics.isChecked() is False
-    assert settings_window._chk_preview.isChecked() is False
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["overlay_all"] is False
+    assert state["overlay_metrics"] is False
+    assert state["overlay_preview"] is False
 
     settings_window._menu_actions_hotkeys[4].trigger()
-    assert settings_window._chk_all.isChecked() is True
-    assert settings_window._chk_metrics.isChecked() is True
-    assert settings_window._chk_preview.isChecked() is True
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["overlay_all"] is True
+    assert state["overlay_metrics"] is True
+    assert state["overlay_preview"] is True
 
 
 def test_headless_replay_preview_and_queue_are_engine_safe(

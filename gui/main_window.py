@@ -94,6 +94,7 @@ from gui.engine_controller import (
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.metrics_recorder import MetricsRecorder
+from gui.overlay_runtime_state import OverlayRuntimeState
 from gui.personal_profile import (
     PersonalBaselineCollector,
     PersonalProfileStore,
@@ -292,67 +293,6 @@ class _HeadlessAction(_HeadlessControl):
 
     def trigger(self) -> None:
         self._callback()
-
-
-class _HeadlessOverlay:
-    """No-op compatibility surface; Tauri owns the visible overlay in engine mode."""
-
-    def saveGeometry(self) -> QByteArray:
-        return QByteArray()
-
-    def restoreGeometry(self, _geometry: QByteArray) -> None:
-        return
-
-    def apply_lock_state(self, _locked: bool) -> None:
-        return
-
-    def close(self) -> None:
-        return
-
-    def hide(self) -> None:
-        return
-
-    def refresh_layout(self) -> None:
-        return
-
-    def set_metrics_visible(self, _visible: bool) -> None:
-        return
-
-    def set_opacity(self, _opacity: float) -> None:
-        return
-
-    def set_preview_visible(self, _visible: bool) -> None:
-        return
-
-    def show(self) -> None:
-        return
-
-    def show_fatigue_panel(self, _visible: bool) -> None:
-        return
-
-    def show_fused_panel(self, _visible: bool) -> None:
-        return
-
-    def show_rppg_panel(self, _visible: bool) -> None:
-        return
-
-    def update_camera_info(self, *_args: object) -> None:
-        return
-
-    def update_fatigue_metrics(self, _metrics: object) -> None:
-        return
-
-    def update_fps(self, _fps: float) -> None:
-        return
-
-    def update_frame(self, _image: object) -> None:
-        return
-
-    def update_fused_score(self, _score: object) -> None:
-        return
-
-    def update_rppg_metrics(self, _metrics: object) -> None:
-        return
 
 
 # ── 視覺主題 token（僅影響 QSS 外觀，絕不影響任何 signal/slot 或數值行為） ──
@@ -1201,11 +1141,11 @@ class MainWindow(QMainWindow):
         self._benchmark_active = False
         self._hotkeys = HotkeyConfig()
         self._user = UserProfile()
+        self._overlay_state = OverlayRuntimeState()
 
-        self._preview_overlay = (
-            _HeadlessOverlay() if self._engine_mode else PreviewOverlayWindow()
-        )
+        self._preview_overlay = None if self._engine_mode else PreviewOverlayWindow()
         if not self._engine_mode:
+            assert self._preview_overlay is not None
             self._preview_overlay.move(100, 100)
         self._cam_thread: QThread | None = None
         self._cam_worker: CameraStreamWorker | None = None
@@ -1345,17 +1285,12 @@ class MainWindow(QMainWindow):
 
     def _install_headless_controls(self) -> None:
         """Install state-only controls so desktop commands keep their contracts."""
-        self._chk_all = _HeadlessControl(checked=True)
-        self._chk_preview = _HeadlessControl()
-        self._chk_metrics = _HeadlessControl(checked=True)
-        self._chk_lock = _HeadlessControl(checked=True)
         self._chk_behavior = _HeadlessControl(checked=True)
         self._chk_stress = _HeadlessControl()
         self._chk_auto_record = _HeadlessControl()
         self._chk_belt_calib = _HeadlessControl()
         self._chk_auto_capture_belt = _HeadlessControl()
         self._chk_replay_annotated = _HeadlessControl()
-        self._sld_opacity = _HeadlessControl(value=55)
         self._spn_auto_capture_seconds = _HeadlessControl(value=60)
         self._spn_replay_jobs = _HeadlessControl(value=2)
         self._act_web_allow_lan = _HeadlessControl()
@@ -1417,15 +1352,11 @@ class MainWindow(QMainWindow):
         self._chk_horizontal_flip = _HeadlessControl(checked=camera.horizontal_flip)
 
         callbacks = (
-            lambda: self._toggle_headless_checkbox(
-                self._chk_metrics, self._on_metrics_toggled
-            ),
-            lambda: self._toggle_headless_checkbox(
-                self._chk_preview, self._on_preview_toggled
-            ),
+            lambda: self._toggle_overlay_preference("metrics"),
+            lambda: self._toggle_overlay_preference("preview"),
             self._toggle_pipeline,
-            lambda: self._toggle_headless_checkbox(self._chk_lock, self._on_lock_toggled),
-            self._toggle_headless_all,
+            lambda: self._toggle_overlay_preference("locked"),
+            lambda: self._toggle_overlay_preference("all_enabled"),
             self._toggle_recording,
         )
         self._menu_actions_hotkeys = tuple(_HeadlessAction(callback) for callback in callbacks)
@@ -1435,10 +1366,10 @@ class MainWindow(QMainWindow):
         control.setChecked(checked)
         handler(checked)
 
-    def _toggle_headless_all(self) -> None:
-        checked = not self._chk_all.isChecked()
-        self._chk_all.setChecked(checked)
-        self._on_toggle_all(checked)
+    def _toggle_overlay_preference(self, field: str) -> None:
+        state = self._overlay_state.snapshot()
+        current = getattr(state, field)
+        self._configure_overlay(**{field: not current})
 
     def _set_engine_checkbox(
         self,
@@ -1464,6 +1395,37 @@ class MainWindow(QMainWindow):
                 control.blockSignals(False)
         if not self._engine_mode:
             self._refresh_preview_tags()
+
+    def _sync_overlay_controls(self) -> None:
+        if self._engine_mode:
+            return
+        state = self._overlay_state.snapshot()
+        for control, value in (
+            (self._chk_all, state.all_enabled),
+            (self._chk_preview, state.preview),
+            (self._chk_metrics, state.metrics),
+            (self._chk_lock, state.locked),
+        ):
+            control.blockSignals(True)
+            try:
+                control.setChecked(value)
+            finally:
+                control.blockSignals(False)
+        self._sld_opacity.blockSignals(True)
+        try:
+            self._sld_opacity.setValue(state.opacity)
+        finally:
+            self._sld_opacity.blockSignals(False)
+        self._lbl_opacity.setText(f"{state.opacity}%")
+
+    def _configure_overlay(self, **changes: object) -> None:
+        previous = self._overlay_state.snapshot()
+        current = self._overlay_state.configure(**changes)
+        if current == previous:
+            return
+        self._sync_overlay_controls()
+        self._apply_overlay_state()
+        self._settings_dirty = True
 
     def _configure_analysis(
         self,
@@ -3333,10 +3295,14 @@ class MainWindow(QMainWindow):
         self._engine_controller.configure_camera(**changes)
 
     def _apply_overlay_state(self) -> None:
-        self._preview_overlay.set_opacity(self._sld_opacity.value() / 100.0)
-        self._preview_overlay.apply_lock_state(self._chk_lock.isChecked())
-        self._preview_overlay.set_preview_visible(self._chk_preview.isChecked())
-        self._preview_overlay.set_metrics_visible(self._chk_metrics.isChecked())
+        overlay = self._preview_overlay
+        if overlay is None:
+            return
+        state = self._overlay_state.snapshot()
+        overlay.set_opacity(state.opacity / 100.0)
+        overlay.apply_lock_state(state.locked)
+        overlay.set_preview_visible(state.preview)
+        overlay.set_metrics_visible(state.metrics)
         self._sync_overlay_visibility()
 
     def _load_settings(self) -> None:
@@ -3359,7 +3325,7 @@ class MainWindow(QMainWindow):
 
         overlay = data.get("overlay", {})
         overlay_geo = overlay.get("geometry")
-        if isinstance(overlay_geo, str):
+        if self._preview_overlay is not None and isinstance(overlay_geo, str):
             self._preview_overlay.restoreGeometry(self._decode_bytes(overlay_geo))
 
         hotkeys = data.get("hotkeys", {})
@@ -3424,10 +3390,6 @@ class MainWindow(QMainWindow):
         toggles = data.get("toggles", {})
         if isinstance(toggles, dict):
             checkboxes = (
-                (self._chk_all, toggles.get("all")),
-                (self._chk_preview, toggles.get("preview")),
-                (self._chk_metrics, toggles.get("metrics")),
-                (self._chk_lock, toggles.get("lock")),
                 (self._chk_belt_calib, toggles.get("belt_calib")),
                 (self._chk_auto_record, toggles.get("auto_record")),
             )
@@ -3453,9 +3415,8 @@ class MainWindow(QMainWindow):
             )
             self._sync_analysis_controls()
 
-        opacity = overlay.get("opacity")
-        if isinstance(opacity, int):
-            self._sld_opacity.setValue(opacity)
+        self._overlay_state.load(toggles=toggles, overlay=overlay)
+        self._sync_overlay_controls()
 
         web = data.get("web", {})
         if isinstance(web, dict):
@@ -3473,14 +3434,19 @@ class MainWindow(QMainWindow):
         path = self._settings_path()
         camera = self._engine_controller.camera_snapshot()
         analysis = self._engine_controller.analysis_snapshot()
+        overlay_state = self._overlay_state.to_settings()
         data = {
             "window": {
                 "geometry": self._encode_bytes(self.saveGeometry()),
                 "state": self._encode_bytes(self.saveState()),
             },
             "overlay": {
-                "geometry": self._encode_bytes(self._preview_overlay.saveGeometry()),
-                "opacity": int(self._sld_opacity.value()),
+                "geometry": (
+                    self._encode_bytes(self._preview_overlay.saveGeometry())
+                    if self._preview_overlay is not None
+                    else ""
+                ),
+                "opacity": overlay_state["overlay"]["opacity"],
             },
             "camera": {
                 "index": camera.selected_index,
@@ -3490,10 +3456,7 @@ class MainWindow(QMainWindow):
                 "horizontal_flip": camera.horizontal_flip,
             },
             "toggles": {
-                "all": self._chk_all.isChecked(),
-                "preview": self._chk_preview.isChecked(),
-                "metrics": self._chk_metrics.isChecked(),
-                "lock": self._chk_lock.isChecked(),
+                **overlay_state["toggles"],
                 "behavior": analysis.fatigue_enabled,
                 "stress": analysis.rppg_enabled,
                 "belt_calib": self._chk_belt_calib.isChecked(),
@@ -3982,21 +3945,19 @@ class MainWindow(QMainWindow):
             self._sync_camera_widgets()
         if "toggles" in selected:
             for checkbox, checked in (
-                (self._chk_all, True),
-                (self._chk_preview, False),
-                (self._chk_metrics, True),
-                (self._chk_lock, True),
                 (self._chk_belt_calib, False),
                 (self._chk_auto_record, False),
             ):
                 checkbox.setChecked(checked)
+            self._overlay_state.reset()
+            self._sync_overlay_controls()
+            self._apply_overlay_state()
             self._configure_analysis(
                 behavior_enabled=True,
                 rppg_enabled=False,
             )
         if "overlay" in selected:
-            self._sld_opacity.setValue(55)
-            self._apply_overlay_state()
+            self._configure_overlay(opacity=55)
         if "web" in selected:
             self._act_web_allow_lan.blockSignals(True)
             self._act_web_allow_lan.setChecked(False)
@@ -4021,7 +3982,7 @@ class MainWindow(QMainWindow):
             }
             for device in camera.devices
         ]
-        return {
+        state = {
             "desktop_api_version": DESKTOP_CONTROL_API_VERSION,
             "engine_mode": self._engine_mode,
             "pipeline_running": pipeline.running,
@@ -4039,11 +4000,6 @@ class MainWindow(QMainWindow):
             "auto_record": self._chk_auto_record.isChecked(),
             "belt_calibration": self._chk_belt_calib.isChecked(),
             "horizontal_flip": camera.horizontal_flip,
-            "overlay_preview": self._chk_preview.isChecked(),
-            "overlay_metrics": self._chk_metrics.isChecked(),
-            "overlay_locked": self._chk_lock.isChecked(),
-            "overlay_all": self._chk_all.isChecked(),
-            "overlay_opacity": int(self._sld_opacity.value()),
             "resolution": camera.resolution,
             "fps": camera.fps,
             "backend": camera.backend,
@@ -4091,6 +4047,8 @@ class MainWindow(QMainWindow):
                 "capture_enabled": bool(self._belt_cfg.capture_enabled) if self._belt_cfg else False,
             },
         }
+        state.update(self._overlay_state.to_desktop_state())
+        return state
 
     def _set_combo_value(self, combo: QComboBox, value: object, *, by_data: bool = False) -> None:
         wanted = str(value)
@@ -4182,20 +4140,24 @@ class MainWindow(QMainWindow):
             checkbox_keys = {
                 "auto_record": self._chk_auto_record,
                 "belt_calibration": self._chk_belt_calib,
-                "overlay_preview": self._chk_preview,
-                "overlay_metrics": self._chk_metrics,
-                "overlay_locked": self._chk_lock,
             }
             for key, checkbox in checkbox_keys.items():
                 if key in args:
                     checked = self._require_bool(args, key)
                     handler = {
                         "belt_calibration": self._on_belt_calib_toggled,
-                        "overlay_preview": self._on_preview_toggled,
-                        "overlay_metrics": self._on_metrics_toggled,
-                        "overlay_locked": self._on_lock_toggled,
                     }.get(key)
                     self._set_engine_checkbox(checkbox, checked, handler)
+            overlay_changes: dict[str, object] = {}
+            for key, field in (
+                ("overlay_preview", "preview"),
+                ("overlay_metrics", "metrics"),
+                ("overlay_locked", "locked"),
+            ):
+                if key in args:
+                    overlay_changes[field] = self._require_bool(args, key)
+            if overlay_changes:
+                self._configure_overlay(**overlay_changes)
             self._settings_dirty = True
 
         elif command == "auto_capture.set":
@@ -4231,17 +4193,16 @@ class MainWindow(QMainWindow):
             self._set_monitor_layout(self._require_bool(args, "focus"))
 
         elif command == "overlay.configure":
+            overlay_changes = {}
             if "all" in args:
-                checked = self._require_bool(args, "all")
-                changed = self._chk_all.isChecked() != checked
-                self._chk_all.setChecked(checked)
-                if self._engine_mode and changed:
-                    self._on_toggle_all(checked)
+                overlay_changes["all_enabled"] = self._require_bool(args, "all")
             if "opacity" in args:
                 opacity = args["opacity"]
                 if isinstance(opacity, bool) or not isinstance(opacity, int) or not 0 <= opacity <= 100:
                     raise ValueError("opacity must be between 0 and 100")
-                self._sld_opacity.setValue(opacity)
+                overlay_changes["opacity"] = opacity
+            if overlay_changes:
+                self._configure_overlay(**overlay_changes)
             self._settings_dirty = True
 
         elif command == "replay.configure":
@@ -5001,42 +4962,36 @@ class MainWindow(QMainWindow):
             self._shutdown_engine()
 
     def _on_toggle_all(self, checked: bool) -> None:
-        for chk in (self._chk_metrics, self._chk_preview):
-            chk.blockSignals(True)
-            chk.setChecked(checked)
-            chk.blockSignals(False)
-        self._sync_overlay_visibility()
+        self._configure_overlay(all_enabled=checked)
         self._append_log(f"[UI] 全部 Overlay → {'顯示' if checked else '隱藏'}")
 
     def _on_preview_toggled(self, checked: bool) -> None:
-        self._preview_overlay.set_preview_visible(checked)
-        self._sync_overlay_visibility()
+        self._configure_overlay(preview=checked)
         self._append_log(f"[UI] 鏡頭預覽 Overlay → {'開啟' if checked else '關閉'}")
 
     def _on_metrics_toggled(self, checked: bool) -> None:
-        self._preview_overlay.set_metrics_visible(checked)
-        self._sync_overlay_visibility()
+        self._configure_overlay(metrics=checked)
         self._append_log(f"[UI] 數值 Overlay → {'開啟' if checked else '關閉'}")
 
     def _on_lock_toggled(self, checked: bool) -> None:
-        self._preview_overlay.apply_lock_state(checked)
+        self._configure_overlay(locked=checked)
         self._append_log(f"[UI] Overlay 鎖定 → {'鎖定（穿透點擊）' if checked else '解鎖（可拖曳）'}")
 
     def _sync_overlay_visibility(self) -> None:
         """Show overlay window only when pipeline running AND at least one overlay is on."""
-        if self._engine_mode:
-            self._preview_overlay.hide()
+        overlay = self._preview_overlay
+        if overlay is None:
             return
-        any_on = self._chk_preview.isChecked() or self._chk_metrics.isChecked()
+        state = self._overlay_state.snapshot()
+        any_on = state.preview or state.metrics
         if self._engine_controller.pipeline_snapshot().running and any_on:
-            self._preview_overlay.refresh_layout()
-            self._preview_overlay.show()
+            overlay.refresh_layout()
+            overlay.show()
         else:
-            self._preview_overlay.hide()
+            overlay.hide()
 
     def _on_opacity(self, v: int) -> None:
-        self._lbl_opacity.setText(f"{v}%")
-        self._preview_overlay.set_opacity(v / 100.0)
+        self._configure_overlay(opacity=v)
 
     # ── Camera worker ─────────────────────────────────────────────────────────
 
@@ -5778,9 +5733,10 @@ class MainWindow(QMainWindow):
 
         self._begin_auto_baseline()
         self._update_frame_routing()
-        self._preview_overlay.show_rppg_panel(enable_rppg)
-        self._preview_overlay.show_fatigue_panel(True)
-        self._preview_overlay.show_fused_panel(True)
+        if self._preview_overlay is not None:
+            self._preview_overlay.show_rppg_panel(enable_rppg)
+            self._preview_overlay.show_fatigue_panel(True)
+            self._preview_overlay.show_fused_panel(True)
         self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
     def _stop_combined_worker(self) -> bool:
@@ -5798,14 +5754,16 @@ class MainWindow(QMainWindow):
         if self._combined_queue is not None and self._cam_worker is not None:
             self._cam_worker.detach_bgr_queue(self._combined_queue)
         self._combined_queue = None
-        self._preview_overlay.show_rppg_panel(False)
-        self._preview_overlay.show_fatigue_panel(False)
-        self._preview_overlay.show_fused_panel(False)
+        if self._preview_overlay is not None:
+            self._preview_overlay.show_rppg_panel(False)
+            self._preview_overlay.show_fatigue_panel(False)
+            self._preview_overlay.show_fused_panel(False)
         self._update_frame_routing()
         return True
 
     def _on_fused_score(self, score: object) -> None:
-        self._preview_overlay.update_fused_score(score)  # type: ignore[arg-type]
+        if self._preview_overlay is not None:
+            self._preview_overlay.update_fused_score(score)  # type: ignore[arg-type]
         self._latest_fused_score = score
         self._refresh_monitor_metrics()
         self._record_metrics()
@@ -5860,7 +5818,8 @@ class MainWindow(QMainWindow):
         thread.start()
 
         self._update_frame_routing()
-        self._preview_overlay.show_rppg_panel(True)
+        if self._preview_overlay is not None:
+            self._preview_overlay.show_rppg_panel(True)
         self._append_log("▶ rPPG 引擎啟動（MediaPipe Face Landmarker + POS）")
 
     def _stop_rppg_worker(self) -> bool:
@@ -5878,7 +5837,8 @@ class MainWindow(QMainWindow):
             self._cam_worker.detach_bgr_queue(self._bgr_queue)
         self._bgr_queue = None
         self._update_frame_routing()
-        self._preview_overlay.show_rppg_panel(False)
+        if self._preview_overlay is not None:
+            self._preview_overlay.show_rppg_panel(False)
         self._lbl_face.setText("臉部：—")
         return True
 
@@ -5908,7 +5868,8 @@ class MainWindow(QMainWindow):
         if self._combined_worker is None:
             write_live_feed(metrics)  # type: ignore[arg-type]
             metrics = self._apply_rppg_calibration(metrics)
-        self._preview_overlay.update_rppg_metrics(metrics)  # type: ignore[arg-type]
+        if self._preview_overlay is not None:
+            self._preview_overlay.update_rppg_metrics(metrics)  # type: ignore[arg-type]
         self._latest_rppg_metrics = metrics
         self._refresh_monitor_metrics()
         self._record_metrics()
@@ -5965,7 +5926,8 @@ class MainWindow(QMainWindow):
 
         self._begin_auto_baseline()
         self._update_frame_routing()
-        self._preview_overlay.show_fatigue_panel(True)
+        if self._preview_overlay is not None:
+            self._preview_overlay.show_fatigue_panel(True)
         self._append_log("▶ 行為警覺引擎啟動（V2：EAR + 瞳孔 + 注視 + 頭部）")
 
     def _stop_fatigue_worker(self) -> bool:
@@ -5984,7 +5946,8 @@ class MainWindow(QMainWindow):
             self._cam_worker.detach_bgr_queue(self._fatigue_queue)
         self._fatigue_queue = None
         self._update_frame_routing()
-        self._preview_overlay.show_fatigue_panel(False)
+        if self._preview_overlay is not None:
+            self._preview_overlay.show_fatigue_panel(False)
         return True
 
     def _on_behavior_toggled(self, checked: bool) -> None:
@@ -5995,7 +5958,8 @@ class MainWindow(QMainWindow):
         )
 
     def _on_fatigue_metrics(self, metrics: object) -> None:
-        self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
+        if self._preview_overlay is not None:
+            self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
         self._latest_fatigue_metrics = metrics
         self._refresh_monitor_metrics()
         self._alarm_controller.on_metrics(metrics)
@@ -6119,12 +6083,14 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"[相機] 實際格式 → 編碼：{codec}  解析度：{w}×{h}  FPS：{fps_str}"
         )
-        self._preview_overlay.update_camera_info(codec, w, h, cam_text)
+        if self._preview_overlay is not None:
+            self._preview_overlay.update_camera_info(codec, w, h, cam_text)
         self._update_preview_telemetry()
         self._emit_web_metrics(force=True)
 
     def _on_frame(self, image) -> None:
-        self._preview_overlay.update_frame(image)
+        if self._preview_overlay is not None:
+            self._preview_overlay.update_frame(image)
         self._update_monitor_preview(image)
         self._emit_web_frame(image)
 
@@ -6137,7 +6103,8 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_fps(self, fps: float) -> None:
-        self._preview_overlay.update_fps(fps)
+        if self._preview_overlay is not None:
+            self._preview_overlay.update_fps(fps)
         self._lbl_fps.setText(f"FPS：{fps:.1f}")
         self._last_fps = float(fps)
         self._update_preview_telemetry()
@@ -6631,8 +6598,9 @@ class MainWindow(QMainWindow):
         self._stop_web_server()
         self._stop_recording()
         self._stop_camera_worker()
-        self._preview_overlay.hide()
-        self._preview_overlay.close()
+        if self._preview_overlay is not None:
+            self._preview_overlay.hide()
+            self._preview_overlay.close()
         super().closeEvent(event)
 
     def nativeEvent(self, event_type, message):  # noqa: N802

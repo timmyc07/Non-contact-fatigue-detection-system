@@ -47,6 +47,10 @@ Combined/RPPG/Fatigue worker topology, recording and replay/shutdown lifecycle
 state, and the injected BLE runtime. The desired analysis mode remains valid
 while the pipeline is stopped; starting the pipeline consumes that controller
 state instead of reading hidden Qt controls.
+Overlay visibility, lock, group-enable, and opacity preferences now live in the
+Qt-free `OverlayRuntimeState`. Engine mode does not construct the legacy Qt
+overlay, overlay checkboxes/sliders, or a no-op Qt-shaped overlay adapter. The
+legacy Qt widgets remain presentation mirrors only in the non-production path.
 `MainWindow` still constructs the concrete QThreads, recording writers, Qt
 multimedia alarm backend, calibration adapters, and signal callbacks. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
@@ -54,6 +58,9 @@ Qt resource state, not command/API authorities. The legacy analysis checkboxes
 are likewise presentation mirrors; settings load/save, `state.get`, worker
 failure recovery, and auto-capture read the controller-owned analysis state.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
+Tauri overlay geometry is not yet part of this state model. Engine settings
+continue to write an empty `overlay.geometry` only for backward schema
+compatibility until a Tauri window-position bridge owns that preference.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:

@@ -69,7 +69,8 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 `EngineController` 管理 camera config、pipeline/analysis topology、recording/replay/shutdown
 state 與 BLE runtime ownership；analysis desired state 在 pipeline 停止時仍由 controller
 保存，hidden Qt checkbox 僅為 legacy presentation mirror；`MainWindow` 僅作
-QThread/signal/Qt multimedia adapter）：
+QThread/signal/Qt multimedia adapter；Overlay 偏好由 Qt-free `OverlayRuntimeState` 保存，
+engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter）：
 
 ```
 CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  →  MainWindow adapter
@@ -88,6 +89,9 @@ validation）。設定引發的 Web server restart 必須在
 背景 thread 停服，再以 Qt queued signal 回主執行緒重啟，禁止在 command handler 阻塞 UI。
 User/alarm/reset 的 strict JSON validation 位於 Qt-free `gui/desktop_settings_contract.py`；
 hotkey 與 camera validation 分別保留在 Qt adapter 與 `gui/engine_controller.py`。
+Overlay 的 preview/metrics/locked/all/opacity 以 `OverlayRuntimeState` 為 runtime 與持久化來源；
+legacy Qt widgets 只在非 engine 路徑作 presentation mirror。Tauri Overlay 的位置與尺寸尚未
+接入此狀態模型，engine mode 目前僅為舊 settings schema 保留空白 `overlay.geometry`。
 
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。
