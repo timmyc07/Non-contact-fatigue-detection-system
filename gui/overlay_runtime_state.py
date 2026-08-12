@@ -8,12 +8,29 @@ _UNSET = object()
 
 
 @dataclass(frozen=True, slots=True)
+class OverlayGeometry:
+    x: int
+    y: int
+    width: int
+    height: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class OverlaySnapshot:
     all_enabled: bool = True
     preview: bool = False
     metrics: bool = True
     locked: bool = True
     opacity: int = 55
+    geometry: OverlayGeometry | None = None
 
 
 class OverlayRuntimeState:
@@ -37,6 +54,24 @@ class OverlayRuntimeState:
             raise ValueError("opacity must be between 0 and 100")
         return value
 
+    @staticmethod
+    def _validate_geometry(value: object) -> OverlayGeometry | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict) or set(value) != {"x", "y", "width", "height"}:
+            raise ValueError("geometry must contain x, y, width, and height")
+        if any(isinstance(item, bool) or not isinstance(item, int) for item in value.values()):
+            raise ValueError("geometry values must be integers")
+        x = value["x"]
+        y = value["y"]
+        width = value["width"]
+        height = value["height"]
+        if not -100_000 <= x <= 100_000 or not -100_000 <= y <= 100_000:
+            raise ValueError("geometry position is outside the supported range")
+        if not 320 <= width <= 16_384 or not 180 <= height <= 16_384:
+            raise ValueError("geometry size is outside the supported range")
+        return OverlayGeometry(x=x, y=y, width=width, height=height)
+
     def configure(
         self,
         *,
@@ -45,6 +80,7 @@ class OverlayRuntimeState:
         metrics: object = _UNSET,
         locked: object = _UNSET,
         opacity: object = _UNSET,
+        geometry: object = _UNSET,
     ) -> OverlaySnapshot:
         changes: dict[str, Any] = {}
         if all_enabled is not _UNSET:
@@ -62,6 +98,8 @@ class OverlayRuntimeState:
             changes["locked"] = self._validate_bool("locked", locked)
         if opacity is not _UNSET:
             changes["opacity"] = self._validate_opacity(opacity)
+        if geometry is not _UNSET:
+            changes["geometry"] = self._validate_geometry(geometry)
         if changes:
             self._state = replace(self._state, **changes)
         return self.snapshot()
@@ -82,6 +120,12 @@ class OverlayRuntimeState:
         opacity = overlay_values.get("opacity")
         if isinstance(opacity, int) and not isinstance(opacity, bool) and 0 <= opacity <= 100:
             changes["opacity"] = opacity
+        geometry = overlay_values.get("geometry")
+        if isinstance(geometry, dict):
+            try:
+                changes["geometry"] = self._validate_geometry(geometry)
+            except ValueError:
+                pass
         if changes:
             self._state = replace(self._state, **changes)
         return self.snapshot()
@@ -98,6 +142,9 @@ class OverlayRuntimeState:
             "overlay_locked": state.locked,
             "overlay_all": state.all_enabled,
             "overlay_opacity": state.opacity,
+            "overlay_geometry": (
+                state.geometry.to_dict() if state.geometry is not None else None
+            ),
         }
 
     def to_settings(self) -> dict[str, dict[str, object]]:
@@ -109,5 +156,10 @@ class OverlayRuntimeState:
                 "metrics": state.metrics,
                 "lock": state.locked,
             },
-            "overlay": {"opacity": state.opacity},
+            "overlay": {
+                "opacity": state.opacity,
+                "geometry": (
+                    state.geometry.to_dict() if state.geometry is not None else None
+                ),
+            },
         }

@@ -63,10 +63,29 @@ class TauriBridge {
   Future<void> setOverlayWindow({
     required bool visible,
     required bool locked,
+    Map<String, dynamic>? geometry,
+    bool resetGeometry = false,
   }) async {
     await invoke('set_overlay_window', <String, dynamic>{
       'visible': visible,
       'locked': locked,
+      'geometry': geometry,
+      'resetGeometry': resetGeometry,
     });
+  }
+
+  Future<Map<String, dynamic>?> getOverlayGeometry() async {
+    final value = await invoke('get_overlay_geometry');
+    if (value is! Map) return null;
+    final raw = Map<String, dynamic>.from(value);
+    final normalized = <String, dynamic>{};
+    for (final key in const ['x', 'y', 'width', 'height']) {
+      final item = raw[key];
+      if (item is! num || !item.isFinite || item != item.roundToDouble()) {
+        return null;
+      }
+      normalized[key] = item.toInt();
+    }
+    return normalized;
   }
 }

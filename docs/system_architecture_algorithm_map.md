@@ -11,7 +11,7 @@
 - 既有部分中文文件與註解有編碼損壞，本文件改以可讀程式邏輯、測試與設定檔為準。
 - 正式產品唯一可見主面板與 Overlay 為 Tauri v2 + Flutter Web；PySide6 `MainWindow` 僅保留隱藏的 engine runtime、Qt worker 與 adapter 責任，不是使用者操作入口。
 - 分析模式的期望狀態由 Qt-free controller 保存；管線停止後仍保留，設定讀寫、desktop state、worker failure 與下一次啟動不再以隱藏 Qt checkbox 作為狀態來源。
-- Overlay 的顯示、數值、鎖定、總開關與透明度偏好由 Qt-free presentation state 保存；engine mode 不建立 Qt Overlay、假 checkbox/slider 或 no-op adapter。Tauri Overlay geometry 尚未遷移，設定檔暫時保留空欄位相容舊 schema。
+- Overlay 的顯示、數值、鎖定、總開關、透明度與 Tauri 視窗 geometry 由 Qt-free presentation state 保存；engine mode 不建立 Qt Overlay、假 checkbox/slider 或 no-op adapter。Geometry 使用 physical pixel `{x,y,width,height}`，支援多螢幕負座標，原生視窗回報實際值後由 Flutter 同步回 Python runtime。
 - 回放資料夾、平行數、標註開關與進度投影由 Qt-free replay state 保存；engine mode 不建立 replay spinbox、checkbox、狀態 label 或按鈕。Replay lifecycle 仍由 controller 管理，QThread 與既有 worker 建立留在 Qt adapter。
 - 自動記錄、心跳帶校準與自動採集偏好由 Qt-free capture preference state 保存；engine mode 不建立對應 checkbox、spinbox 或按鈕。BLE、錄影與倒數計時 side effect 仍留在 Qt adapter，失敗時回滾偏好狀態；自動採集秒數與 include-belt 維持 session-only。
 
@@ -44,7 +44,7 @@ flowchart TD
 | 正式桌面主面板 | Flutter/Tauri 介面區 | 顯示狀態、相機與分析設定、錄製、校準、回放、通知與視覺化；透過 localhost API 控制 Python engine | 操作員唯一可見的開始、停止、錄製與設定入口 |
 | 正式浮動 Overlay | Flutter/Tauri 介面區 | 顯示即時影像、BPM、PERCLOS 與疲勞狀態；由 Tauri 建立透明獨立 WebView | 操作員看即時狀態與警示 |
 | 隱藏 engine runtime adapter | Python/PySide6 runtime 區 | 管理 Qt worker/thread、影像訊號、錄影 writer、Qt 音效與平台快捷鍵；不建立可見主面板、Qt Overlay 或其假控制元件 | 執行背景相機、分析、錄影、告警與校準工作 |
-| Overlay presentation state | Python Qt-free 狀態區 | 保存 preview、metrics、lock、all 與 opacity，投影到 desktop API 與 settings JSON；legacy Qt controls 僅作 mirror | Flutter/Tauri 控制 Overlay 偏好、重啟後還原設定 |
+| Overlay presentation state | Python Qt-free 狀態區 | 保存 preview、metrics、lock、all、opacity 與原生視窗 geometry，投影到 desktop API 與 settings JSON；legacy Qt controls 僅作 mirror | Flutter/Tauri 控制 Overlay 偏好、拖動／縮放後保存並於重啟還原 |
 | Replay presentation state | Python Qt-free 狀態區 | 保存當次 replay path、jobs、annotated 與進度文字／計數，投影到 desktop API；legacy Qt controls 僅作 mirror | Flutter/Tauri 選取回放資料夾、啟停回放與顯示進度 |
 | Capture preference state | Python Qt-free 狀態區 | 保存自動記錄、心跳帶校準、自動採集秒數與 include-belt；持久化既有 toggles，硬體與計時 side effect 由 adapter 執行 | Flutter/Tauri 設定採集偏好，不依賴隱藏 Qt 控件 |
 | 相機裝置辨識策略 | 桌面介面區 | Windows 優先 DirectShow 名稱，Linux 優先 V4L2 與穩定裝置標籤，必要時 OpenCV probe | 相機下拉選單、跨平台攝影機相容 |

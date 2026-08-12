@@ -70,9 +70,14 @@ Qt resource state, not command/API authorities. The legacy analysis checkboxes
 are likewise presentation mirrors; settings load/save, `state.get`, worker
 failure recovery, and auto-capture read the controller-owned analysis state.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
-Tauri overlay geometry is not yet part of this state model. Engine settings
-continue to write an empty `overlay.geometry` only for backward schema
-compatibility until a Tauri window-position bridge owns that preference.
+Tauri overlay geometry is part of the same state model as a platform-neutral
+physical-pixel `{x, y, width, height}` object. The shell applies geometry when
+it creates the overlay or when Python's authoritative value explicitly changes.
+Normal polling only reports actual native geometry, so manual movement is not
+reset. Flutter updates Python runtime state only when the native value changes.
+Persisting still occurs through the existing explicit `settings.save`
+transaction. Legacy Qt base64 geometry is tolerated on load but is not written
+by the production engine path.
 Replay configuration remains session-scoped as before; this extraction does
 not add a settings JSON schema. Worker parameters, deterministic timestamps,
 annotated output, UTA-RLDD validation reports, and analysis values are unchanged.
@@ -157,6 +162,10 @@ The Dart bridge uses the Tauri global API exposed by `withGlobalTauri`, so a Jav
 browser-only Flutter work, start `.venv\Scripts\python main.py --engine`
 separately. `flutter build web --release` is invoked by Tauri's
 `beforeBuildCommand`.
+Debug Tauri builds deliberately ignore any stale sidecar copied under
+`src-tauri/target/debug/engine` and launch the current checkout through its
+source Python environment. Release builds continue to resolve and launch the
+bundled sidecar from the application resource directory.
 
 ## Rollout
 

@@ -3489,6 +3489,14 @@ class MainWindow(QMainWindow):
             self._sync_analysis_controls()
 
         self._overlay_state.load(toggles=toggles, overlay=overlay)
+        loaded_overlay_geometry = self._overlay_state.snapshot().geometry
+        if self._preview_overlay is not None and loaded_overlay_geometry is not None:
+            self._preview_overlay.setGeometry(
+                loaded_overlay_geometry.x,
+                loaded_overlay_geometry.y,
+                loaded_overlay_geometry.width,
+                loaded_overlay_geometry.height,
+            )
         self._sync_overlay_controls()
 
         web = data.get("web", {})
@@ -3505,6 +3513,16 @@ class MainWindow(QMainWindow):
 
     def _save_settings(self) -> Path:
         path = self._settings_path()
+        if self._preview_overlay is not None:
+            geometry = self._preview_overlay.geometry()
+            self._overlay_state.configure(
+                geometry={
+                    "x": geometry.x(),
+                    "y": geometry.y(),
+                    "width": geometry.width(),
+                    "height": geometry.height(),
+                }
+            )
         camera = self._engine_controller.camera_snapshot()
         analysis = self._engine_controller.analysis_snapshot()
         overlay_state = self._overlay_state.to_settings()
@@ -3515,11 +3533,7 @@ class MainWindow(QMainWindow):
                 "state": self._encode_bytes(self.saveState()),
             },
             "overlay": {
-                "geometry": (
-                    self._encode_bytes(self._preview_overlay.saveGeometry())
-                    if self._preview_overlay is not None
-                    else ""
-                ),
+                "geometry": overlay_state["overlay"]["geometry"],
                 "opacity": overlay_state["overlay"]["opacity"],
             },
             "camera": {
@@ -4035,6 +4049,7 @@ class MainWindow(QMainWindow):
             )
         if "overlay" in selected:
             overlay_changes["opacity"] = 55
+            overlay_changes["geometry"] = None
         if overlay_changes:
             self._configure_overlay(**overlay_changes)
         if "web" in selected:
@@ -4272,9 +4287,10 @@ class MainWindow(QMainWindow):
                 if isinstance(opacity, bool) or not isinstance(opacity, int) or not 0 <= opacity <= 100:
                     raise ValueError("opacity must be between 0 and 100")
                 overlay_changes["opacity"] = opacity
+            if "geometry" in args:
+                overlay_changes["geometry"] = args["geometry"]
             if overlay_changes:
                 self._configure_overlay(**overlay_changes)
-            self._settings_dirty = True
 
         elif command == "replay.configure":
             replay = self._engine_controller.replay_snapshot()

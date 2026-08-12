@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -9,7 +9,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 use tauri_plugin_dialog::DialogExt;
 
 struct BackendProcess(Mutex<Option<Child>>);
@@ -21,6 +23,39 @@ struct SystemInfo {
     os: String,
     arch: String,
     tauri_version: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+struct OverlayGeometry {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+fn validate_overlay_geometry(geometry: OverlayGeometry) -> Result<OverlayGeometry, String> {
+    if !(-100_000..=100_000).contains(&geometry.x)
+        || !(-100_000..=100_000).contains(&geometry.y)
+    {
+        return Err("overlay geometry position is outside the supported range".to_owned());
+    }
+    if !(320..=16_384).contains(&geometry.width)
+        || !(180..=16_384).contains(&geometry.height)
+    {
+        return Err("overlay geometry size is outside the supported range".to_owned());
+    }
+    Ok(geometry)
+}
+
+fn read_overlay_geometry(window: &WebviewWindow) -> Result<OverlayGeometry, String> {
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    Ok(OverlayGeometry {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    })
 }
 
 #[tauri::command]
@@ -100,38 +135,87 @@ fn overlay_url() -> WebviewUrl {
 }
 
 #[tauri::command]
-fn set_overlay_window(
+async fn set_overlay_window(
     app: tauri::AppHandle,
     visible: bool,
     locked: bool,
+    geometry: Option<OverlayGeometry>,
+    reset_geometry: bool,
 ) -> Result<(), String> {
-    let window = if let Some(window) = app.get_webview_window("overlay") {
-        window
-    } else if visible {
-        WebviewWindowBuilder::new(&app, "overlay", overlay_url())
-            .title("疲勞監測 Overlay")
-            .inner_size(720.0, 480.0)
-            .min_inner_size(320.0, 180.0)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(false)
-            .build()
-            .map_err(|error| error.to_string())?
-    } else {
-        return Ok(());
-    };
+    tauri::async_runtime::spawn_blocking(move || {
+        if reset_geometry && geometry.is_some() {
+            return Err("overlay geometry and reset_geometry are mutually exclusive".to_owned());
+        }
+        let geometry = geometry.map(validate_overlay_geometry).transpose()?;
+        let existing = app.get_webview_window("overlay");
+        let (window, created) = if let Some(window) = existing {
+            (window, false)
+        } else if visible {
+            let window = WebviewWindowBuilder::new(&app, "overlay", overlay_url())
+                .title("疲勞監測 Overlay")
+                .inner_size(720.0, 480.0)
+                .min_inner_size(320.0, 180.0)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .visible(false)
+                .build()
+                .map_err(|error| error.to_string())?;
+            (window, true)
+        } else {
+            return Ok(());
+        };
 
-    window
-        .set_ignore_cursor_events(locked)
-        .map_err(|error| error.to_string())?;
-    if visible {
-        window.show().map_err(|error| error.to_string())?;
-    } else {
-        window.hide().map_err(|error| error.to_string())?;
-    }
-    Ok(())
+        let configure_result = (|| {
+            if reset_geometry {
+                window
+                    .set_size(PhysicalSize::new(720, 480))
+                    .map_err(|error| error.to_string())?;
+                window.center().map_err(|error| error.to_string())?;
+            } else if let Some(geometry) = geometry {
+                let current = read_overlay_geometry(&window)?;
+                if current.width != geometry.width || current.height != geometry.height {
+                    window
+                        .set_size(PhysicalSize::new(geometry.width, geometry.height))
+                        .map_err(|error| error.to_string())?;
+                }
+                if current.x != geometry.x || current.y != geometry.y {
+                    window
+                        .set_position(PhysicalPosition::new(geometry.x, geometry.y))
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            window
+                .set_ignore_cursor_events(locked)
+                .map_err(|error| error.to_string())?;
+            if visible {
+                window.show().map_err(|error| error.to_string())?;
+            } else {
+                window.hide().map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        })();
+        if configure_result.is_err() && created {
+            let _ = window.destroy();
+        }
+        configure_result
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn get_overlay_geometry(
+    app: tauri::AppHandle,
+) -> Result<Option<OverlayGeometry>, String> {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || read_overlay_geometry(&window))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(Some)
 }
 
 fn backend_address() -> SocketAddr {
@@ -236,6 +320,10 @@ fn bundled_engine_path(resource_dir: &Path) -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
+fn engine_path_for_mode(resource_dir: &Path, use_bundled: bool) -> Option<PathBuf> {
+    use_bundled.then(|| bundled_engine_path(resource_dir)).flatten()
+}
+
 fn bundled_resource_root(engine_path: &Path) -> PathBuf {
     let engine_dir = engine_path.parent().unwrap_or(engine_path);
     let internal = engine_dir.join("_internal");
@@ -260,7 +348,7 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         .path()
         .resource_dir()
         .map_err(|error| format!("failed to resolve resource directory: {error}"))?;
-    let packaged_engine = bundled_engine_path(&resource_dir);
+    let packaged_engine = engine_path_for_mode(&resource_dir, !cfg!(debug_assertions));
     if backend_available() {
         if backend_api_compatible() && packaged_engine.is_none() {
             return Ok(None);
@@ -398,7 +486,8 @@ fn run() {
             start_dragging,
             toggle_always_on_top,
             pick_replay_folder,
-            set_overlay_window
+            set_overlay_window,
+            get_overlay_geometry
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");
@@ -422,7 +511,8 @@ fn main() {
 mod tests {
     use super::{
         backend_api_version_from_response, bundled_engine_path, bundled_resource_root,
-        path_to_frontend_string,
+        engine_path_for_mode, path_to_frontend_string, validate_overlay_geometry,
+        OverlayGeometry,
     };
     use std::fs;
     use std::path::Path;
@@ -463,6 +553,32 @@ mod tests {
     }
 
     #[test]
+    fn validates_overlay_geometry_with_negative_monitor_coordinates() {
+        let geometry = OverlayGeometry {
+            x: -1280,
+            y: 24,
+            width: 720,
+            height: 480,
+        };
+
+        assert_eq!(validate_overlay_geometry(geometry), Ok(geometry));
+    }
+
+    #[test]
+    fn rejects_overlay_geometry_outside_size_contract() {
+        let geometry = OverlayGeometry {
+            x: 0,
+            y: 0,
+            width: 319,
+            height: 480,
+        };
+
+        assert!(validate_overlay_geometry(geometry)
+            .expect_err("small overlay width must be rejected")
+            .contains("size"));
+    }
+
+    #[test]
     fn finds_bundled_engine_under_resource_directory() {
         let directory = temp_resource_dir();
         let engine_dir = directory.join("engine");
@@ -472,6 +588,23 @@ mod tests {
         fs::write(&engine, b"test").expect("engine marker");
 
         assert_eq!(bundled_engine_path(&directory), Some(engine));
+        fs::remove_dir_all(directory).expect("temporary resource cleanup");
+    }
+
+    #[test]
+    fn debug_mode_ignores_stale_bundled_engine() {
+        let directory = temp_resource_dir();
+        let engine_dir = directory.join("engine");
+        fs::create_dir_all(&engine_dir).expect("engine directory");
+        let name = if cfg!(windows) {
+            "ncfd-engine.exe"
+        } else {
+            "ncfd-engine"
+        };
+        fs::write(engine_dir.join(name), b"stale").expect("stale engine marker");
+
+        assert_eq!(engine_path_for_mode(&directory, false), None);
+        assert!(engine_path_for_mode(&directory, true).is_some());
         fs::remove_dir_all(directory).expect("temporary resource cleanup");
     }
 

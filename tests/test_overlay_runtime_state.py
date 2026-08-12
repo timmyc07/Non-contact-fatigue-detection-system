@@ -33,6 +33,7 @@ def test_overlay_defaults_and_all_toggle_preserve_desktop_contract() -> None:
         "overlay_locked": True,
         "overlay_all": True,
         "overlay_opacity": 55,
+        "overlay_geometry": None,
     }
 
     state.configure(all_enabled=False)
@@ -42,6 +43,7 @@ def test_overlay_defaults_and_all_toggle_preserve_desktop_contract() -> None:
         "overlay_locked": True,
         "overlay_all": False,
         "overlay_opacity": 55,
+        "overlay_geometry": None,
     }
 
 
@@ -57,7 +59,7 @@ def test_overlay_partial_configuration_and_persistence_projection() -> None:
             "metrics": True,
             "lock": False,
         },
-        "overlay": {"opacity": 72},
+        "overlay": {"opacity": 72, "geometry": None},
     }
 
 
@@ -92,6 +94,50 @@ def test_overlay_load_ignores_invalid_values_and_reset_restores_defaults() -> No
 
     state.reset()
     assert state.snapshot() == OverlayRuntimeState().snapshot()
+
+
+def test_overlay_geometry_round_trips_across_desktop_and_settings_contracts() -> None:
+    state = OverlayRuntimeState()
+    geometry = {"x": -1280, "y": 24, "width": 720, "height": 480}
+
+    state.configure(geometry=geometry)
+
+    assert state.to_desktop_state()["overlay_geometry"] == geometry
+    assert state.to_settings()["overlay"]["geometry"] == geometry
+
+    restored = OverlayRuntimeState()
+    restored.load(toggles={}, overlay={"geometry": geometry})
+    assert restored.snapshot() == state.snapshot()
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        "legacy-base64",
+        {},
+        {"x": 0, "y": 0, "width": 720},
+        {"x": True, "y": 0, "width": 720, "height": 480},
+        {"x": 100_001, "y": 0, "width": 720, "height": 480},
+        {"x": 0, "y": 0, "width": 319, "height": 480},
+        {"x": 0, "y": 0, "width": 720, "height": 179},
+    ],
+)
+def test_overlay_configuration_rejects_invalid_geometry(geometry: object) -> None:
+    with pytest.raises(ValueError, match="geometry"):
+        OverlayRuntimeState().configure(geometry=geometry)
+
+
+def test_overlay_load_ignores_legacy_or_invalid_geometry() -> None:
+    state = OverlayRuntimeState()
+
+    state.load(toggles={}, overlay={"geometry": "legacy-base64"})
+    assert state.snapshot().geometry is None
+
+    state.load(
+        toggles={},
+        overlay={"geometry": {"x": 0, "y": 0, "width": 10, "height": 10}},
+    )
+    assert state.snapshot().geometry is None
 
 
 @pytest.mark.parametrize("opacity", [-1, 101, True, 55.5, "55"])

@@ -113,10 +113,16 @@ class _MonitorShellState extends State<MonitorShell> {
   bool _alwaysOnTop = false;
   int? _lastDesktopNoticeId;
   int _selectedSection = 0;
-  Map<String, bool>? _pendingOverlaySync;
+  Map<String, dynamic>? _pendingOverlaySync;
   bool _overlaySyncInFlight = false;
   bool _overlaySyncDisposed = false;
   bool _overlaySyncErrorShown = false;
+  bool _overlayWindowStateInitialized = false;
+  bool _lastOverlayVisible = false;
+  bool _lastOverlayLocked = true;
+  bool _overlayWindowExists = false;
+  bool _acceptedOverlayGeometryInitialized = false;
+  Map<String, dynamic>? _acceptedOverlayGeometry;
 
   @override
   void initState() {
@@ -247,17 +253,35 @@ class _MonitorShellState extends State<MonitorShell> {
     _queueOverlaySync(
       visible: running && (preview || metrics),
       locked: state['overlay_locked'] == true,
+      geometry: overlayGeometryFromState(state),
     );
   }
 
   void _hideOverlayWindow() {
-    _queueOverlaySync(visible: false, locked: true);
+    _queueOverlaySync(
+      visible: false,
+      locked: true,
+      syncGeometry: false,
+      readGeometry: false,
+      persistGeometry: false,
+    );
   }
 
-  void _queueOverlaySync({required bool visible, required bool locked}) {
-    _pendingOverlaySync = <String, bool>{
+  void _queueOverlaySync({
+    required bool visible,
+    required bool locked,
+    Map<String, dynamic>? geometry,
+    bool syncGeometry = true,
+    bool readGeometry = true,
+    bool persistGeometry = true,
+  }) {
+    _pendingOverlaySync = <String, dynamic>{
       'visible': visible,
       'locked': locked,
+      'geometry': geometry,
+      'syncGeometry': syncGeometry,
+      'readGeometry': readGeometry,
+      'persistGeometry': persistGeometry,
     };
     if (_overlaySyncInFlight) return;
     _overlaySyncInFlight = true;
@@ -270,10 +294,56 @@ class _MonitorShellState extends State<MonitorShell> {
       _pendingOverlaySync = null;
       if (!_bridge.isAvailable) continue;
       try {
-        await _bridge.setOverlayWindow(
-          visible: desired['visible'] == true,
-          locked: desired['locked'] == true,
+        final visible = desired['visible'] == true;
+        final locked = desired['locked'] == true;
+        final savedGeometry = desired['geometry'] as Map<String, dynamic>?;
+        final windowStateChanged = !_overlayWindowStateInitialized ||
+            visible != _lastOverlayVisible ||
+            locked != _lastOverlayLocked;
+        final geometryNeedsApply = overlayGeometryNeedsApply(
+          syncGeometry: desired['syncGeometry'] == true,
+          acceptedInitialized: _acceptedOverlayGeometryInitialized,
+          savedGeometry: savedGeometry,
+          acceptedGeometry: _acceptedOverlayGeometry,
+          visible: visible,
+          windowExists: _overlayWindowExists,
         );
+        if (windowStateChanged || geometryNeedsApply) {
+          await _bridge.setOverlayWindow(
+            visible: visible,
+            locked: locked,
+            geometry: geometryNeedsApply ? savedGeometry : null,
+            resetGeometry: overlayGeometryResetRequested(
+              geometryNeedsApply: geometryNeedsApply,
+              savedGeometry: savedGeometry,
+            ),
+          );
+          _overlayWindowStateInitialized = true;
+          _lastOverlayVisible = visible;
+          _lastOverlayLocked = locked;
+        }
+
+        Map<String, dynamic>? actualGeometry;
+        if (desired['readGeometry'] == true) {
+          actualGeometry = await _bridge.getOverlayGeometry();
+          _overlayWindowExists = actualGeometry != null;
+        }
+        if (actualGeometry != null &&
+            desired['persistGeometry'] == true &&
+            !overlayGeometryEquals(actualGeometry, savedGeometry)) {
+          final state = await _backend.command(
+            'overlay.configure',
+            <String, dynamic>{'geometry': actualGeometry},
+          );
+          if (mounted && !_overlaySyncDisposed) {
+            setState(() => _engineState = state);
+          }
+          _acceptedOverlayGeometry = overlayGeometryFromState(state);
+          _acceptedOverlayGeometryInitialized = true;
+        } else if (actualGeometry != null) {
+          _acceptedOverlayGeometry = savedGeometry;
+          _acceptedOverlayGeometryInitialized = true;
+        }
         _overlaySyncErrorShown = false;
       } catch (error) {
         if (!_overlaySyncErrorShown && mounted && !_overlaySyncDisposed) {
@@ -451,6 +521,49 @@ double overlayOpacityPercent(Map<String, dynamic> state) {
   return ((state['overlay_opacity'] as num?)?.toDouble() ?? 55)
       .clamp(0, 100)
       .toDouble();
+}
+
+Map<String, dynamic>? overlayGeometryFromState(Map<String, dynamic> state) {
+  final raw = state['overlay_geometry'];
+  if (raw is! Map) return null;
+  final geometry = Map<String, dynamic>.from(raw);
+  if (geometry.keys
+          .toSet()
+          .difference({'x', 'y', 'width', 'height'}).isNotEmpty ||
+      !{'x', 'y', 'width', 'height'}.every(geometry.containsKey) ||
+      geometry.values.any((value) => value is! int)) {
+    return null;
+  }
+  return geometry;
+}
+
+bool overlayGeometryEquals(
+  Map<String, dynamic>? left,
+  Map<String, dynamic>? right,
+) {
+  if (left == null || right == null) return left == right;
+  return const {'x', 'y', 'width', 'height'}
+      .every((key) => left[key] == right[key]);
+}
+
+bool overlayGeometryNeedsApply({
+  required bool syncGeometry,
+  required bool acceptedInitialized,
+  required Map<String, dynamic>? savedGeometry,
+  required Map<String, dynamic>? acceptedGeometry,
+  required bool visible,
+  required bool windowExists,
+}) {
+  if (!syncGeometry || (!visible && !windowExists)) return false;
+  return !acceptedInitialized ||
+      !overlayGeometryEquals(savedGeometry, acceptedGeometry);
+}
+
+bool overlayGeometryResetRequested({
+  required bool geometryNeedsApply,
+  required Map<String, dynamic>? savedGeometry,
+}) {
+  return geometryNeedsApply && savedGeometry == null;
 }
 
 class _OverlayShellState extends State<OverlayShell> {

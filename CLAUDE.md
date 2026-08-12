@@ -54,6 +54,10 @@ npm run desktop
 python -m rppg.demo_rppg_live
 ```
 
+Tauri debug build 必須使用 checkout source engine（忽略 `src-tauri/target/debug/engine` 內可能
+過期的 sidecar）；release build 才使用 resource directory 的 bundled engine。修改
+`spawn_backend` 時須維持此邊界，避免 dev UI 驗到舊版 Python API。
+
 Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。相機黑屏診斷：`scripts/diagnose_camera.py`。
 
 ## 環境已知坑（遇錯先查這裡，再決定要不要重試）
@@ -92,9 +96,12 @@ validation）。設定引發的 Web server restart 必須在
 背景 thread 停服，再以 Qt queued signal 回主執行緒重啟，禁止在 command handler 阻塞 UI。
 User/alarm/reset 的 strict JSON validation 位於 Qt-free `gui/desktop_settings_contract.py`；
 hotkey 與 camera validation 分別保留在 Qt adapter 與 `gui/engine_controller.py`。
-Overlay 的 preview/metrics/locked/all/opacity 以 `OverlayRuntimeState` 為 runtime 與持久化來源；
-legacy Qt widgets 只在非 engine 路徑作 presentation mirror。Tauri Overlay 的位置與尺寸尚未
-接入此狀態模型，engine mode 目前僅為舊 settings schema 保留空白 `overlay.geometry`。
+Overlay 的 preview/metrics/locked/all/opacity 與 Tauri 視窗 geometry 以
+`OverlayRuntimeState` 為 runtime 與持久化來源；legacy Qt widgets 只在非 engine 路徑作
+presentation mirror。`overlay.geometry` 使用平台中立 physical pixel
+`{x,y,width,height}`（支援多螢幕負座標）；Tauri 在建立 Overlay 或 Python 權威值明確
+變更時套用 geometry，一般輪詢只回報實際位置與尺寸，由 Flutter 在原生值改變時更新
+Python runtime，`settings.save` 才持久化。
 Replay lifecycle 仍由 `EngineController` 管理；Flutter/Tauri 所需的 replay configuration 與
 progress payload 由 `ReplayRuntimeState` 提供，legacy Qt widgets 僅為 mirror，實際 QThread 與
 `VideoReplayWorker` 建立仍留在 `MainWindow` adapter。此狀態目前不寫入 settings JSON，維持既有

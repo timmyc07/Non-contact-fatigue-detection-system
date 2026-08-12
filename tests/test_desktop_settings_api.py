@@ -527,6 +527,68 @@ def test_overlay_commands_state_and_saved_json_remain_in_sync(
     assert saved_state["overlay_metrics"] is persisted["toggles"]["metrics"]
     assert saved_state["overlay_locked"] is persisted["toggles"]["lock"]
     assert saved_state["overlay_opacity"] == persisted["overlay"]["opacity"]
+    assert saved_state["overlay_geometry"] is None
+    assert persisted["overlay"]["geometry"] is None
+
+
+def test_overlay_geometry_command_round_trips_through_settings(
+    settings_window: MainWindow,
+) -> None:
+    geometry = {"x": -1280, "y": 24, "width": 720, "height": 480}
+
+    state = settings_window._handle_desktop_command(
+        "overlay.configure", {"geometry": geometry}
+    )
+    assert state["overlay_geometry"] == geometry
+    assert state["settings_dirty"] is True
+
+    saved = settings_window._handle_desktop_command("settings.save", {})
+    persisted = json.loads(
+        settings_window._settings_path().read_text(encoding="utf-8")
+    )
+    assert saved["overlay_geometry"] == geometry
+    assert persisted["overlay"]["geometry"] == geometry
+
+    settings_window._overlay_state.reset()
+    settings_window._load_settings()
+    assert settings_window._desktop_control_state()["overlay_geometry"] == geometry
+
+
+def test_overlay_geometry_unchanged_command_does_not_mark_dirty(
+    settings_window: MainWindow,
+) -> None:
+    geometry = {"x": 10, "y": 20, "width": 720, "height": 480}
+    settings_window._overlay_state.configure(geometry=geometry)
+
+    state = settings_window._handle_desktop_command(
+        "overlay.configure", {"geometry": geometry}
+    )
+
+    assert state["settings_dirty"] is False
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        "legacy-base64",
+        {"x": 0, "y": 0, "width": 10, "height": 10},
+        {"x": 0, "y": 0, "width": 720, "height": False},
+    ],
+)
+def test_overlay_geometry_command_rejects_invalid_payload_without_partial_apply(
+    settings_window: MainWindow,
+    geometry: object,
+) -> None:
+    with pytest.raises(ValueError, match="geometry"):
+        settings_window._handle_desktop_command(
+            "overlay.configure",
+            {"all": False, "geometry": geometry},
+        )
+
+    state = settings_window._desktop_control_state()
+    assert state["overlay_all"] is True
+    assert state["overlay_geometry"] is None
+    assert state["settings_dirty"] is False
 
 
 def test_settings_load_and_reset_restore_overlay_runtime_state(
@@ -571,6 +633,7 @@ def test_settings_load_and_reset_restore_overlay_runtime_state(
     assert reset["overlay_metrics"] is True
     assert reset["overlay_locked"] is True
     assert reset["overlay_opacity"] == 55
+    assert reset["overlay_geometry"] is None
     assert applied == [True]
 
 

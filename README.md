@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
 
 影片回放的「選擇資料夾」由 Tauri 原生 dialog 提供；取消不會修改目前設定。若原生 picker 無法使用，面板會顯示錯誤，仍可在同一區塊手動輸入完整資料夾路徑並套用。
 
-啟用面板設定中的鏡頭或數值 Overlay 且開始管線後，Tauri 會建立獨立的透明 Overlay WebView；它與主面板共用 Python engine 的即時 metrics/preview。鎖定 Overlay 時由原生視窗啟用 click-through，解除鎖定後可拖曳視窗。
+啟用面板設定中的鏡頭或數值 Overlay 且開始管線後，Tauri 會建立獨立的透明 Overlay WebView；它與主面板共用 Python engine 的即時 metrics/preview。鎖定 Overlay 時由原生視窗啟用 click-through，解除鎖定後可拖曳視窗；位置與尺寸變更會同步到設定狀態，按「儲存設定」後於下次啟動還原（支援多螢幕負座標）。
 
 桌面重構效能基準（不需要相機；結果為 JSON）：
 
