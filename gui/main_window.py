@@ -131,6 +131,23 @@ WEB_PREVIEW_TARGET_FPS = 30.0
 logger = logging.getLogger(__name__)
 
 
+def _classify_log_message(message: str, *, warning_priority: bool = False) -> str:
+    text = str(message)
+    warning = "⚠" in text or "警告" in text
+    error = "✗" in text or "錯誤" in text or "失敗" in text
+    if warning_priority and warning:
+        return "warning"
+    if error:
+        return "error"
+    if warning:
+        return "warning"
+    if "✓" in text:
+        return "success"
+    if "http://" in text or "https://" in text:
+        return "link"
+    return "info"
+
+
 class _WebRestartBridge(QObject):
     stopped = Signal(bool, bool)
 
@@ -1289,7 +1306,6 @@ class MainWindow(QMainWindow):
 
     def _install_headless_controls(self) -> None:
         """Install state-only controls so desktop commands keep their contracts."""
-        self._log = _HeadlessControl()
         self._mon_contrib_bars: dict[str, Any] = {}
         self._layout_seg_buttons: dict[str, Any] = {}
         self._theme_seg_buttons: dict[str, Any] = {}
@@ -4716,6 +4732,15 @@ class MainWindow(QMainWindow):
         self._notify_user("影片錄製", msg)
 
     def _append_log(self, msg: str) -> None:
+        if self._engine_mode:
+            severity = _classify_log_message(msg, warning_priority=True)
+            if severity == "error":
+                logger.error("%s", msg)
+            elif severity == "warning":
+                logger.warning("%s", msg)
+            else:
+                logger.info("%s", msg)
+            return
         self._append_log_html(msg)
         self.statusBar().showMessage(msg, 4000)
 
@@ -4728,13 +4753,14 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_log"):
             return
         d = _PALETTES["dark"]
-        if "✗" in msg or "錯誤" in msg or "失敗" in msg:
+        severity = _classify_log_message(msg)
+        if severity == "error":
             color = d["BAD"]
-        elif "⚠" in msg:
+        elif severity == "warning":
             color = d["STATUS_WARN"]
-        elif "✓" in msg:
+        elif severity == "success":
             color = d["STATUS_OK"]
-        elif "http://" in msg or "https://" in msg:
+        elif severity == "link":
             color = d["ACCENT"]
         else:
             color = d["TEXT_ON_VIDEO"]

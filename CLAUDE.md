@@ -116,6 +116,8 @@ worker、相機／分析 worker topology 或任何 rPPG／疲勞數值路徑。
 Web LAN 偏好由 `WebPreferencesState` 提供 runtime、desktop state 與 settings JSON `web.allow_lan`
 投影；engine mode 不建立 legacy QAction。Web server 建立、shared-token URL 與非阻塞 restart
 仍由 `MainWindow` adapter 執行，預設維持 localhost-only。
+engine mode 的 runtime 訊息直接寫入 Python logger，不建立 QTextEdit 日誌假元件；legacy
+QTextEdit 與 status bar 僅保留在非 production Qt 路徑。
 
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。

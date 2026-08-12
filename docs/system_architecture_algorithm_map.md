@@ -16,6 +16,7 @@
 - 回放資料夾、平行數、標註開關與進度投影由 Qt-free replay state 保存；engine mode 不建立 replay spinbox、checkbox、狀態 label 或按鈕。Replay lifecycle 仍由 controller 管理，QThread 與既有 worker 建立留在 Qt adapter。
 - 自動記錄、心跳帶校準與自動採集偏好由 Qt-free capture preference state 保存；engine mode 不建立對應 checkbox、spinbox 或按鈕。BLE、錄影與倒數計時 side effect 仍留在 Qt adapter，失敗時回滾偏好狀態；自動採集秒數與 include-belt 維持 session-only。
 - Web LAN 存取偏好由 Qt-free web preference state 保存；engine mode 不建立 QAction 假元件。設定讀寫、desktop state、bind host 與 URL 投影直接讀取該狀態；Web server thread、shared token 與非阻塞 restart 仍留在 Qt adapter，預設僅綁定 localhost。
+- engine mode 的 runtime 訊息直接送入 Python logger，不建立 QTextEdit 日誌假元件；rich-text console 與 status bar 只存在於非 production legacy Qt 路徑。
 
 ## 整體資料流
 

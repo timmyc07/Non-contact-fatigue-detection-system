@@ -24,7 +24,7 @@ from gui.desktop_control import (  # noqa: E402
 )
 import gui.main_window as main_window_module  # noqa: E402
 from gui.engine_controller import AnalysisLifecyclePorts, CameraDevice  # noqa: E402
-from gui.main_window import MainWindow  # noqa: E402
+from gui.main_window import MainWindow, _classify_log_message  # noqa: E402
 from gui.video_replay import ReplayVideoSummary  # noqa: E402
 
 
@@ -111,12 +111,44 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_chk_behavior",
         "_chk_stress",
         "_act_web_allow_lan",
+        "_log",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
     assert settings_window.minimumWidth() == 0
     assert settings_window.minimumHeight() == 0
     assert settings_window.findChildren(QStatusBar) == []
+
+
+def test_engine_log_messages_use_python_logger(
+    settings_window: MainWindow, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="gui.main_window"):
+        settings_window._append_log("pipeline ready")
+        settings_window._append_log("⚠ camera warning")
+        settings_window._append_log("⚠ camera start failed")
+        settings_window._append_log("警告：camera unavailable")
+        settings_window._append_log("✗ camera failure")
+
+    records = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "gui.main_window"
+    ]
+    assert records == [
+        (logging.INFO, "pipeline ready"),
+        (logging.WARNING, "⚠ camera warning"),
+        (logging.WARNING, "⚠ camera start failed"),
+        (logging.WARNING, "警告：camera unavailable"),
+        (logging.ERROR, "✗ camera failure"),
+    ]
+
+
+def test_log_classification_preserves_legacy_error_color_precedence() -> None:
+    message = "⚠ Web 儀表板啟動失敗"
+
+    assert _classify_log_message(message) == "error"
+    assert _classify_log_message(message, warning_priority=True) == "warning"
 
 
 def test_headless_analysis_command_updates_controller_owned_state(

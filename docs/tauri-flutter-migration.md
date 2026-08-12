@@ -79,6 +79,9 @@ not construct a QAction stand-in; settings load/save, desktop state, bind-host
 selection, and dashboard URL formatting read the state directly. The existing
 web-server thread, shared-token URL, and non-blocking restart coordination stay
 in the `MainWindow` runtime adapter, with localhost-only remaining the default.
+Engine-mode runtime messages now go directly to the Python logger instead of a
+QTextEdit-shaped no-op sink. The rich-text log console and status-bar projection
+remain limited to the non-production legacy Qt path.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is part of the same state model as a platform-neutral
 physical-pixel `{x, y, width, height}` object. The shell applies geometry when
