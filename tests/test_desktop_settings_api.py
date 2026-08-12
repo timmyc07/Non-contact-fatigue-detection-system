@@ -241,6 +241,48 @@ def test_settings_load_and_reset_restore_overlay_runtime_state(
     assert applied == [True]
 
 
+def test_overlay_reset_sections_do_not_change_each_other(
+    settings_window: MainWindow,
+) -> None:
+    settings_window._handle_desktop_command(
+        "overlay.configure", {"all": False, "opacity": 81}
+    )
+    settings_window._handle_desktop_command(
+        "preferences.configure",
+        {
+            "overlay_preview": True,
+            "overlay_metrics": False,
+            "overlay_locked": False,
+        },
+    )
+
+    toggles_reset = settings_window._handle_desktop_command(
+        "settings.reset", {"sections": ["toggles"]}
+    )
+    assert toggles_reset["overlay_all"] is True
+    assert toggles_reset["overlay_preview"] is False
+    assert toggles_reset["overlay_metrics"] is True
+    assert toggles_reset["overlay_locked"] is True
+    assert toggles_reset["overlay_opacity"] == 81
+
+    settings_window._handle_desktop_command(
+        "preferences.configure",
+        {
+            "overlay_preview": True,
+            "overlay_metrics": False,
+            "overlay_locked": False,
+        },
+    )
+    overlay_reset = settings_window._handle_desktop_command(
+        "settings.reset", {"sections": ["overlay"]}
+    )
+    assert overlay_reset["overlay_all"] is True
+    assert overlay_reset["overlay_preview"] is True
+    assert overlay_reset["overlay_metrics"] is False
+    assert overlay_reset["overlay_locked"] is False
+    assert overlay_reset["overlay_opacity"] == 55
+
+
 def test_running_analysis_command_reconciles_two_changes_once(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:

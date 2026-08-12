@@ -3943,21 +3943,27 @@ class MainWindow(QMainWindow):
         if "camera" in selected:
             self._engine_controller.reset_camera_settings()
             self._sync_camera_widgets()
+        overlay_changes: dict[str, object] = {}
         if "toggles" in selected:
             for checkbox, checked in (
                 (self._chk_belt_calib, False),
                 (self._chk_auto_record, False),
             ):
                 checkbox.setChecked(checked)
-            self._overlay_state.reset()
-            self._sync_overlay_controls()
-            self._apply_overlay_state()
+            overlay_changes.update(
+                all_enabled=True,
+                preview=False,
+                metrics=True,
+                locked=True,
+            )
             self._configure_analysis(
                 behavior_enabled=True,
                 rppg_enabled=False,
             )
         if "overlay" in selected:
-            self._configure_overlay(opacity=55)
+            overlay_changes["opacity"] = 55
+        if overlay_changes:
+            self._configure_overlay(**overlay_changes)
         if "web" in selected:
             self._act_web_allow_lan.blockSignals(True)
             self._act_web_allow_lan.setChecked(False)
