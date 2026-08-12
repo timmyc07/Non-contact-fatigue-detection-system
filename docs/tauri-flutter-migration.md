@@ -56,6 +56,13 @@ live in the Qt-free `ReplayRuntimeState`. Engine mode no longer constructs the
 replay spinbox, checkbox, folder/current/result/status labels, or replay buttons.
 `EngineController` still owns replay lifecycle, while `MainWindow` remains the
 adapter that constructs the existing QThread and `VideoReplayWorker`.
+Auto-record, belt-calibration, and auto-capture preferences now live in the
+Qt-free `CapturePreferencesState`. Engine mode no longer constructs their
+legacy checkboxes, duration spinbox, or auto-capture button. Auto-record and
+belt-calibration retain the existing settings JSON toggle contract; duration
+and include-belt remain session-scoped. `MainWindow` still performs BLE,
+recording, and QTimer side effects and rolls the preference state back when an
+adapter fails.
 `MainWindow` still constructs the concrete QThreads, recording writers, Qt
 multimedia alarm backend, calibration adapters, and signal callbacks. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
@@ -69,6 +76,9 @@ compatibility until a Tauri window-position bridge owns that preference.
 Replay configuration remains session-scoped as before; this extraction does
 not add a settings JSON schema. Worker parameters, deterministic timestamps,
 annotated output, UTA-RLDD validation reports, and analysis values are unchanged.
+The capture-preference extraction likewise leaves camera capture, worker
+topology, BLE samples, calibration math, recording workers, rPPG output, and
+fatigue scores unchanged.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:

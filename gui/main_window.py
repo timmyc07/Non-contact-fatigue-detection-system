@@ -68,6 +68,7 @@ from gui.alarm_config import (
 from gui.alarm_player import FatigueAlarmController
 from gui.belt_runtime import BeltRuntime
 from gui.camera_stream_worker import CameraStreamWorker
+from gui.capture_preferences_state import CapturePreferencesState
 from gui.combined_worker import CombinedWorker
 from gui.dialogs import HotkeyConfig, UserProfile
 from gui.desktop_control import (
@@ -1143,6 +1144,7 @@ class MainWindow(QMainWindow):
         self._hotkeys = HotkeyConfig()
         self._user = UserProfile()
         self._overlay_state = OverlayRuntimeState()
+        self._capture_preferences = CapturePreferencesState()
 
         self._preview_overlay = None if self._engine_mode else PreviewOverlayWindow()
         if not self._engine_mode:
@@ -1287,10 +1289,6 @@ class MainWindow(QMainWindow):
         """Install state-only controls so desktop commands keep their contracts."""
         self._chk_behavior = _HeadlessControl(checked=True)
         self._chk_stress = _HeadlessControl()
-        self._chk_auto_record = _HeadlessControl()
-        self._chk_belt_calib = _HeadlessControl()
-        self._chk_auto_capture_belt = _HeadlessControl()
-        self._spn_auto_capture_seconds = _HeadlessControl(value=60)
         self._act_web_allow_lan = _HeadlessControl()
         self._log = _HeadlessControl()
         self._mon_contrib_bars: dict[str, Any] = {}
@@ -1301,7 +1299,7 @@ class MainWindow(QMainWindow):
         # visual widgets; keeping the names explicit makes missing runtime
         # contracts fail loudly instead of being hidden by a dynamic adapter.
         control_names = (
-            "_btn_auto_capture", "_btn_bench", "_btn_record", "_btn_record_baseline",
+            "_btn_bench", "_btn_record", "_btn_record_baseline",
             "_btn_start",
             "_lbl_belt_address", "_lbl_belt_banner_battery", "_lbl_belt_banner_bpm",
             "_lbl_belt_banner_device", "_lbl_belt_banner_rssi", "_lbl_belt_battery",
@@ -1366,17 +1364,6 @@ class MainWindow(QMainWindow):
         state = self._overlay_state.snapshot()
         current = getattr(state, field)
         self._configure_overlay(**{field: not current})
-
-    def _set_engine_checkbox(
-        self,
-        control: _HeadlessControl,
-        checked: bool,
-        handler=None,
-    ) -> None:
-        previous = control.isChecked()
-        control.setChecked(checked)
-        if self._engine_mode and handler is not None and previous != checked:
-            handler(checked)
 
     def _sync_analysis_controls(self) -> None:
         plan = self._engine_controller.analysis_snapshot()
@@ -1449,6 +1436,61 @@ class MainWindow(QMainWindow):
     def _update_replay_presentation(self, **changes: object) -> None:
         self._replay_state.update_presentation(**changes)
         self._sync_replay_controls()
+
+    def _sync_capture_preference_controls(self) -> None:
+        if self._engine_mode:
+            return
+        state = self._capture_preferences.snapshot()
+        for control, value in (
+            (self._chk_auto_record, state.auto_record),
+            (self._chk_belt_calib, state.belt_calibration),
+            (self._chk_auto_capture_belt, state.auto_capture_include_belt),
+        ):
+            control.blockSignals(True)
+            try:
+                control.setChecked(value)
+            finally:
+                control.blockSignals(False)
+        self._spn_auto_capture_seconds.blockSignals(True)
+        try:
+            self._spn_auto_capture_seconds.setValue(state.auto_capture_seconds)
+        finally:
+            self._spn_auto_capture_seconds.blockSignals(False)
+
+    def _configure_capture_preferences(
+        self,
+        *,
+        mark_dirty: bool = True,
+        **changes: object,
+    ) -> None:
+        previous = self._capture_preferences.snapshot()
+        current = self._capture_preferences.configure(**changes)
+        if current == previous:
+            return
+        self._sync_capture_preference_controls()
+        if current.belt_calibration != previous.belt_calibration:
+            belt_was_running = self._engine_controller.belt_running
+            try:
+                self._on_belt_calib_toggled(current.belt_calibration)
+            except Exception:
+                if current.belt_calibration:
+                    self._rollback_failed_belt_calibration_start(
+                        stop_belt=not belt_was_running
+                    )
+                self._capture_preferences.restore(previous)
+                self._sync_capture_preference_controls()
+                raise
+            current = self._capture_preferences.snapshot()
+        if current.auto_record != previous.auto_record:
+            self._append_log(
+                f"[UI] 按下開始時自動記錄 → {'開啟' if current.auto_record else '關閉'}"
+            )
+        persisted_changed = (
+            current.auto_record != previous.auto_record
+            or current.belt_calibration != previous.belt_calibration
+        )
+        if mark_dirty and persisted_changed:
+            self._settings_dirty = True
 
     def _configure_analysis(
         self,
@@ -1718,13 +1760,15 @@ class MainWindow(QMainWindow):
         # Behaviour alertness toggle — functional
         self._chk_behavior.toggled.connect(self._on_behavior_toggled)
         self._chk_auto_record.toggled.connect(
-            lambda checked: self._append_log(
-                f"[UI] {self._chk_auto_record.text()} → {'開啟' if checked else '關閉'}"
-            )
+            lambda checked: self._configure_capture_preferences(auto_record=checked)
         )
         # rPPG stress/HRV toggle — functional
         self._chk_stress.toggled.connect(self._on_stress_toggled)
-        self._chk_belt_calib.toggled.connect(self._on_belt_calib_toggled)
+        self._chk_belt_calib.toggled.connect(
+            lambda checked: self._configure_capture_preferences(
+                belt_calibration=checked
+            )
+        )
 
         self._append_log("歡迎使用 NCFD System。變更選項僅寫入此視窗日誌。")
         self._start_camera_scan()
@@ -2289,6 +2333,11 @@ class MainWindow(QMainWindow):
         self._spn_auto_capture_seconds = QSpinBox()
         self._spn_auto_capture_seconds.setRange(10, 600)
         self._spn_auto_capture_seconds.setValue(60)
+        self._spn_auto_capture_seconds.valueChanged.connect(
+            lambda value: self._configure_capture_preferences(
+                auto_capture_seconds=value
+            )
+        )
         auto_row.addWidget(self._spn_auto_capture_seconds)
         self._btn_auto_capture = QPushButton("自動採集")
         self._btn_auto_capture.setToolTip(
@@ -2302,6 +2351,11 @@ class MainWindow(QMainWindow):
         auto_row.addStretch(1)
         auto_col.addLayout(auto_row)
         self._chk_auto_capture_belt = QCheckBox("自動採集含心跳帶")
+        self._chk_auto_capture_belt.toggled.connect(
+            lambda checked: self._configure_capture_preferences(
+                auto_capture_include_belt=checked
+            )
+        )
         auto_col.addWidget(self._chk_auto_capture_belt)
         auto_col.addStretch(1)
         grid.addLayout(auto_col, 1, 1)
@@ -3415,15 +3469,8 @@ class MainWindow(QMainWindow):
 
         toggles = data.get("toggles", {})
         if isinstance(toggles, dict):
-            checkboxes = (
-                (self._chk_belt_calib, toggles.get("belt_calib")),
-                (self._chk_auto_record, toggles.get("auto_record")),
-            )
-            for chk, val in checkboxes:
-                if isinstance(val, bool):
-                    chk.blockSignals(True)
-                    chk.setChecked(val)
-                    chk.blockSignals(False)
+            self._capture_preferences.load(toggles=toggles)
+            self._sync_capture_preference_controls()
             current_analysis = self._engine_controller.analysis_snapshot()
             behavior_enabled = toggles.get("behavior")
             rppg_enabled = toggles.get("stress")
@@ -3461,6 +3508,7 @@ class MainWindow(QMainWindow):
         camera = self._engine_controller.camera_snapshot()
         analysis = self._engine_controller.analysis_snapshot()
         overlay_state = self._overlay_state.to_settings()
+        capture_toggles = self._capture_preferences.to_settings_toggles()
         data = {
             "window": {
                 "geometry": self._encode_bytes(self.saveGeometry()),
@@ -3485,8 +3533,7 @@ class MainWindow(QMainWindow):
                 **overlay_state["toggles"],
                 "behavior": analysis.fatigue_enabled,
                 "stress": analysis.rppg_enabled,
-                "belt_calib": self._chk_belt_calib.isChecked(),
-                "auto_record": self._chk_auto_record.isChecked(),
+                **capture_toggles,
             },
             "hotkeys": {
                 "toggle_metrics": self._hotkeys.toggle_metrics,
@@ -3971,11 +4018,11 @@ class MainWindow(QMainWindow):
             self._sync_camera_widgets()
         overlay_changes: dict[str, object] = {}
         if "toggles" in selected:
-            for checkbox, checked in (
-                (self._chk_belt_calib, False),
-                (self._chk_auto_record, False),
-            ):
-                checkbox.setChecked(checked)
+            self._configure_capture_preferences(
+                mark_dirty=False,
+                auto_record=False,
+                belt_calibration=False,
+            )
             overlay_changes.update(
                 all_enabled=True,
                 preview=False,
@@ -4019,16 +4066,12 @@ class MainWindow(QMainWindow):
             "recording": pipeline.recording,
             "recording_path": str(self._recording_db_path or ""),
             "auto_capture_active": self._auto_capture_timer is not None,
-            "auto_capture_seconds": int(self._spn_auto_capture_seconds.value()),
-            "auto_capture_include_belt": self._chk_auto_capture_belt.isChecked(),
             "benchmark_active": bool(self._benchmark_active),
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
             "selected_camera_index": camera.selected_index,
             "cameras": cameras,
             "behavior_enabled": analysis.fatigue_enabled,
             "rppg_enabled": analysis.rppg_enabled,
-            "auto_record": self._chk_auto_record.isChecked(),
-            "belt_calibration": self._chk_belt_calib.isChecked(),
             "horizontal_flip": camera.horizontal_flip,
             "resolution": camera.resolution,
             "fps": camera.fps,
@@ -4070,6 +4113,7 @@ class MainWindow(QMainWindow):
         }
         state.update(self._overlay_state.to_desktop_state())
         state.update(self._replay_state.to_desktop_state())
+        state.update(self._capture_preferences.to_desktop_state())
         return state
 
     def _set_combo_value(self, combo: QComboBox, value: object, *, by_data: bool = False) -> None:
@@ -4159,17 +4203,10 @@ class MainWindow(QMainWindow):
             self._settings_dirty = True
 
         elif command == "preferences.configure":
-            checkbox_keys = {
-                "auto_record": self._chk_auto_record,
-                "belt_calibration": self._chk_belt_calib,
-            }
-            for key, checkbox in checkbox_keys.items():
+            capture_changes: dict[str, object] = {}
+            for key in ("auto_record", "belt_calibration"):
                 if key in args:
-                    checked = self._require_bool(args, key)
-                    handler = {
-                        "belt_calibration": self._on_belt_calib_toggled,
-                    }.get(key)
-                    self._set_engine_checkbox(checkbox, checked, handler)
+                    capture_changes[key] = self._require_bool(args, key)
             overlay_changes: dict[str, object] = {}
             for key, field in (
                 ("overlay_preview", "preview"),
@@ -4178,31 +4215,43 @@ class MainWindow(QMainWindow):
             ):
                 if key in args:
                     overlay_changes[field] = self._require_bool(args, key)
+            if capture_changes:
+                self._configure_capture_preferences(**capture_changes)
             if overlay_changes:
                 self._configure_overlay(**overlay_changes)
-            self._settings_dirty = True
 
         elif command == "auto_capture.set":
             enabled = self._require_bool(args, "enabled")
             if enabled:
-                duration = args.get("duration_seconds", self._spn_auto_capture_seconds.value())
+                capture = self._capture_preferences.snapshot()
+                duration = args.get("duration_seconds", capture.auto_capture_seconds)
                 if isinstance(duration, bool) or not isinstance(duration, int) or not 10 <= duration <= 600:
                     raise ValueError("duration_seconds must be between 10 and 600")
+                include_belt = (
+                    self._require_bool(args, "include_belt")
+                    if "include_belt" in args
+                    else False
+                )
                 if self._auto_capture_timer is None:
-                    self._spn_auto_capture_seconds.setValue(duration)
-                    include_belt = bool(args.get("include_belt", False))
-                    self._chk_auto_capture_belt.setChecked(include_belt)
+                    self._configure_capture_preferences(
+                        auto_capture_seconds=duration,
+                        auto_capture_include_belt=include_belt,
+                    )
                     self._on_auto_capture_clicked()
             elif self._auto_capture_timer is not None:
                 self._on_auto_capture_clicked()
 
         elif command == "auto_capture.configure":
-            duration = args.get("duration_seconds", self._spn_auto_capture_seconds.value())
+            capture = self._capture_preferences.snapshot()
+            duration = args.get("duration_seconds", capture.auto_capture_seconds)
             if isinstance(duration, bool) or not isinstance(duration, int) or not 10 <= duration <= 600:
                 raise ValueError("duration_seconds must be between 10 and 600")
-            self._spn_auto_capture_seconds.setValue(duration)
+            capture_changes = {"auto_capture_seconds": duration}
             if "include_belt" in args:
-                self._chk_auto_capture_belt.setChecked(self._require_bool(args, "include_belt"))
+                capture_changes["auto_capture_include_belt"] = self._require_bool(
+                    args, "include_belt"
+                )
+            self._configure_capture_preferences(**capture_changes)
 
         elif command == "benchmark.set":
             enabled = self._require_bool(args, "enabled")
@@ -5298,7 +5347,7 @@ class MainWindow(QMainWindow):
         """依勾選狀態與 rPPG 是否運行，啟停背景心跳帶校準。"""
         want = (
             self._engine_controller.pipeline_snapshot().running
-            and self._chk_belt_calib.isChecked()
+            and self._capture_preferences.snapshot().belt_calibration
             and self._rppg_active()
         )
         if want and self._belt_calibrator is None:
@@ -5315,9 +5364,8 @@ class MainWindow(QMainWindow):
             if err:
                 self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
                 self._lbl_belt_status.setText("心跳帶校準：啟動失敗")
-                self._chk_belt_calib.blockSignals(True)
-                self._chk_belt_calib.setChecked(False)
-                self._chk_belt_calib.blockSignals(False)
+                self._capture_preferences.configure(belt_calibration=False)
+                self._sync_capture_preference_controls()
                 return
             target = (
                 f"位址 {belt_cfg.address}" if belt_cfg.address
@@ -5369,6 +5417,32 @@ class MainWindow(QMainWindow):
             self._combined_worker.set_belt_truth_capture(writer)
         if self._rppg_worker is not None:
             self._rppg_worker.set_belt_truth_capture(writer)
+
+    def _rollback_failed_belt_calibration_start(self, *, stop_belt: bool) -> None:
+        """Best-effort cleanup for an incomplete calibration start transaction."""
+        writer = self._belt_truth_capture
+        self._belt_truth_capture = None
+        if writer is not None:
+            try:
+                self._dispatch_belt_truth_capture(None)
+            except Exception:
+                logger.exception("心跳帶校準啟動回滾時解除錄製 writer 失敗")
+            try:
+                writer.close()
+            except Exception:
+                logger.exception("心跳帶校準啟動回滾時關閉錄製 writer 失敗")
+        try:
+            self._belt_ui_timer.stop()
+        except Exception:
+            logger.exception("心跳帶校準啟動回滾時停止計時器失敗")
+        self._rppg_param_coordinator = None
+        self._belt_calibrator = None
+        self._last_calib_fed_metrics = None
+        if stop_belt and self._engine_controller.belt_running:
+            try:
+                self._engine_controller.stop_belt()
+            except Exception:
+                logger.exception("心跳帶校準啟動回滾時停止 BLE 失敗")
 
     def _resolve_current_roi_weights(self) -> dict[str, float]:
         """P6b-3b：取得目前生效的 ROI base_weights，作為協調層 A/B 的「現行」基準。
@@ -6276,7 +6350,7 @@ class MainWindow(QMainWindow):
             self._sync_overlay_visibility()
             self._update_preview_telemetry()
             self._update_device_status()
-            if self._chk_auto_record.isChecked() and not self._recording:
+            if self._capture_preferences.snapshot().auto_record and not self._recording:
                 self._toggle_recording()
             self._emit_web_metrics(force=True)
         else:
@@ -6364,15 +6438,20 @@ class MainWindow(QMainWindow):
         self._auto_capture_timer.stop()
         self._auto_capture_timer.deleteLater()
         self._auto_capture_timer = None
-        self._btn_auto_capture.setText("自動採集")
-        self._spn_auto_capture_seconds.setEnabled(True)
+        if not self._engine_mode:
+            self._btn_auto_capture.setText("自動採集")
+            self._spn_auto_capture_seconds.setEnabled(True)
 
     def _rollback_auto_capture_toggles(self) -> None:
         """回滾本次自動採集自己強制勾選的核取方塊，且只在目前仍是勾選狀態才動，
         避免覆蓋使用者在期間手動做的操作。"""
-        if self._auto_capture_started_belt_calib and self._chk_belt_calib.isChecked():
-            self._set_engine_checkbox(
-                self._chk_belt_calib, False, self._on_belt_calib_toggled
+        if (
+            self._auto_capture_started_belt_calib
+            and self._capture_preferences.snapshot().belt_calibration
+        ):
+            self._configure_capture_preferences(
+                mark_dirty=False,
+                belt_calibration=False,
             )
         self._auto_capture_started_belt_calib = False
         analysis = self._engine_controller.analysis_snapshot()
@@ -6384,7 +6463,7 @@ class MainWindow(QMainWindow):
         self._auto_capture_started_stress = False
 
     def _on_auto_capture_clicked(self) -> None:
-        """一鍵自動採集：只串接既有觸發點（setChecked／_toggle_pipeline／_toggle_recording），
+        """一鍵自動採集：只串接既有偏好入口、_toggle_pipeline 與 _toggle_recording，
         不重寫任何 worker 啟停、記錄或心跳帶校準邏輯本身。"""
         if self._auto_capture_timer is not None:
             # 倒數中再按一次 → 提前停止。
@@ -6392,7 +6471,8 @@ class MainWindow(QMainWindow):
             self._finish_auto_capture(early=True)
             return
 
-        include_belt = self._chk_auto_capture_belt.isChecked()
+        capture = self._capture_preferences.snapshot()
+        include_belt = capture.auto_capture_include_belt
         self._auto_capture_started_belt_calib = False
         self._auto_capture_started_stress = False
         self._auto_capture_started_recording = False
@@ -6404,11 +6484,14 @@ class MainWindow(QMainWindow):
                     rppg_enabled=True,
                 )
                 self._auto_capture_started_stress = True
-            if not self._chk_belt_calib.isChecked():
-                self._set_engine_checkbox(
-                    self._chk_belt_calib, True, self._on_belt_calib_toggled
+            if not self._capture_preferences.snapshot().belt_calibration:
+                self._configure_capture_preferences(
+                    mark_dirty=False,
+                    belt_calibration=True,
                 )
-                self._auto_capture_started_belt_calib = True
+                self._auto_capture_started_belt_calib = (
+                    self._capture_preferences.snapshot().belt_calibration
+                )
 
         pipeline_started_by_this_call = False
         if not self._engine_controller.pipeline_snapshot().running:
@@ -6440,9 +6523,10 @@ class MainWindow(QMainWindow):
         )
         self._auto_capture_expected_db_path = self._recording_db_path
 
-        duration_s = self._spn_auto_capture_seconds.value()
-        self._btn_auto_capture.setText("停止自動採集")
-        self._spn_auto_capture_seconds.setEnabled(False)
+        duration_s = self._capture_preferences.snapshot().auto_capture_seconds
+        if not self._engine_mode:
+            self._btn_auto_capture.setText("停止自動採集")
+            self._spn_auto_capture_seconds.setEnabled(False)
         self._append_log(
             f"▶ 自動採集開始（{duration_s}s，{'含心跳帶' if include_belt else '僅記錄'}）"
         )
@@ -6453,7 +6537,7 @@ class MainWindow(QMainWindow):
 
     def _finish_auto_capture(self, early: bool) -> None:
         """自動採集收尾：只呼叫既有停止觸發點，belt-truth capture writer 的關閉交給
-        既有 _stop_belt_calibration（經由 unchecked _chk_belt_calib 觸發）自行處理。
+        既有 `_stop_belt_calibration`（經由 capture preference 回滾觸發）自行處理。
         停止記錄需同時滿足兩個條件才會呼叫 _toggle_recording()：
         (1) `_auto_capture_started_recording` 為 True——這段記錄是本次自動採集自己
             啟動的，而非使用者按下「自動採集」前就已手動開始、自動採集只是沿用；
@@ -6465,7 +6549,7 @@ class MainWindow(QMainWindow):
         # 讀 belt-truth writer 的即時路徑（若倒數期間使用者手動取消再重新勾選過
         # 心跳帶校準，_belt_truth_capture 會是新建的 writer，路徑與啟動當下快照的
         # _auto_capture_belt_path 不同）。必須在下面任何可能經由 unchecked
-        # _chk_belt_calib 觸發 _stop_belt_calibration（把 _belt_truth_capture 設回
+        # belt calibration preference 觸發 _stop_belt_calibration（把 _belt_truth_capture 設回
         # None）的動作——包含 _toggle_recording() 內部現在也會呼叫
         # _rollback_auto_capture_toggles()——發生之前先讀取，否則會讀到 None。
         live_belt_path = (

@@ -103,6 +103,11 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_lbl_replay_dir",
         "_lbl_replay_parallel_status",
         "_lbl_replay_result",
+        "_chk_auto_record",
+        "_chk_belt_calib",
+        "_chk_auto_capture_belt",
+        "_spn_auto_capture_seconds",
+        "_btn_auto_capture",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
@@ -166,6 +171,328 @@ def test_settings_load_restores_controller_owned_analysis_state(
     state = settings_window._handle_desktop_command("state.get", {})
     assert state["behavior_enabled"] is False
     assert state["rppg_enabled"] is True
+
+
+def test_capture_preferences_state_and_saved_json_remain_in_sync(
+    settings_window: MainWindow,
+) -> None:
+    state = settings_window._handle_desktop_command(
+        "preferences.configure",
+        {"auto_record": True, "belt_calibration": True},
+    )
+    assert state["auto_record"] is True
+    assert state["belt_calibration"] is True
+
+    state = settings_window._handle_desktop_command(
+        "auto_capture.configure",
+        {"duration_seconds": 120, "include_belt": True},
+    )
+    assert state["auto_capture_seconds"] == 120
+    assert state["auto_capture_include_belt"] is True
+
+    saved = settings_window._handle_desktop_command("settings.save", {})
+    persisted = json.loads(
+        settings_window._settings_path().read_text(encoding="utf-8")
+    )
+    assert saved["auto_record"] is persisted["toggles"]["auto_record"]
+    assert saved["belt_calibration"] is persisted["toggles"]["belt_calib"]
+    assert "auto_capture" not in persisted
+
+
+def test_settings_load_and_reset_restore_capture_persisted_preferences(
+    settings_window: MainWindow,
+) -> None:
+    settings_window._settings_path().write_text(
+        json.dumps(
+            {
+                "toggles": {
+                    "auto_record": True,
+                    "belt_calib": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings_window._capture_preferences.configure(
+        auto_capture_seconds=180,
+        auto_capture_include_belt=True,
+    )
+
+    settings_window._load_settings()
+    loaded = settings_window._handle_desktop_command("state.get", {})
+    assert loaded["auto_record"] is True
+    assert loaded["belt_calibration"] is True
+    assert loaded["auto_capture_seconds"] == 180
+    assert loaded["auto_capture_include_belt"] is True
+
+    reset = settings_window._handle_desktop_command(
+        "settings.reset", {"sections": ["toggles"]}
+    )
+    assert reset["auto_record"] is False
+    assert reset["belt_calibration"] is False
+    assert reset["auto_capture_seconds"] == 180
+    assert reset["auto_capture_include_belt"] is True
+
+
+@pytest.mark.parametrize("command", ["auto_capture.configure", "auto_capture.set"])
+def test_auto_capture_commands_reject_non_boolean_include_belt(
+    settings_window: MainWindow,
+    command: str,
+) -> None:
+    args: dict[str, object] = {
+        "duration_seconds": 60,
+        "include_belt": "false",
+    }
+    if command == "auto_capture.set":
+        args["enabled"] = True
+
+    with pytest.raises(ValueError, match="include_belt"):
+        settings_window._handle_desktop_command(command, args)
+
+    assert settings_window._capture_preferences.snapshot().auto_capture_include_belt is False
+
+
+def test_belt_calibration_preference_rolls_back_when_ble_start_fails(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=True,
+    )
+    settings_window._engine_controller.start_pipeline()
+    belt_runtime = settings_window._engine_controller.belt_runtime
+    monkeypatch.setattr(belt_runtime, "start_belt", lambda _config=None: "BLE unavailable")
+
+    state = settings_window._handle_desktop_command(
+        "preferences.configure", {"belt_calibration": True}
+    )
+
+    assert state["belt_calibration"] is False
+    assert settings_window._belt_calibrator is None
+    assert settings_window._engine_controller.belt_running is False
+    assert state["settings_dirty"] is False
+
+
+def test_other_capture_changes_survive_belt_soft_failure_and_mark_dirty(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=True,
+    )
+    settings_window._engine_controller.start_pipeline()
+    belt_runtime = settings_window._engine_controller.belt_runtime
+    monkeypatch.setattr(belt_runtime, "start_belt", lambda _config=None: "BLE unavailable")
+
+    state = settings_window._handle_desktop_command(
+        "preferences.configure",
+        {"auto_record": True, "belt_calibration": True},
+    )
+
+    assert state["auto_record"] is True
+    assert state["belt_calibration"] is False
+    assert state["settings_dirty"] is True
+
+
+def test_capture_preference_rolls_back_when_runtime_adapter_raises(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_dirty = settings_window._settings_dirty
+    monkeypatch.setattr(
+        settings_window,
+        "_on_belt_calib_toggled",
+        lambda _checked: (_ for _ in ()).throw(RuntimeError("adapter failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="adapter failed"):
+        settings_window._handle_desktop_command(
+            "preferences.configure",
+            {"auto_record": True, "belt_calibration": True},
+        )
+
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["auto_record"] is False
+    assert state["belt_calibration"] is False
+    assert state["settings_dirty"] is original_dirty
+
+
+@pytest.mark.parametrize("failure_point", ["calibrator", "timer", "coordinator", "dispatch"])
+def test_belt_calibration_start_failure_cleans_new_runtime_resources(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    class FakeHub:
+        def clear(self) -> None:
+            pass
+
+    class FakeWriter:
+        path = Path("belt-truth.jsonl")
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeBeltRuntime:
+        def __init__(self) -> None:
+            self.hub = FakeHub()
+            self.belt_running = False
+            self.writer = FakeWriter()
+
+        def start_belt(self, _config: object = None) -> str:
+            self.belt_running = True
+            return ""
+
+        def stop_belt(self) -> None:
+            self.belt_running = False
+
+        def create_truth_capture_writer(self, _path: object = None) -> FakeWriter:
+            return self.writer
+
+    runtime = FakeBeltRuntime()
+    settings_window._engine_controller._belt_runtime = runtime
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=True,
+    )
+    settings_window._engine_controller.start_pipeline()
+    config = main_window_module.HrBeltConfig(
+        rppg_param_tuning_enabled=failure_point == "coordinator",
+        capture_enabled=failure_point == "dispatch",
+    )
+    monkeypatch.setattr(main_window_module, "load_hr_belt_config", lambda: config)
+
+    if failure_point == "calibrator":
+        monkeypatch.setattr(
+            main_window_module,
+            "OnlineBpmCalibrator",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("calibrator failed")),
+        )
+    elif failure_point == "timer":
+        monkeypatch.setattr(
+            settings_window._belt_ui_timer,
+            "start",
+            lambda: (_ for _ in ()).throw(RuntimeError("timer failed")),
+        )
+    elif failure_point == "coordinator":
+        monkeypatch.setattr(
+            main_window_module,
+            "RppgParamCoordinator",
+            lambda: (_ for _ in ()).throw(RuntimeError("coordinator failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            settings_window,
+            "_dispatch_belt_truth_capture",
+            lambda _writer: (_ for _ in ()).throw(RuntimeError("dispatch failed")),
+        )
+
+    with pytest.raises(RuntimeError, match="failed"):
+        settings_window._handle_desktop_command(
+            "preferences.configure",
+            {"belt_calibration": True},
+        )
+
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["belt_calibration"] is False
+    assert state["settings_dirty"] is False
+    assert runtime.belt_running is False
+    assert settings_window._belt_ui_timer.isActive() is False
+    assert settings_window._belt_calibrator is None
+    assert settings_window._rppg_param_coordinator is None
+    assert settings_window._belt_truth_capture is None
+    assert runtime.writer.closed is (failure_point == "dispatch")
+
+
+def test_belt_calibration_failure_preserves_preexisting_belt_runtime(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=True,
+    )
+    settings_window._engine_controller.start_pipeline()
+    belt_runtime = settings_window._engine_controller.belt_runtime
+    monkeypatch.setattr(type(belt_runtime), "belt_running", property(lambda _self: True))
+    stop_calls: list[bool] = []
+    monkeypatch.setattr(belt_runtime, "stop_belt", lambda: stop_calls.append(True))
+    monkeypatch.setattr(
+        main_window_module,
+        "OnlineBpmCalibrator",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("calibrator failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="calibrator failed"):
+        settings_window._handle_desktop_command(
+            "preferences.configure",
+            {"belt_calibration": True},
+        )
+
+    assert stop_calls == []
+    assert settings_window._capture_preferences.snapshot().belt_calibration is False
+
+
+def test_capture_preferences_validate_entire_command_before_applying(
+    settings_window: MainWindow,
+) -> None:
+    with pytest.raises(ValueError, match="overlay_locked"):
+        settings_window._handle_desktop_command(
+            "preferences.configure",
+            {"auto_record": True, "overlay_locked": "false"},
+        )
+
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["auto_record"] is False
+    assert state["overlay_locked"] is True
+    assert state["settings_dirty"] is False
+
+
+def test_session_only_auto_capture_preferences_do_not_mark_settings_dirty(
+    settings_window: MainWindow,
+) -> None:
+    state = settings_window._handle_desktop_command(
+        "auto_capture.configure",
+        {"duration_seconds": 120, "include_belt": True},
+    )
+
+    assert state["auto_capture_seconds"] == 120
+    assert state["auto_capture_include_belt"] is True
+    assert state["settings_dirty"] is False
+
+
+def test_settings_reset_rolls_back_capture_state_when_runtime_adapter_raises(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_window._capture_preferences.configure(
+        auto_record=True,
+        belt_calibration=True,
+    )
+    original_dirty = settings_window._settings_dirty
+    monkeypatch.setattr(
+        settings_window,
+        "_on_belt_calib_toggled",
+        lambda _checked: (_ for _ in ()).throw(RuntimeError("reset adapter failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="reset adapter failed"):
+        settings_window._handle_desktop_command(
+            "settings.reset",
+            {"sections": ["toggles"]},
+        )
+
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["auto_record"] is True
+    assert state["belt_calibration"] is True
+    assert state["settings_dirty"] is original_dirty
 
 
 def test_overlay_commands_state_and_saved_json_remain_in_sync(
