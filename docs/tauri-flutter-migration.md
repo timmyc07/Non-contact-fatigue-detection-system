@@ -42,13 +42,18 @@ longer constructs the legacy Qt menu, central dashboard, or Qt overlay, and the
 engine path does not apply the visual QSS, window size, title bar, or status bar.
 The remaining Qt `MainWindow` is an internal event-loop/runtime adapter. The
 Qt-free `EngineController` is the product-state authority for camera
-configuration, pipeline state, the Combined/RPPG/Fatigue worker topology,
-recording and replay/shutdown lifecycle state, and the injected BLE runtime.
+configuration, the desired analysis mode, active pipeline state, the
+Combined/RPPG/Fatigue worker topology, recording and replay/shutdown lifecycle
+state, and the injected BLE runtime. The desired analysis mode remains valid
+while the pipeline is stopped; starting the pipeline consumes that controller
+state instead of reading hidden Qt controls.
 `MainWindow` still constructs the concrete QThreads, recording writers, Qt
 multimedia alarm backend, calibration adapters, and signal callbacks. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
-Qt resource state, not command/API authorities. The desktop command API exposes
-the controller-backed state to Flutter/Tauri.
+Qt resource state, not command/API authorities. The legacy analysis checkboxes
+are likewise presentation mirrors; settings load/save, `state.get`, worker
+failure recovery, and auto-capture read the controller-owned analysis state.
+The desktop command API exposes the controller-backed state to Flutter/Tauri.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:

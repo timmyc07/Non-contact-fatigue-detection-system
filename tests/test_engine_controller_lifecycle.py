@@ -54,14 +54,29 @@ def test_pipeline_lifecycle_requires_camera_and_preserves_analysis_snapshot() ->
     controller = EngineController()
 
     with pytest.raises(ValueError, match="camera"):
-        controller.start_pipeline(rppg_enabled=True, fatigue_enabled=True)
+        controller.start_pipeline()
 
     controller.replace_cameras([CameraDevice(0, "Camera")])
-    plan = controller.start_pipeline(rppg_enabled=True, fatigue_enabled=True)
+    configured = controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=True,
+    )
+    plan = controller.start_pipeline()
+    assert plan == configured
     assert plan.worker == "combined"
     assert controller.pipeline_snapshot().running is True
 
-    next_plan = controller.set_analysis_plan(rppg_enabled=True, fatigue_enabled=False)
+    next_plan = controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=False,
+        ports=AnalysisLifecyclePorts(
+            stop_all=lambda: None,
+            start_combined=lambda: None,
+            start_rppg=lambda: None,
+            start_fatigue=lambda: None,
+            restore_raw_routing=lambda: None,
+        ),
+    )
     assert next_plan.worker == "rppg"
     assert controller.pipeline_snapshot().analysis == next_plan
 
@@ -72,6 +87,22 @@ def test_pipeline_lifecycle_requires_camera_and_preserves_analysis_snapshot() ->
 
     controller.stop_pipeline()
     assert controller.pipeline_snapshot().running is False
+    assert controller.pipeline_snapshot().analysis.worker == "none"
+    assert controller.analysis_snapshot() == next_plan
+
+
+def test_analysis_preferences_are_product_state_while_pipeline_is_idle() -> None:
+    controller = EngineController()
+
+    assert controller.analysis_snapshot().worker == "fatigue"
+
+    configured = controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=False,
+    )
+
+    assert configured.worker == "rppg"
+    assert controller.analysis_snapshot() == configured
     assert controller.pipeline_snapshot().analysis.worker == "none"
 
 
@@ -100,7 +131,7 @@ def test_pipeline_start_rejects_active_replay() -> None:
     controller.start_replay()
 
     with pytest.raises(RuntimeError, match="replay"):
-        controller.start_pipeline(rppg_enabled=True, fatigue_enabled=True)
+        controller.start_pipeline()
 
     assert controller.pipeline_snapshot().running is False
     assert controller.replay_snapshot().running is True
@@ -172,19 +203,20 @@ def test_analysis_lifecycle_ports_preserve_worker_start_and_restart_order() -> N
         restore_raw_routing=lambda: events.append("raw"),
     )
 
-    controller.start_pipeline(rppg_enabled=True, fatigue_enabled=True)
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True)
+    controller.start_pipeline()
     controller.activate_current_analysis(ports)
-    controller.reconcile_analysis(
+    controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=False,
         ports=ports,
     )
-    controller.reconcile_analysis(
+    controller.configure_analysis(
         rppg_enabled=False,
         fatigue_enabled=True,
         ports=ports,
     )
-    controller.reconcile_analysis(
+    controller.configure_analysis(
         rppg_enabled=False,
         fatigue_enabled=False,
         ports=ports,
@@ -201,10 +233,35 @@ def test_analysis_lifecycle_ports_preserve_worker_start_and_restart_order() -> N
     ]
 
 
+def test_repeating_current_analysis_plan_does_not_restart_workers() -> None:
+    controller = EngineController()
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True)
+    controller.start_pipeline()
+    events: list[str] = []
+    ports = AnalysisLifecyclePorts(
+        stop_all=lambda: events.append("stop"),
+        start_combined=lambda: events.append("combined"),
+        start_rppg=lambda: events.append("rppg"),
+        start_fatigue=lambda: events.append("fatigue"),
+        restore_raw_routing=lambda: events.append("raw"),
+    )
+
+    plan = controller.configure_analysis(
+        rppg_enabled=True,
+        fatigue_enabled=True,
+        ports=ports,
+    )
+
+    assert plan.worker == "combined"
+    assert events == []
+
+
 def test_analysis_reconcile_rolls_back_worker_and_snapshot_on_start_failure() -> None:
     controller = EngineController()
     controller.replace_cameras([CameraDevice(0, "Camera")])
-    controller.start_pipeline(rppg_enabled=True, fatigue_enabled=True)
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True)
+    controller.start_pipeline()
     events: list[str] = []
 
     def fail_rppg() -> None:
@@ -220,7 +277,7 @@ def test_analysis_reconcile_rolls_back_worker_and_snapshot_on_start_failure() ->
     )
 
     with pytest.raises(RuntimeError, match="worker failed"):
-        controller.reconcile_analysis(
+        controller.configure_analysis(
             rppg_enabled=True,
             fatigue_enabled=False,
             ports=ports,
@@ -228,12 +285,14 @@ def test_analysis_reconcile_rolls_back_worker_and_snapshot_on_start_failure() ->
 
     assert events == ["stop", "rppg-failed", "stop", "combined"]
     assert controller.pipeline_snapshot().analysis.worker == "combined"
+    assert controller.analysis_snapshot().worker == "combined"
 
 
 def test_analysis_reconcile_fails_closed_when_worker_rollback_also_fails() -> None:
     controller = EngineController()
     controller.replace_cameras([CameraDevice(0, "Camera")])
-    controller.start_pipeline(rppg_enabled=True, fatigue_enabled=True)
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True)
+    controller.start_pipeline()
 
     def fail(message: str):
         def callback() -> None:
@@ -250,7 +309,7 @@ def test_analysis_reconcile_fails_closed_when_worker_rollback_also_fails() -> No
     )
 
     with pytest.raises(RuntimeError, match="rollback failed"):
-        controller.reconcile_analysis(
+        controller.configure_analysis(
             rppg_enabled=True,
             fatigue_enabled=False,
             ports=ports,
@@ -259,6 +318,7 @@ def test_analysis_reconcile_fails_closed_when_worker_rollback_also_fails() -> No
     snapshot = controller.pipeline_snapshot()
     assert snapshot.running is False
     assert snapshot.cleanup_pending is True
+    assert controller.analysis_snapshot().worker == "combined"
     with pytest.raises(RuntimeError, match="cleanup"):
         controller.start_replay()
 
@@ -266,7 +326,8 @@ def test_analysis_reconcile_fails_closed_when_worker_rollback_also_fails() -> No
 def test_analysis_reconcile_fails_closed_when_initial_stop_fails() -> None:
     controller = EngineController()
     controller.replace_cameras([CameraDevice(0, "Camera")])
-    controller.start_pipeline(rppg_enabled=True, fatigue_enabled=True)
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True)
+    controller.start_pipeline()
     ports = AnalysisLifecyclePorts(
         stop_all=lambda: (_ for _ in ()).throw(RuntimeError("stop failed")),
         start_combined=lambda: None,
@@ -276,7 +337,7 @@ def test_analysis_reconcile_fails_closed_when_initial_stop_fails() -> None:
     )
 
     with pytest.raises(RuntimeError, match="rollback failed"):
-        controller.reconcile_analysis(
+        controller.configure_analysis(
             rppg_enabled=True,
             fatigue_enabled=False,
             ports=ports,

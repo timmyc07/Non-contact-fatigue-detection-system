@@ -124,69 +124,107 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
     assert settings_window.findChildren(QStatusBar) == []
 
 
-def test_headless_analysis_command_preserves_worker_toggle_callbacks(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+def test_headless_analysis_command_updates_controller_owned_state(
+    settings_window: MainWindow,
 ) -> None:
-    calls: list[tuple[str, bool]] = []
-    monkeypatch.setattr(
-        settings_window,
-        "_on_behavior_toggled",
-        lambda checked: calls.append(("behavior", checked)),
-    )
-    monkeypatch.setattr(
-        settings_window,
-        "_on_stress_toggled",
-        lambda checked: calls.append(("rppg", checked)),
-    )
-
-    settings_window._handle_desktop_command(
+    state = settings_window._handle_desktop_command(
         "analysis.configure", {"behavior_enabled": False, "rppg_enabled": True}
     )
 
-    assert calls == [("behavior", False), ("rppg", True)]
-    assert settings_window._chk_behavior.isChecked() is False
-    assert settings_window._chk_stress.isChecked() is True
+    assert state["behavior_enabled"] is False
+    assert state["rppg_enabled"] is True
+    plan = settings_window._engine_controller.analysis_snapshot()
+    assert plan.fatigue_enabled is False
+    assert plan.rppg_enabled is True
+
+
+def test_headless_analysis_state_and_persistence_ignore_control_mirror_drift(
+    settings_window: MainWindow,
+) -> None:
+    settings_window._handle_desktop_command(
+        "analysis.configure",
+        {"behavior_enabled": False, "rppg_enabled": True},
+    )
+    settings_window._chk_behavior.setChecked(True)
+    settings_window._chk_stress.setChecked(False)
+
+    state = settings_window._handle_desktop_command("settings.save", {})
+    persisted = json.loads(
+        settings_window._settings_path().read_text(encoding="utf-8")
+    )
+
+    assert state["behavior_enabled"] is False
+    assert state["rppg_enabled"] is True
+    assert persisted["toggles"]["behavior"] is False
+    assert persisted["toggles"]["stress"] is True
+
+
+def test_settings_load_restores_controller_owned_analysis_state(
+    settings_window: MainWindow,
+) -> None:
+    settings_window._settings_path().write_text(
+        json.dumps(
+            {
+                "toggles": {
+                    "behavior": False,
+                    "stress": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings_window._load_settings()
+
+    state = settings_window._handle_desktop_command("state.get", {})
+    assert state["behavior_enabled"] is False
+    assert state["rppg_enabled"] is True
 
 
 def test_running_analysis_command_reconciles_two_changes_once(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=False,
         fatigue_enabled=True,
     )
-    restarts: list[bool] = []
+    settings_window._engine_controller.start_pipeline()
+    events: list[str] = []
     monkeypatch.setattr(
         settings_window,
-        "_restart_analysis_workers",
-        lambda: restarts.append(True),
+        "_stop_analysis_workers",
+        lambda: events.append("stop"),
     )
+    monkeypatch.setattr(settings_window, "_start_rppg_worker", lambda: events.append("rppg"))
+    monkeypatch.setattr(settings_window, "_ensure_belt_calibration", lambda: None)
+    monkeypatch.setattr(settings_window, "_emit_web_metrics", lambda **_kwargs: None)
 
-    settings_window._handle_desktop_command(
+    state = settings_window._handle_desktop_command(
         "analysis.configure",
         {"behavior_enabled": False, "rppg_enabled": True},
     )
 
-    assert restarts == [True]
-    assert settings_window._chk_behavior.isChecked() is False
-    assert settings_window._chk_stress.isChecked() is True
+    assert events == ["stop", "rppg"]
+    assert state["behavior_enabled"] is False
+    assert state["rppg_enabled"] is True
 
 
-def test_running_analysis_command_rolls_back_controls_on_reconcile_failure(
+def test_running_analysis_command_rolls_back_controller_state_on_reconcile_failure(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=False,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     original_dirty = settings_window._settings_dirty
+    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: None)
     monkeypatch.setattr(
-        settings_window,
-        "_restart_analysis_workers",
-        lambda: (_ for _ in ()).throw(RuntimeError("topology failed")),
+        settings_window, "_start_rppg_worker", lambda: (_ for _ in ()).throw(RuntimeError("topology failed"))
     )
+    monkeypatch.setattr(settings_window, "_start_fatigue_worker", lambda: None)
 
     with pytest.raises(RuntimeError, match="topology failed"):
         settings_window._handle_desktop_command(
@@ -194,8 +232,9 @@ def test_running_analysis_command_rolls_back_controls_on_reconcile_failure(
             {"behavior_enabled": False, "rppg_enabled": True},
         )
 
-    assert settings_window._chk_behavior.isChecked() is True
-    assert settings_window._chk_stress.isChecked() is False
+    plan = settings_window._engine_controller.analysis_snapshot()
+    assert plan.fatigue_enabled is True
+    assert plan.rppg_enabled is False
     assert settings_window._settings_dirty is original_dirty
 
 
@@ -203,18 +242,21 @@ def test_running_analysis_command_cleans_adapters_after_fail_closed(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=False,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._pipeline_running = True
     cleanup: list[bool] = []
 
-    def fail_closed() -> None:
-        settings_window._engine_controller.stop_pipeline()
-        raise RuntimeError("rollback failed")
-
-    monkeypatch.setattr(settings_window, "_restart_analysis_workers", fail_closed)
+    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: None)
+    monkeypatch.setattr(
+        settings_window, "_start_rppg_worker", lambda: (_ for _ in ()).throw(RuntimeError("start failed"))
+    )
+    monkeypatch.setattr(
+        settings_window, "_start_fatigue_worker", lambda: (_ for _ in ()).throw(RuntimeError("rollback failed"))
+    )
     monkeypatch.setattr(
         settings_window,
         "_fail_closed_pipeline_adapters",
@@ -250,10 +292,11 @@ def test_fail_closed_pipeline_cleanup_releases_live_adapter_resources(
             events.append(("thread.wait", timeout_ms))
 
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._pipeline_running = True
     settings_window._recording = True
     settings_window._cam_worker = FakeCameraWorker()  # type: ignore[assignment]
@@ -296,10 +339,11 @@ def test_fail_closed_pipeline_keeps_camera_ownership_when_thread_times_out(
     worker = FakeCameraWorker()
     thread = FakeCameraThread()
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._cam_worker = worker  # type: ignore[assignment]
     settings_window._cam_thread = thread  # type: ignore[assignment]
     monkeypatch.setattr(settings_window, "_stop_recording", lambda: None)
@@ -338,10 +382,11 @@ def test_late_camera_finish_releases_pending_cleanup_and_allows_replay(
     worker = FakeCameraWorker()
     thread = FakeCameraThread()
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._cam_worker = worker  # type: ignore[assignment]
     settings_window._cam_thread = thread  # type: ignore[assignment]
     monkeypatch.setattr(settings_window, "_stop_recording", lambda: True)
@@ -357,61 +402,6 @@ def test_late_camera_finish_releases_pending_cleanup_and_allows_replay(
     settings_window._engine_controller.start_replay()
     assert settings_window._engine_controller.replay_snapshot().running is True
     settings_window._engine_controller.finish_replay()
-
-
-@pytest.mark.parametrize(
-    ("behavior", "rppg", "expected"),
-    [
-        (True, True, ["stop", "combined"]),
-        (False, True, ["stop", "rppg"]),
-        (True, False, ["stop", "fatigue"]),
-        (False, False, ["stop", "raw"]),
-    ],
-)
-def test_headless_controller_dispatches_all_analysis_worker_modes(
-    settings_window: MainWindow,
-    monkeypatch: pytest.MonkeyPatch,
-    behavior: bool,
-    rppg: bool,
-    expected: list[str],
-) -> None:
-    events: list[str] = []
-    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
-        rppg_enabled=rppg,
-        fatigue_enabled=behavior,
-    )
-    settings_window._pipeline_running = True
-    for control, checked in (
-        (settings_window._chk_behavior, behavior),
-        (settings_window._chk_stress, rppg),
-    ):
-        control.blockSignals(True)
-        control.setChecked(checked)
-        control.blockSignals(False)
-    monkeypatch.setattr(
-        settings_window, "_stop_analysis_workers", lambda: events.append("stop")
-    )
-    monkeypatch.setattr(
-        settings_window,
-        "_start_combined_worker",
-        lambda enable_rppg=True: events.append("combined"),
-    )
-    monkeypatch.setattr(
-        settings_window, "_start_rppg_worker", lambda: events.append("rppg")
-    )
-    monkeypatch.setattr(
-        settings_window, "_start_fatigue_worker", lambda: events.append("fatigue")
-    )
-    monkeypatch.setattr(
-        settings_window, "_update_frame_routing", lambda: events.append("raw")
-    )
-    monkeypatch.setattr(settings_window, "_ensure_belt_calibration", lambda: None)
-    monkeypatch.setattr(settings_window, "_emit_web_metrics", lambda **_kwargs: None)
-
-    settings_window._restart_analysis_workers()
-
-    assert events == expected
 
 
 def test_headless_hotkeys_update_overlay_state(
@@ -449,28 +439,25 @@ def test_headless_replay_preview_and_queue_are_engine_safe(
 
 
 @pytest.mark.parametrize(
-    ("failure_handler", "stop_method", "behavior", "rppg", "expected"),
+    ("failure_handler", "stop_method", "behavior", "rppg"),
     [
         (
             "_on_combined_failed",
             "_stop_combined_worker",
             True,
             True,
-            [("rppg", False), ("behavior", False)],
         ),
         (
             "_on_rppg_failed",
             "_stop_rppg_worker",
             False,
             True,
-            [("rppg", False)],
         ),
         (
             "_on_fatigue_failed",
             "_stop_fatigue_worker",
             True,
             False,
-            [("behavior", False)],
         ),
     ],
 )
@@ -481,28 +468,21 @@ def test_headless_worker_failure_applies_analysis_cleanup(
     stop_method: str,
     behavior: bool,
     rppg: bool,
-    expected: list[tuple[str, bool]],
 ) -> None:
-    calls: list[tuple[str, bool]] = []
-    settings_window._chk_behavior.setChecked(behavior)
-    settings_window._chk_stress.setChecked(rppg)
+    settings_window._engine_controller.configure_analysis(
+        fatigue_enabled=behavior,
+        rppg_enabled=rppg,
+    )
+    settings_window._sync_analysis_controls()
     monkeypatch.setattr(settings_window, stop_method, lambda: None)
     monkeypatch.setattr(settings_window, "_append_log", lambda _message: None)
     monkeypatch.setattr(settings_window, "_notify_user", lambda _title, _message: None)
-    monkeypatch.setattr(
-        settings_window,
-        "_on_behavior_toggled",
-        lambda checked: calls.append(("behavior", checked)),
-    )
-    monkeypatch.setattr(
-        settings_window,
-        "_on_stress_toggled",
-        lambda checked: calls.append(("rppg", checked)),
-    )
 
     getattr(settings_window, failure_handler)("boom")
 
-    assert calls == expected
+    state = settings_window._desktop_control_state()
+    assert state["behavior_enabled"] is False
+    assert state["rppg_enabled"] is False
 
 
 def test_hotkeys_configure_replaces_all_shortcuts(
@@ -1075,10 +1055,11 @@ def test_replay_command_uses_controller_pipeline_state(
     tmp_path: Path,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._pipeline_running = False
     settings_window._recording = False
     settings_window._replay_dataset_dir = tmp_path
@@ -1110,10 +1091,11 @@ def test_replay_start_rechecks_controller_before_creating_adapter(
     thread_created: list[bool] = []
 
     def start_after_pipeline_race() -> None:
-        settings_window._engine_controller.start_pipeline(
+        settings_window._engine_controller.configure_analysis(
             rppg_enabled=True,
             fatigue_enabled=True,
         )
+        settings_window._engine_controller.start_pipeline()
         start_replay()
 
     def fail_if_thread_created(*args, **kwargs):
@@ -1212,10 +1194,11 @@ def test_camera_failure_stops_active_recording_runtime(
             events.append(("thread.wait", timeout_ms))
 
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._engine_controller.start_recording()
     settings_window._pipeline_running = True
     settings_window._recording = True
@@ -1376,10 +1359,11 @@ def test_recording_command_rolls_back_partial_writer_failure(
             events.append("video.stop")
 
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._pipeline_running = True
 
     def fail_after_partial_setup() -> None:
@@ -1422,10 +1406,11 @@ def test_video_failure_stops_all_recording_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._engine_controller.start_recording()
     settings_window._recording = True
     cleanup: list[bool] = []
@@ -1448,10 +1433,11 @@ def test_video_warning_keeps_recording_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._engine_controller.start_recording()
     settings_window._recording = True
     cleanup: list[bool] = []
@@ -1526,10 +1512,11 @@ def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(
 
     thread = FakeCameraThread()
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
-    settings_window._engine_controller.start_pipeline(
+    settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
         fatigue_enabled=True,
     )
+    settings_window._engine_controller.start_pipeline()
     settings_window._cam_worker = FakeCameraWorker()  # type: ignore[assignment]
     settings_window._cam_thread = thread  # type: ignore[assignment]
     monkeypatch.setattr(settings_window, "_stop_recording", lambda: True)
@@ -1538,10 +1525,7 @@ def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(
 
     assert settings_window._engine_controller.pipeline_snapshot().cleanup_pending is True
     with pytest.raises(RuntimeError, match="cleanup"):
-        settings_window._engine_controller.start_pipeline(
-            rppg_enabled=True,
-            fatigue_enabled=True,
-        )
+        settings_window._engine_controller.start_pipeline()
 
     settings_window._on_adapter_thread_finished("camera", thread)  # type: ignore[arg-type]
     assert settings_window._engine_controller.pipeline_snapshot().cleanup_pending is False

@@ -1451,6 +1451,60 @@ class MainWindow(QMainWindow):
         if self._engine_mode and handler is not None and previous != checked:
             handler(checked)
 
+    def _sync_analysis_controls(self) -> None:
+        plan = self._engine_controller.analysis_snapshot()
+        for control, checked in (
+            (self._chk_behavior, plan.fatigue_enabled),
+            (self._chk_stress, plan.rppg_enabled),
+        ):
+            control.blockSignals(True)
+            try:
+                control.setChecked(checked)
+            finally:
+                control.blockSignals(False)
+        if not self._engine_mode:
+            self._refresh_preview_tags()
+
+    def _configure_analysis(
+        self,
+        *,
+        behavior_enabled: bool,
+        rppg_enabled: bool,
+    ) -> None:
+        previous = self._engine_controller.analysis_snapshot()
+        if (
+            previous.fatigue_enabled == behavior_enabled
+            and previous.rppg_enabled == rppg_enabled
+        ):
+            return
+        self._latest_rppg_metrics = None
+        self._latest_fatigue_metrics = None
+        self._latest_fused_score = None
+        running = self._engine_controller.pipeline_snapshot().running
+        try:
+            self._engine_controller.configure_analysis(
+                rppg_enabled=rppg_enabled,
+                fatigue_enabled=behavior_enabled,
+                ports=self._analysis_lifecycle_ports() if running else None,
+            )
+        except Exception:
+            self._sync_analysis_controls()
+            if not self._engine_controller.pipeline_snapshot().running:
+                self._fail_closed_pipeline_adapters()
+            raise
+        self._sync_analysis_controls()
+        if previous.fatigue_enabled != behavior_enabled:
+            self._append_log(
+                f"[UI] 行為警覺 → {'開啟' if behavior_enabled else '關閉'}"
+            )
+        if previous.rppg_enabled != rppg_enabled:
+            self._append_log(
+                f"[UI] 壓力／HRV → {'開啟' if rppg_enabled else '關閉'}"
+            )
+        if running:
+            self._ensure_belt_calibration()
+            self._emit_web_metrics(force=True)
+
     def statusBar(self) -> Any:  # noqa: N802
         if getattr(self, "_engine_mode", False):
             return _HeadlessControl()
@@ -2015,8 +2069,9 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_tag_mesh"):
             return
         pal = _PALETTES.get(self._theme, _PALETTES["dark"])
-        mesh_on = hasattr(self, "_chk_behavior") and self._chk_behavior.isChecked()
-        rppg_on = hasattr(self, "_chk_stress") and self._chk_stress.isChecked()
+        analysis = self._engine_controller.analysis_snapshot()
+        mesh_on = analysis.fatigue_enabled
+        rppg_on = analysis.rppg_enabled
 
         def _tag_style(on: bool) -> str:
             col = pal["ACCENT"] if on else pal["TEXT_ON_VIDEO_MUTED"]
@@ -3373,8 +3428,6 @@ class MainWindow(QMainWindow):
                 (self._chk_preview, toggles.get("preview")),
                 (self._chk_metrics, toggles.get("metrics")),
                 (self._chk_lock, toggles.get("lock")),
-                (self._chk_behavior, toggles.get("behavior")),
-                (self._chk_stress, toggles.get("stress")),
                 (self._chk_belt_calib, toggles.get("belt_calib")),
                 (self._chk_auto_record, toggles.get("auto_record")),
             )
@@ -3383,6 +3436,22 @@ class MainWindow(QMainWindow):
                     chk.blockSignals(True)
                     chk.setChecked(val)
                     chk.blockSignals(False)
+            current_analysis = self._engine_controller.analysis_snapshot()
+            behavior_enabled = toggles.get("behavior")
+            rppg_enabled = toggles.get("stress")
+            self._engine_controller.configure_analysis(
+                fatigue_enabled=(
+                    behavior_enabled
+                    if isinstance(behavior_enabled, bool)
+                    else current_analysis.fatigue_enabled
+                ),
+                rppg_enabled=(
+                    rppg_enabled
+                    if isinstance(rppg_enabled, bool)
+                    else current_analysis.rppg_enabled
+                ),
+            )
+            self._sync_analysis_controls()
 
         opacity = overlay.get("opacity")
         if isinstance(opacity, int):
@@ -3403,6 +3472,7 @@ class MainWindow(QMainWindow):
     def _save_settings(self) -> Path:
         path = self._settings_path()
         camera = self._engine_controller.camera_snapshot()
+        analysis = self._engine_controller.analysis_snapshot()
         data = {
             "window": {
                 "geometry": self._encode_bytes(self.saveGeometry()),
@@ -3424,8 +3494,8 @@ class MainWindow(QMainWindow):
                 "preview": self._chk_preview.isChecked(),
                 "metrics": self._chk_metrics.isChecked(),
                 "lock": self._chk_lock.isChecked(),
-                "behavior": self._chk_behavior.isChecked(),
-                "stress": self._chk_stress.isChecked(),
+                "behavior": analysis.fatigue_enabled,
+                "stress": analysis.rppg_enabled,
                 "belt_calib": self._chk_belt_calib.isChecked(),
                 "auto_record": self._chk_auto_record.isChecked(),
             },
@@ -3669,8 +3739,9 @@ class MainWindow(QMainWindow):
     def _build_web_metrics(self) -> dict:
         pipeline = self._engine_controller.pipeline_snapshot()
         pipeline_running = pipeline.running
-        stress_enabled = self._chk_stress.isChecked()
-        behavior_enabled = self._chk_behavior.isChecked()
+        analysis = self._engine_controller.analysis_snapshot()
+        stress_enabled = analysis.rppg_enabled
+        behavior_enabled = analysis.fatigue_enabled
         r = self._latest_rppg_metrics if pipeline_running and stress_enabled else None
         f = self._latest_fatigue_metrics if pipeline_running and behavior_enabled else None
         fusion_on = behavior_enabled and stress_enabled
@@ -3915,12 +3986,14 @@ class MainWindow(QMainWindow):
                 (self._chk_preview, False),
                 (self._chk_metrics, True),
                 (self._chk_lock, True),
-                (self._chk_behavior, True),
-                (self._chk_stress, False),
                 (self._chk_belt_calib, False),
                 (self._chk_auto_record, False),
             ):
                 checkbox.setChecked(checked)
+            self._configure_analysis(
+                behavior_enabled=True,
+                rppg_enabled=False,
+            )
         if "overlay" in selected:
             self._sld_opacity.setValue(55)
             self._apply_overlay_state()
@@ -3938,6 +4011,7 @@ class MainWindow(QMainWindow):
 
     def _desktop_control_state(self) -> dict[str, Any]:
         camera = self._engine_controller.camera_snapshot()
+        analysis = self._engine_controller.analysis_snapshot()
         pipeline = self._engine_controller.pipeline_snapshot()
         replay = self._engine_controller.replay_snapshot()
         cameras = [
@@ -3960,8 +4034,8 @@ class MainWindow(QMainWindow):
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
             "selected_camera_index": camera.selected_index,
             "cameras": cameras,
-            "behavior_enabled": self._chk_behavior.isChecked(),
-            "rppg_enabled": self._chk_stress.isChecked(),
+            "behavior_enabled": analysis.fatigue_enabled,
+            "rppg_enabled": analysis.rppg_enabled,
             "auto_record": self._chk_auto_record.isChecked(),
             "belt_calibration": self._chk_belt_calib.isChecked(),
             "horizontal_flip": camera.horizontal_flip,
@@ -4087,62 +4161,21 @@ class MainWindow(QMainWindow):
             self._settings_dirty = True
 
         elif command == "analysis.configure":
+            current_analysis = self._engine_controller.analysis_snapshot()
             behavior_enabled = (
                 self._require_bool(args, "behavior_enabled")
                 if "behavior_enabled" in args
-                else self._chk_behavior.isChecked()
+                else current_analysis.fatigue_enabled
             )
             rppg_enabled = (
                 self._require_bool(args, "rppg_enabled")
                 if "rppg_enabled" in args
-                else self._chk_stress.isChecked()
+                else current_analysis.rppg_enabled
             )
-            changes = (
-                (
-                    self._chk_behavior,
-                    behavior_enabled,
-                    self._on_behavior_toggled,
-                    "行為警覺",
-                ),
-                (
-                    self._chk_stress,
-                    rppg_enabled,
-                    self._on_stress_toggled,
-                    "壓力／HRV",
-                ),
+            self._configure_analysis(
+                behavior_enabled=behavior_enabled,
+                rppg_enabled=rppg_enabled,
             )
-            changed = []
-            for control, checked, handler, label in changes:
-                previous = control.isChecked()
-                if previous == checked:
-                    continue
-                control.blockSignals(True)
-                try:
-                    control.setChecked(checked)
-                finally:
-                    control.blockSignals(False)
-                changed.append((control, previous, checked, handler, label))
-            if self._engine_mode and changed:
-                try:
-                    if self._engine_controller.pipeline_snapshot().running:
-                        self._restart_analysis_workers()
-                        for _control, _previous, checked, _handler, label in changed:
-                            self._append_log(
-                                f"[UI] {label} → {'開啟' if checked else '關閉'}"
-                            )
-                    else:
-                        for _control, _previous, checked, handler, _label in changed:
-                            handler(checked)
-                except Exception:
-                    for control, previous, _checked, _handler, _label in changed:
-                        control.blockSignals(True)
-                        try:
-                            control.setChecked(previous)
-                        finally:
-                            control.blockSignals(False)
-                    if not self._engine_controller.pipeline_snapshot().running:
-                        self._fail_closed_pipeline_adapters()
-                    raise
             self._settings_dirty = True
 
         elif command == "preferences.configure":
@@ -4325,9 +4358,10 @@ class MainWindow(QMainWindow):
                 raise ValueError(f"Unsupported settings action: {action}")
 
         elif command == "baseline.start":
+            analysis = self._engine_controller.analysis_snapshot()
             if (
                 not self._engine_controller.pipeline_snapshot().running
-                or not self._chk_behavior.isChecked()
+                or not analysis.fatigue_enabled
             ):
                 raise ValueError("Behavior analysis must be running before baseline capture")
             self._on_record_baseline_clicked()
@@ -5674,14 +5708,6 @@ class MainWindow(QMainWindow):
                 lbl.setText("—")
             self._belt_calib_bar.set_fraction(None)
 
-    def _analysis_needed(self) -> tuple[bool, bool]:
-        """Return (want_rppg, want_fatigue) from checkbox state."""
-        plan = self._engine_controller.analysis_plan(
-            rppg_enabled=self._chk_stress.isChecked(),
-            fatigue_enabled=self._chk_behavior.isChecked(),
-        )
-        return plan.rppg_enabled, plan.fatigue_enabled
-
     def _analysis_lifecycle_ports(self) -> AnalysisLifecyclePorts:
         return AnalysisLifecyclePorts(
             stop_all=self._stop_analysis_workers,
@@ -5706,29 +5732,6 @@ class MainWindow(QMainWindow):
                 failures.append(f"{label}: {exc}")
         if failures:
             raise RuntimeError("Analysis cleanup failed: " + "; ".join(failures))
-
-    def _restart_analysis_workers(self) -> None:
-        """(Re)start whichever analysis workers the UI requires.
-
-        Called whenever a checkbox is toggled while the pipeline is running.
-        Stops everything first, then starts the right combination:
-          - both enabled  → CombinedWorker (one MediaPipe instance, all annotations)
-          - rPPG only     → RppgWorker
-          - fatigue only  → FatigueWorker
-          - neither       → nothing (raw camera frames)
-        """
-        if not self._engine_controller.pipeline_snapshot().running:
-            return
-        self._latest_rppg_metrics = None
-        self._latest_fatigue_metrics = None
-        self._latest_fused_score = None
-        self._engine_controller.reconcile_analysis(
-            rppg_enabled=self._chk_stress.isChecked(),
-            fatigue_enabled=self._chk_behavior.isChecked(),
-            ports=self._analysis_lifecycle_ports(),
-        )
-        self._ensure_belt_calibration()   # rPPG 是否運行改變時，同步啟停背景校準
-        self._emit_web_metrics(force=True)
 
     # ── Combined worker ───────────────────────────────────────────────────────
 
@@ -5814,11 +5817,9 @@ class MainWindow(QMainWindow):
     def _on_combined_failed(self, msg: str) -> None:
         self._append_log(f"✗ 合併引擎錯誤：{msg}")
         self._stop_combined_worker()
-        self._set_engine_checkbox(
-            self._chk_stress, False, self._on_stress_toggled
-        )
-        self._set_engine_checkbox(
-            self._chk_behavior, False, self._on_behavior_toggled
+        self._configure_analysis(
+            behavior_enabled=False,
+            rppg_enabled=False,
         )
         self._notify_user("引擎錯誤", msg)
 
@@ -5882,8 +5883,11 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_stress_toggled(self, checked: bool) -> None:
-        self._append_log(f"[UI] 壓力／HRV → {'開啟' if checked else '關閉'}")
-        self._restart_analysis_workers()
+        analysis = self._engine_controller.analysis_snapshot()
+        self._configure_analysis(
+            behavior_enabled=analysis.fatigue_enabled,
+            rppg_enabled=checked,
+        )
 
     def _load_rppg_calibration_version(self):
         # 背景心跳帶校準運行時，回傳即時微調的 offset 版本，讓 rPPG worker
@@ -5919,8 +5923,10 @@ class MainWindow(QMainWindow):
     def _on_rppg_failed(self, msg: str) -> None:
         self._append_log(f"✗ rPPG 錯誤：{msg}")
         self._stop_rppg_worker()
-        self._set_engine_checkbox(
-            self._chk_stress, False, self._on_stress_toggled
+        analysis = self._engine_controller.analysis_snapshot()
+        self._configure_analysis(
+            behavior_enabled=analysis.fatigue_enabled,
+            rppg_enabled=False,
         )
         self._notify_user("rPPG 錯誤", msg)
 
@@ -5982,8 +5988,11 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_behavior_toggled(self, checked: bool) -> None:
-        self._append_log(f"[UI] 行為警覺 → {'開啟' if checked else '關閉'}")
-        self._restart_analysis_workers()
+        analysis = self._engine_controller.analysis_snapshot()
+        self._configure_analysis(
+            behavior_enabled=checked,
+            rppg_enabled=analysis.rppg_enabled,
+        )
 
     def _on_fatigue_metrics(self, metrics: object) -> None:
         self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
@@ -6093,8 +6102,10 @@ class MainWindow(QMainWindow):
     def _on_fatigue_failed(self, msg: str) -> None:
         self._append_log(f"✗ 行為警覺錯誤：{msg}")
         self._stop_fatigue_worker()
-        self._set_engine_checkbox(
-            self._chk_behavior, False, self._on_behavior_toggled
+        analysis = self._engine_controller.analysis_snapshot()
+        self._configure_analysis(
+            behavior_enabled=False,
+            rppg_enabled=analysis.rppg_enabled,
         )
         self._notify_user("行為警覺錯誤", msg)
 
@@ -6197,10 +6208,7 @@ class MainWindow(QMainWindow):
             self._lbl_fps.setText("FPS：—")
             self._lbl_face.setText("臉部：—")
             try:
-                self._engine_controller.start_pipeline(
-                    rppg_enabled=self._chk_stress.isChecked(),
-                    fatigue_enabled=self._chk_behavior.isChecked(),
-                )
+                self._engine_controller.start_pipeline()
             except (ValueError, RuntimeError):
                 self._pipeline_running = False
                 self._btn_start.setText("開始")
@@ -6335,9 +6343,11 @@ class MainWindow(QMainWindow):
                 self._chk_belt_calib, False, self._on_belt_calib_toggled
             )
         self._auto_capture_started_belt_calib = False
-        if self._auto_capture_started_stress and self._chk_stress.isChecked():
-            self._set_engine_checkbox(
-                self._chk_stress, False, self._on_stress_toggled
+        analysis = self._engine_controller.analysis_snapshot()
+        if self._auto_capture_started_stress and analysis.rppg_enabled:
+            self._configure_analysis(
+                behavior_enabled=analysis.fatigue_enabled,
+                rppg_enabled=False,
             )
         self._auto_capture_started_stress = False
 
@@ -6355,9 +6365,11 @@ class MainWindow(QMainWindow):
         self._auto_capture_started_stress = False
         self._auto_capture_started_recording = False
         if include_belt:
-            if not self._chk_stress.isChecked():
-                self._set_engine_checkbox(
-                    self._chk_stress, True, self._on_stress_toggled
+            analysis = self._engine_controller.analysis_snapshot()
+            if not analysis.rppg_enabled:
+                self._configure_analysis(
+                    behavior_enabled=analysis.fatigue_enabled,
+                    rppg_enabled=True,
                 )
                 self._auto_capture_started_stress = True
             if not self._chk_belt_calib.isChecked():

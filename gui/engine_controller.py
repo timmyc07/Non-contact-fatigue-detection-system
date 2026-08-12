@@ -123,6 +123,7 @@ class EngineController:
     def __init__(self, *, belt_runtime: BeltRuntimePort | None = None) -> None:
         self._camera = CameraConfig()
         self._preferred_camera_index: int | None = None
+        self._analysis = AnalysisPlan("fatigue", False, True)
         self._pipeline = PipelineSnapshot()
         self._replay = ReplayLifecycleSnapshot()
         self._belt_runtime = belt_runtime
@@ -178,19 +179,18 @@ class EngineController:
     def pipeline_snapshot(self) -> PipelineSnapshot:
         return replace(self._pipeline)
 
-    def start_pipeline(self, *, rppg_enabled: bool, fatigue_enabled: bool) -> AnalysisPlan:
+    def analysis_snapshot(self) -> AnalysisPlan:
+        return replace(self._analysis)
+
+    def start_pipeline(self) -> AnalysisPlan:
         if self._pipeline.cleanup_pending:
             raise RuntimeError("Wait for live pipeline adapter cleanup before restarting")
         if self._replay.running:
             raise RuntimeError("Stop replay before starting the live pipeline")
-        plan = self.analysis_plan(
-            rppg_enabled=rppg_enabled,
-            fatigue_enabled=fatigue_enabled,
-        )
         if self._camera.selected_index is None:
             raise ValueError("Select a camera before starting the pipeline")
-        self._pipeline = PipelineSnapshot(running=True, analysis=plan)
-        return plan
+        self._pipeline = PipelineSnapshot(running=True, analysis=self._analysis)
+        return self.analysis_snapshot()
 
     def stop_pipeline(self) -> None:
         self._pipeline = PipelineSnapshot()
@@ -241,16 +241,42 @@ class EngineController:
         self._replay = ReplayLifecycleSnapshot()
         return resume_shutdown
 
-    def set_analysis_plan(
-        self, *, rppg_enabled: bool, fatigue_enabled: bool
+    def configure_analysis(
+        self,
+        *,
+        rppg_enabled: bool,
+        fatigue_enabled: bool,
+        ports: AnalysisLifecyclePorts | None = None,
     ) -> AnalysisPlan:
         plan = self.analysis_plan(
             rppg_enabled=rppg_enabled,
             fatigue_enabled=fatigue_enabled,
         )
-        if self._pipeline.running:
-            self._pipeline = replace(self._pipeline, analysis=plan)
-        return plan
+        if plan == self._analysis:
+            return self.analysis_snapshot()
+        if not self._pipeline.running:
+            self._analysis = plan
+            return self.analysis_snapshot()
+        if ports is None:
+            raise ValueError("Analysis lifecycle ports are required while the pipeline is running")
+        previous_plan = self._analysis
+        try:
+            ports.stop_all()
+            self._activate_analysis(plan, ports)
+        except Exception as start_error:
+            try:
+                ports.stop_all()
+                self._activate_analysis(previous_plan, ports)
+            except Exception as rollback_error:
+                self.mark_pipeline_cleanup_pending()
+                raise RuntimeError(
+                    "Analysis worker start failed and rollback failed: "
+                    f"start={start_error}; rollback={rollback_error}"
+                ) from rollback_error
+            raise
+        self._analysis = plan
+        self._pipeline = replace(self._pipeline, analysis=plan)
+        return self.analysis_snapshot()
 
     @staticmethod
     def _activate_analysis(plan: AnalysisPlan, ports: AnalysisLifecyclePorts) -> None:
@@ -268,37 +294,6 @@ class EngineController:
             raise RuntimeError("Pipeline must be running before analysis workers start")
         plan = self._pipeline.analysis
         self._activate_analysis(plan, ports)
-        return plan
-
-    def reconcile_analysis(
-        self,
-        *,
-        rppg_enabled: bool,
-        fatigue_enabled: bool,
-        ports: AnalysisLifecyclePorts,
-    ) -> AnalysisPlan:
-        plan = self.analysis_plan(
-            rppg_enabled=rppg_enabled,
-            fatigue_enabled=fatigue_enabled,
-        )
-        if not self._pipeline.running:
-            return plan
-        previous_plan = self._pipeline.analysis
-        try:
-            ports.stop_all()
-            self._activate_analysis(plan, ports)
-        except Exception as start_error:
-            try:
-                ports.stop_all()
-                self._activate_analysis(previous_plan, ports)
-            except Exception as rollback_error:
-                self.mark_pipeline_cleanup_pending()
-                raise RuntimeError(
-                    "Analysis worker start failed and rollback failed: "
-                    f"start={start_error}; rollback={rollback_error}"
-                ) from rollback_error
-            raise
-        self._pipeline = replace(self._pipeline, analysis=plan)
         return plan
 
     def replace_cameras(self, devices: Iterable[CameraDevice]) -> None:
