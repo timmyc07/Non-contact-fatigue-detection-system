@@ -118,6 +118,8 @@ Web LAN 偏好由 `WebPreferencesState` 提供 runtime、desktop state 與 setti
 仍由 `MainWindow` adapter 執行，預設維持 localhost-only。
 engine mode 的 runtime 訊息直接寫入 Python logger，不建立 QTextEdit 日誌假元件；legacy
 QTextEdit 與 status bar 僅保留在非 production Qt 路徑。
+engine mode 的全域快捷鍵以 `sequence + callback` binding 註冊與分派，不建立 QAction 假元件；
+Windows `RegisterHotKey`、`nativeEvent` 與 legacy 選單 QAction 仍留在 `MainWindow` adapter。
 
 **關鍵：worker 選擇邏輯**（`gui/main_window.py` `_start_*` 方法）：
 - rPPG + 疲勞 **同時啟用** → `CombinedWorker`（**單一** MediaPipe FaceLandmarker 實例同時餵給兩個引擎）。

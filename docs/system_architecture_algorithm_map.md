@@ -17,6 +17,7 @@
 - 自動記錄、心跳帶校準與自動採集偏好由 Qt-free capture preference state 保存；engine mode 不建立對應 checkbox、spinbox 或按鈕。BLE、錄影與倒數計時 side effect 仍留在 Qt adapter，失敗時回滾偏好狀態；自動採集秒數與 include-belt 維持 session-only。
 - Web LAN 存取偏好由 Qt-free web preference state 保存；engine mode 不建立 QAction 假元件。設定讀寫、desktop state、bind host 與 URL 投影直接讀取該狀態；Web server thread、shared token 與非阻塞 restart 仍留在 Qt adapter，預設僅綁定 localhost。
 - engine mode 的 runtime 訊息直接送入 Python logger，不建立 QTextEdit 日誌假元件；rich-text console 與 status bar 只存在於非 production legacy Qt 路徑。
+- engine mode 的全域快捷鍵使用 sequence/callback binding，不建立 QAction 假元件；Windows 註冊與 native event dispatch 仍由 Qt adapter 執行，legacy 選單捷徑仍使用真實 QAction。engine mode 不再提供假的 status bar sink。
 
 ## 整體資料流
 

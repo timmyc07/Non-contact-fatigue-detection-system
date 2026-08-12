@@ -9,10 +9,11 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from string import Template
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import ctypes
 from ctypes import wintypes
@@ -150,6 +151,13 @@ def _classify_log_message(message: str, *, warning_priority: bool = False) -> st
 
 class _WebRestartBridge(QObject):
     stopped = Signal(bool, bool)
+
+
+@dataclass(frozen=True, slots=True)
+class _GlobalHotkeyBinding:
+    field: str
+    sequence: str
+    callback: Callable[[], None]
 
 
 class _HeadlessControl:
@@ -297,22 +305,6 @@ class _HeadlessControl:
 
     def size(self) -> QSize:
         return QSize(640, 360)
-
-
-class _HeadlessAction(_HeadlessControl):
-    def __init__(self, callback: Any) -> None:
-        super().__init__()
-        self._callback = callback
-        self._shortcut = QKeySequence()
-
-    def setShortcut(self, shortcut: QKeySequence) -> None:
-        self._shortcut = shortcut
-
-    def shortcut(self) -> QKeySequence:
-        return self._shortcut
-
-    def trigger(self) -> None:
-        self._callback()
 
 
 # ── 視覺主題 token（僅影響 QSS 外觀，絕不影響任何 signal/slot 或數值行為） ──
@@ -1199,7 +1191,7 @@ class MainWindow(QMainWindow):
 
         self._global_hotkey_enabled = sys.platform.startswith("win")
         self._global_hotkeys_registered = False
-        self._global_hotkey_id_map: dict[int, QAction] = {}
+        self._global_hotkey_bindings: dict[int, _GlobalHotkeyBinding] = {}
         self._hotkey_failed_once: set[str] = set()
         self._hotkey_registration_failures: list[dict[str, Any]] = []
         self._settings_dirty = False
@@ -1344,16 +1336,6 @@ class MainWindow(QMainWindow):
         self._mon_wave = _HeadlessControl()
         self._brand_dot = _HeadlessControl()
         self._belt_banner_dot = _HeadlessControl()
-
-        callbacks = (
-            lambda: self._toggle_overlay_preference("metrics"),
-            lambda: self._toggle_overlay_preference("preview"),
-            self._toggle_pipeline,
-            lambda: self._toggle_overlay_preference("locked"),
-            lambda: self._toggle_overlay_preference("all_enabled"),
-            self._toggle_recording,
-        )
-        self._menu_actions_hotkeys = tuple(_HeadlessAction(callback) for callback in callbacks)
 
     def _toggle_overlay_preference(self, field: str) -> None:
         state = self._overlay_state.snapshot()
@@ -1552,11 +1534,6 @@ class MainWindow(QMainWindow):
         if running:
             self._ensure_belt_calibration()
             self._emit_web_metrics(force=True)
-
-    def statusBar(self) -> Any:  # noqa: N802
-        if getattr(self, "_engine_mode", False):
-            return _HeadlessControl()
-        return super().statusBar()
 
     def _apply_native_titlebar_theme(self) -> None:
         """Windows：讓原生標題列跟隨深/淺主題（DWM immersive dark mode）。
@@ -3269,22 +3246,14 @@ class MainWindow(QMainWindow):
         user32 = cast(Any, ctypes).WinDLL("user32", use_last_error=True)
         hwnd = int(self.winId())
 
-        field_names = (
-            "toggle_metrics",
-            "toggle_preview",
-            "start_stop",
-            "lock_overlay",
-            "toggle_all",
-            "toggle_recording",
-        )
-        for hotkey_id, act in self._global_hotkey_id_map.items():
-            seq = act.shortcut().toString()
+        for hotkey_id, binding in self._global_hotkey_bindings.items():
+            seq = binding.sequence
             parsed = self._parse_hotkey(seq)
             if parsed is None:
                 if seq:
                     self._hotkey_registration_failures.append(
                         {
-                            "key": field_names[hotkey_id - 1],
+                            "key": binding.field,
                             "sequence": seq,
                             "code": 0,
                             "reason": "unsupported_sequence",
@@ -3296,7 +3265,7 @@ class MainWindow(QMainWindow):
                 err = cast(Any, ctypes).get_last_error()
                 self._hotkey_registration_failures.append(
                     {
-                        "key": field_names[hotkey_id - 1],
+                        "key": binding.field,
                         "sequence": seq,
                         "code": int(err),
                         "reason": "already_registered" if err == 1409 else "registration_failed",
@@ -3317,15 +3286,15 @@ class MainWindow(QMainWindow):
             return
         user32 = cast(Any, ctypes).WinDLL("user32", use_last_error=True)
         hwnd = int(self.winId())
-        for hotkey_id in self._global_hotkey_id_map:
+        for hotkey_id in self._global_hotkey_bindings:
             user32.UnregisterHotKey(hwnd, hotkey_id)
         self._global_hotkeys_registered = False
 
     def _on_global_hotkey(self, hotkey_id: int) -> None:
-        act = self._global_hotkey_id_map.get(hotkey_id)
-        if act is None:
+        binding = self._global_hotkey_bindings.get(hotkey_id)
+        if binding is None:
             return
-        act.trigger()
+        binding.callback()
 
     def _settings_path(self) -> Path:
         return data_path("settings.json")
@@ -3680,7 +3649,14 @@ class MainWindow(QMainWindow):
 
     def _apply_hotkey_shortcuts(self) -> None:
         hk = self._hotkeys
-        actions = self._menu_actions_hotkeys
+        fields = (
+            "toggle_metrics",
+            "toggle_preview",
+            "start_stop",
+            "lock_overlay",
+            "toggle_all",
+            "toggle_recording",
+        )
         keys = (
             hk.toggle_metrics,
             hk.toggle_preview,
@@ -3689,10 +3665,27 @@ class MainWindow(QMainWindow):
             hk.toggle_all,
             hk.toggle_recording,
         )
-        for act, k in zip(actions, keys, strict=True):
-            act.setShortcut(QKeySequence(k))
-        if not self._global_hotkey_id_map:
-            self._global_hotkey_id_map = {i + 1: act for i, act in enumerate(actions)}
+        if self._engine_mode:
+            callbacks = (
+                lambda: self._toggle_overlay_preference("metrics"),
+                lambda: self._toggle_overlay_preference("preview"),
+                self._toggle_pipeline,
+                lambda: self._toggle_overlay_preference("locked"),
+                lambda: self._toggle_overlay_preference("all_enabled"),
+                self._toggle_recording,
+            )
+        else:
+            actions = self._menu_actions_hotkeys
+            for action, key in zip(actions, keys, strict=True):
+                action.setShortcut(QKeySequence(key))
+            callbacks = tuple(action.trigger for action in actions)
+        self._global_hotkey_bindings = {
+            index: _GlobalHotkeyBinding(field, sequence, callback)
+            for index, (field, sequence, callback) in enumerate(
+                zip(fields, keys, callbacks, strict=True),
+                start=1,
+            )
+        }
         self._register_global_hotkeys()
 
     def _recordings_dir(self) -> Path:

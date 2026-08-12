@@ -112,6 +112,7 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_chk_stress",
         "_act_web_allow_lan",
         "_log",
+        "_menu_actions_hotkeys",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
@@ -937,22 +938,88 @@ def test_late_camera_finish_releases_pending_cleanup_and_allows_replay(
 def test_headless_hotkeys_update_overlay_state(
     settings_window: MainWindow,
 ) -> None:
-    settings_window._menu_actions_hotkeys[0].trigger()
+    settings_window._on_global_hotkey(1)
     state = settings_window._handle_desktop_command("state.get", {})
     assert state["overlay_metrics"] is False
     assert state["settings_dirty"] is True
 
-    settings_window._menu_actions_hotkeys[4].trigger()
+    settings_window._on_global_hotkey(5)
     state = settings_window._handle_desktop_command("state.get", {})
     assert state["overlay_all"] is False
     assert state["overlay_metrics"] is False
     assert state["overlay_preview"] is False
 
-    settings_window._menu_actions_hotkeys[4].trigger()
+    settings_window._on_global_hotkey(5)
     state = settings_window._handle_desktop_command("state.get", {})
     assert state["overlay_all"] is True
     assert state["overlay_metrics"] is True
     assert state["overlay_preview"] is True
+
+
+def test_engine_hotkey_bindings_dispatch_all_six_callbacks(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        settings_window,
+        "_toggle_overlay_preference",
+        lambda field: calls.append(field),
+    )
+    monkeypatch.setattr(
+        settings_window, "_toggle_pipeline", lambda: calls.append("pipeline")
+    )
+    monkeypatch.setattr(
+        settings_window, "_toggle_recording", lambda: calls.append("recording")
+    )
+    monkeypatch.setattr(settings_window, "_register_global_hotkeys", lambda: None)
+
+    settings_window._apply_hotkey_shortcuts()
+
+    expected = (
+        (1, "toggle_metrics", "Ctrl+Alt+O", "metrics"),
+        (2, "toggle_preview", "Ctrl+Alt+P", "preview"),
+        (3, "start_stop", "Ctrl+Alt+S", "pipeline"),
+        (4, "lock_overlay", "Ctrl+Alt+F8", "locked"),
+        (5, "toggle_all", "Ctrl+Alt+A", "all_enabled"),
+        (6, "toggle_recording", "Ctrl+Alt+F9", "recording"),
+    )
+    for hotkey_id, field, sequence, callback_name in expected:
+        binding = settings_window._global_hotkey_bindings[hotkey_id]
+        assert binding.field == field
+        assert binding.sequence == sequence
+        before = list(calls)
+        settings_window._on_global_hotkey(hotkey_id)
+        assert calls == [*before, callback_name]
+
+
+def test_legacy_hotkeys_update_real_actions_and_dispatch(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    names = ("metrics", "preview", "pipeline", "locked", "all", "recording")
+    actions = tuple(QAction(settings_window) for _name in names)
+    for action, name in zip(actions, names, strict=True):
+        action.triggered.connect(
+            lambda _checked=False, callback_name=name: calls.append(callback_name)
+        )
+    monkeypatch.setattr(settings_window, "_engine_mode", False)
+    monkeypatch.setattr(settings_window, "_menu_actions_hotkeys", actions, raising=False)
+    monkeypatch.setattr(settings_window, "_register_global_hotkeys", lambda: None)
+
+    settings_window._apply_hotkey_shortcuts()
+
+    assert [action.shortcut().toString() for action in actions] == [
+        "Ctrl+Alt+O",
+        "Ctrl+Alt+P",
+        "Ctrl+Alt+S",
+        "Ctrl+Alt+F8",
+        "Ctrl+Alt+A",
+        "Ctrl+Alt+F9",
+    ]
+    for hotkey_id, name in enumerate(names, start=1):
+        before = list(calls)
+        settings_window._on_global_hotkey(hotkey_id)
+        assert calls == [*before, name]
 
 
 def test_headless_replay_preview_and_queue_are_engine_safe(
@@ -1046,8 +1113,8 @@ def test_hotkeys_configure_replaces_all_shortcuts(
     assert state["settings_dirty"] is True
     assert registrations == 1
     assert [
-        action.shortcut().toString()
-        for action in settings_window._menu_actions_hotkeys
+        binding.sequence
+        for binding in settings_window._global_hotkey_bindings.values()
     ] == list(hotkeys.values())
 
 
