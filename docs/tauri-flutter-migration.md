@@ -70,8 +70,9 @@ adapter fails.
 `MainWindow` still constructs the concrete QThreads, recording writers, Qt
 multimedia alarm backend, calibration adapters, and signal callbacks. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
-Qt resource state, not command/API authorities. The legacy analysis checkboxes
-are likewise presentation mirrors; settings load/save, `state.get`, worker
+Qt resource state, not command/API authorities. Engine mode does not construct
+analysis checkbox stand-ins; the legacy analysis checkboxes exist only as
+non-production presentation mirrors. Settings load/save, `state.get`, worker
 failure recovery, and auto-capture read the controller-owned analysis state.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is part of the same state model as a platform-neutral

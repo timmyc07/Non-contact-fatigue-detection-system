@@ -72,7 +72,7 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 執行緒模型（每個 worker 跑在自己的 `QThread`，以 Qt Signal/Slot 溝通；Qt-free
 `EngineController` 管理 camera config、pipeline/analysis topology、recording/replay/shutdown
 state 與 BLE runtime ownership；analysis desired state 在 pipeline 停止時仍由 controller
-保存，hidden Qt checkbox 僅為 legacy presentation mirror；camera scan/settings/desktop
+保存，engine mode 不建立 analysis checkbox 假元件，legacy Qt checkbox 僅為非 production presentation mirror；camera scan/settings/desktop
 commands 在 engine mode 直接使用 controller，不建立 camera combo/checkbox 假元件；`MainWindow` 僅作
 QThread/signal/Qt multimedia adapter；Overlay 偏好由 Qt-free `OverlayRuntimeState` 保存，
 engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter；replay 的資料夾、jobs、

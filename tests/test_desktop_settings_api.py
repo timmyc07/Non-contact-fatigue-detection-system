@@ -108,6 +108,8 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_chk_auto_capture_belt",
         "_spn_auto_capture_seconds",
         "_btn_auto_capture",
+        "_chk_behavior",
+        "_chk_stress",
     ):
         assert not hasattr(settings_window, name)
     assert settings_window.windowTitle() == ""
@@ -130,16 +132,13 @@ def test_headless_analysis_command_updates_controller_owned_state(
     assert plan.rppg_enabled is True
 
 
-def test_headless_analysis_state_and_persistence_ignore_control_mirror_drift(
+def test_headless_analysis_state_and_persistence_use_controller_state(
     settings_window: MainWindow,
 ) -> None:
     settings_window._handle_desktop_command(
         "analysis.configure",
         {"behavior_enabled": False, "rppg_enabled": True},
     )
-    settings_window._chk_behavior.setChecked(True)
-    settings_window._chk_stress.setChecked(False)
-
     state = settings_window._handle_desktop_command("settings.save", {})
     persisted = json.loads(
         settings_window._settings_path().read_text(encoding="utf-8")

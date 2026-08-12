@@ -1287,8 +1287,6 @@ class MainWindow(QMainWindow):
 
     def _install_headless_controls(self) -> None:
         """Install state-only controls so desktop commands keep their contracts."""
-        self._chk_behavior = _HeadlessControl(checked=True)
-        self._chk_stress = _HeadlessControl()
         self._act_web_allow_lan = _HeadlessControl()
         self._log = _HeadlessControl()
         self._mon_contrib_bars: dict[str, Any] = {}
@@ -1340,17 +1338,14 @@ class MainWindow(QMainWindow):
         )
         self._menu_actions_hotkeys = tuple(_HeadlessAction(callback) for callback in callbacks)
 
-    def _toggle_headless_checkbox(self, control: _HeadlessControl, handler) -> None:
-        checked = not control.isChecked()
-        control.setChecked(checked)
-        handler(checked)
-
     def _toggle_overlay_preference(self, field: str) -> None:
         state = self._overlay_state.snapshot()
         current = getattr(state, field)
         self._configure_overlay(**{field: not current})
 
     def _sync_analysis_controls(self) -> None:
+        if self._engine_mode:
+            return
         plan = self._engine_controller.analysis_snapshot()
         for control, checked in (
             (self._chk_behavior, plan.fatigue_enabled),
@@ -1361,8 +1356,7 @@ class MainWindow(QMainWindow):
                 control.setChecked(checked)
             finally:
                 control.blockSignals(False)
-        if not self._engine_mode:
-            self._refresh_preview_tags()
+        self._refresh_preview_tags()
 
     def _sync_overlay_controls(self) -> None:
         if self._engine_mode:
