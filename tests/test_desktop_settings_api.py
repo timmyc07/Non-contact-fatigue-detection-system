@@ -24,6 +24,7 @@ from gui.desktop_control import (  # noqa: E402
 )
 import gui.main_window as main_window_module  # noqa: E402
 from gui.engine_controller import AnalysisLifecyclePorts, CameraDevice  # noqa: E402
+from gui.global_hotkeys import HotkeyRegistrationFailure  # noqa: E402
 from gui.main_window import MainWindow, _classify_log_message  # noqa: E402
 from gui.video_replay import ReplayVideoSummary  # noqa: E402
 
@@ -1380,24 +1381,38 @@ def test_hotkeys_configure_rolls_back_when_apply_fails(
 
 
 def test_global_hotkey_registration_failures_are_exposed_in_state(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: MainWindow,
 ) -> None:
-    class User32:
-        @staticmethod
-        def RegisterHotKey(hwnd: int, hotkey_id: int, modifiers: int, key: int) -> bool:
-            return False
+    class Runtime:
+        supported = True
 
-        @staticmethod
-        def UnregisterHotKey(hwnd: int, hotkey_id: int) -> bool:
-            return True
+        def __init__(self) -> None:
+            self.bindings: dict[int, tuple[int, int]] | None = None
 
-    monkeypatch.setattr(main_window_module.ctypes, "WinDLL", lambda *args, **kwargs: User32())
-    monkeypatch.setattr(main_window_module.ctypes, "get_last_error", lambda: 1409)
-    settings_window._global_hotkey_enabled = True
-    settings_window._global_hotkeys_registered = False
+        def register(
+            self,
+            bindings: dict[int, tuple[int, int]],
+        ) -> tuple[HotkeyRegistrationFailure, ...]:
+            self.bindings = bindings
+            return tuple(
+                HotkeyRegistrationFailure(
+                    hotkey_id=hotkey_id,
+                    code=1409,
+                    reason="already_registered",
+                )
+                for hotkey_id in bindings
+            )
+
+        def unregister(self) -> tuple[()]:
+            return ()
+
+    runtime = Runtime()
+    settings_window._global_hotkey_runtime = runtime
 
     _REGISTER_GLOBAL_HOTKEYS(settings_window)
 
+    assert runtime.bindings is not None
+    assert len(runtime.bindings) == 6
     failures = settings_window._handle_desktop_command("state.get", {})[
         "hotkey_registration"
     ]["failures"]

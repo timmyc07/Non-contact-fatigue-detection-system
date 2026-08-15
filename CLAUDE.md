@@ -119,7 +119,8 @@ Web LAN 偏好由 `WebPreferencesState` 提供 runtime、desktop state 與 setti
 engine mode 的 runtime 訊息直接寫入 Python logger，不建立 QTextEdit 日誌假元件；legacy
 QTextEdit 與 status bar 僅保留在非 production Qt 路徑。
 engine mode 的全域快捷鍵以 `sequence + callback` binding 註冊與分派，不建立 QAction 假元件；
-Windows `RegisterHotKey`、`nativeEvent` 與 legacy 選單 QAction 仍留在 `MainWindow` adapter。
+Windows 原生註冊、thread message dispatch 與清理由 application-level `GlobalHotkeyRuntime` 負責，
+不再依賴 `MainWindow.winId()` 或 `MainWindow.nativeEvent()`；legacy 選單 QAction 只存在於非 production 路徑。
 engine mode 不建立監測頁 `_mon_*` label、bar 或 sparkline 假元件；worker callback 只更新
 `_latest_*` 快照並維持警報、記錄與 Web metrics side effect，且不建立 legacy REC pill timer；
 監測視覺完全由 Flutter 呈現。

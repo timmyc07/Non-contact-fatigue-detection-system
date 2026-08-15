@@ -83,9 +83,11 @@ Engine-mode runtime messages now go directly to the Python logger instead of a
 QTextEdit-shaped no-op sink. The rich-text log console and status-bar projection
 remain limited to the non-production legacy Qt path.
 Engine-mode global hotkeys now use sequence-and-callback bindings instead of
-QAction-shaped stand-ins. Windows registration/native-event dispatch remains a
-`MainWindow` adapter responsibility, while legacy menu shortcuts still use real
-QActions. Engine mode also no longer overrides `statusBar()` with a fake sink.
+QAction-shaped stand-ins. The application-level `GlobalHotkeyRuntime` registers
+Windows thread-queue hotkeys, dispatches native events, and cleans up successful
+registrations without a `MainWindow` HWND or `MainWindow.nativeEvent()`.
+Legacy menu shortcuts still use real QActions. Engine mode also no longer
+overrides `statusBar()` with a fake sink.
 Engine mode no longer creates hidden monitor labels, progress bars, sparklines,
 or the legacy REC-pill timer.
 The rPPG, behavior, and fusion callbacks retain their snapshot, alarm, baseline,

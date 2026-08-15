@@ -95,6 +95,7 @@ from gui.engine_controller import (
 )
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
+from gui.global_hotkeys import GlobalHotkeyRuntime
 from gui.metrics_recorder import MetricsRecorder
 from gui.overlay_runtime_state import OverlayRuntimeState
 from gui.personal_profile import (
@@ -1041,8 +1042,7 @@ class MainWindow(QMainWindow):
         self._last_camera_info = {"codec": "", "width": 0, "height": 0}
         self._last_fps: float = 0.0
 
-        self._global_hotkey_enabled = sys.platform.startswith("win")
-        self._global_hotkeys_registered = False
+        self._global_hotkey_runtime = GlobalHotkeyRuntime(self._on_global_hotkey)
         self._global_hotkey_bindings: dict[int, _GlobalHotkeyBinding] = {}
         self._hotkey_failed_once: set[str] = set()
         self._hotkey_registration_failures: list[dict[str, Any]] = []
@@ -3063,13 +3063,10 @@ class MainWindow(QMainWindow):
 
     def _register_global_hotkeys(self) -> None:
         self._hotkey_registration_failures = []
-        if not self._global_hotkey_enabled:
+        if not self._global_hotkey_runtime.supported:
             return
-        self._unregister_global_hotkeys()
 
-        user32 = cast(Any, ctypes).WinDLL("user32", use_last_error=True)
-        hwnd = int(self.winId())
-
+        native_bindings: dict[int, tuple[int, int]] = {}
         for hotkey_id, binding in self._global_hotkey_bindings.items():
             seq = binding.sequence
             parsed = self._parse_hotkey(seq)
@@ -3084,35 +3081,37 @@ class MainWindow(QMainWindow):
                         }
                     )
                 continue
-            mod_flags, vk = parsed
-            if not user32.RegisterHotKey(hwnd, hotkey_id, mod_flags, vk):
-                err = cast(Any, ctypes).get_last_error()
-                self._hotkey_registration_failures.append(
-                    {
-                        "key": binding.field,
-                        "sequence": seq,
-                        "code": int(err),
-                        "reason": "already_registered" if err == 1409 else "registration_failed",
-                    }
-                )
-                if seq not in self._hotkey_failed_once:
-                    if err == 1409:
-                        self._append_log(f"⚠ 全域快捷鍵已被占用：{seq}（錯誤 {err}）")
-                    else:
-                        self._append_log(f"⚠ 註冊全域快捷鍵失敗：{seq}（錯誤 {err}）")
-                    self._hotkey_failed_once.add(seq)
-        self._global_hotkeys_registered = True
+            native_bindings[hotkey_id] = parsed
+
+        for failure in self._global_hotkey_runtime.register(native_bindings):
+            binding = self._global_hotkey_bindings[failure.hotkey_id]
+            seq = binding.sequence
+            self._hotkey_registration_failures.append(
+                {
+                    "key": binding.field,
+                    "sequence": seq,
+                    "code": failure.code,
+                    "reason": failure.reason,
+                }
+            )
+            if seq not in self._hotkey_failed_once:
+                if failure.reason == "already_registered":
+                    self._append_log(
+                        f"⚠ 全域快捷鍵已被占用：{seq}（錯誤 {failure.code}）"
+                    )
+                else:
+                    self._append_log(
+                        f"⚠ 註冊全域快捷鍵失敗：{seq}（錯誤 {failure.code}）"
+                    )
+                self._hotkey_failed_once.add(seq)
 
     def _unregister_global_hotkeys(self) -> None:
-        if not self._global_hotkey_enabled:
-            return
-        if not self._global_hotkeys_registered:
-            return
-        user32 = cast(Any, ctypes).WinDLL("user32", use_last_error=True)
-        hwnd = int(self.winId())
-        for hotkey_id in self._global_hotkey_bindings:
-            user32.UnregisterHotKey(hwnd, hotkey_id)
-        self._global_hotkeys_registered = False
+        for failure in self._global_hotkey_runtime.unregister():
+            binding = self._global_hotkey_bindings.get(failure.hotkey_id)
+            sequence = binding.sequence if binding is not None else str(failure.hotkey_id)
+            self._append_log(
+                f"⚠ 解除全域快捷鍵失敗：{sequence}（錯誤 {failure.code}）"
+            )
 
     def _on_global_hotkey(self, hotkey_id: int) -> None:
         binding = self._global_hotkey_bindings.get(hotkey_id)
@@ -3945,7 +3944,7 @@ class MainWindow(QMainWindow):
                 "toggle_recording": self._hotkeys.toggle_recording,
             },
             "hotkey_registration": {
-                "supported": bool(self._global_hotkey_enabled),
+                "supported": self._global_hotkey_runtime.supported,
                 "failures": list(self._hotkey_registration_failures),
             },
             "user_profile": {
@@ -6609,11 +6608,3 @@ class MainWindow(QMainWindow):
             self._preview_overlay.hide()
             self._preview_overlay.close()
         super().closeEvent(event)
-
-    def nativeEvent(self, event_type, message):  # noqa: N802
-        if self._global_hotkey_enabled and event_type == "windows_generic_MSG":
-            msg = wintypes.MSG.from_address(int(message))
-            if msg.message == 0x0312:
-                self._on_global_hotkey(int(msg.wParam))
-                return True, 0
-        return super().nativeEvent(cast(Any, event_type), message)
