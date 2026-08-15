@@ -1,8 +1,8 @@
 # 下一階段續作計畫
 
-日期：2026-08-12
+更新日期：2026-08-15
 
-收尾提交基準：`6ec82b0 refactor(engine): 移除最後的假控件`
+本切片起始基準：`c52ed9e docs(plan): 更新下一階段續作邊界`
 
 目前狀態：`main` 與 `origin/main` 同步，工作樹乾淨；本階段停止新增實作。
 
@@ -18,32 +18,29 @@
   multimedia alarm 與 Windows native hotkey 所需的隱藏 runtime adapter。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證：Python `701 passed, 2 skipped`、desktop settings `118 passed`、
+- 最近一次完整驗證：Python `702 passed, 2 skipped`、desktop settings `119 passed`、
   Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
   Tauri release/NSIS、`compileall` 與 `pip check` 均通過。
-- 最近一次重複 benchmark：RSS `254.711 MiB`、API ready `1833.801 ms`、
-  IPC p50/p95 `20.350/41.103 ms`、preview p50/p95 `1.193/1.485 ms`。
+- 最近兩次重複 benchmark：RSS `257.383/257.023 MiB`、API ready
+  `1847.185/1830.502 ms`、IPC p50/p95 `19.993/40.366` 與 `20.101/40.234 ms`、
+  preview p50/p95 `1.189/1.486` 與 `1.168/1.480 ms`。
 
 以上變更未修改 camera frame routing、worker topology、錄影、警報、BLE 樣本、回放、
 rPPG、疲勞分數、ROI、校準或任何數值閾值。
 
 ## 已知剩餘缺口
 
-1. Flutter 正式面板仍包含「DL 基準測試（120s）」；其 Python command 只切換文字狀態，
-   並明確記錄「示範，無實際採樣」。正式產品不應保留這個假功能。
-2. Python engine 仍以隱藏的 `QApplication + MainWindow` 作 runtime 容器。這不是可見舊面板，
+1. Python engine 仍以隱藏的 `QApplication + MainWindow` 作 runtime 容器。這不是可見舊面板，
    但仍有 Qt widget shell 成本；直接改成 `QCoreApplication + QObject` 會涉及 native hotkey、
    shutdown、parent ownership 與 multimedia，相當於重量級啟動流程改造。
-3. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
+2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
 
 ## 下一階段執行順序
 
-1. **移除正式面板的假 benchmark（優先，中量）**
-   - 從 Flutter 移除按鈕與 `benchmark.set` command。
-   - 從 desktop API state/command 移除 `benchmark_active` 與 `benchmark.set`。
-   - 移除 `_benchmark_active`、`_toggle_benchmark` 及 legacy benchmark widgets。
-   - 保留真正的 `scripts/desktop_engine_benchmark.py` 與其測試、文件和基準資料。
-   - 增加 contract/UI 測試，防止示範功能再次進入正式面板。
+1. **已完成：移除正式面板的假 benchmark（中量）**
+   - Flutter、desktop API state/command 與 legacy Qt code 不再包含示範 benchmark。
+   - `scripts/desktop_engine_benchmark.py`、其測試、文件與基準資料維持不變。
+   - contract/UI 測試防止示範功能再次進入正式面板。
 
 2. **設計 Qt runtime adapter 抽離（重量）**
    - 先盤點 `closeEvent`、`nativeEvent`、`QApplication.instance().quit()`、QThread/QTimer parent、

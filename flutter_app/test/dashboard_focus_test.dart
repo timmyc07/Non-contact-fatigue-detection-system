@@ -44,6 +44,7 @@ void main() {
     await _pumpDashboard(tester, focus: false, onCommand: (_, [__]) async {});
 
     expect(find.text('SYSTEM CONTROL'), findsOneWidget);
+    expect(find.textContaining('基準測試'), findsNothing);
     expect(find.text('PHYSIOLOGY / rPPG'), findsOneWidget);
     expect(find.text('CURRENT STATE'), findsOneWidget);
     expect(find.byIcon(Icons.fullscreen_exit), findsNothing);

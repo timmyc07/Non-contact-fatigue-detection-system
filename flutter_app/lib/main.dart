@@ -1272,7 +1272,6 @@ class DesktopControlPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
     final recording = state['recording'] == true;
-    final benchmark = state['benchmark_active'] == true;
     final focus = state['monitor_focus'] == true;
     final capturing = state['auto_capture_active'] == true;
     final autoDuration = (state['auto_capture_seconds'] as num?)?.toInt() ?? 60;
@@ -1325,19 +1324,9 @@ class DesktopControlPanel extends StatelessWidget {
               backgroundColor: running ? const Color(0xffb75255) : kAccentDeep),
         ),
         const SizedBox(height: 9),
-        Row(children: [
-          Expanded(
-              child: OutlinedButton.icon(
-                  onPressed: busy || !running
-                      ? null
-                      : () => onCommand('benchmark.set',
-                          <String, dynamic>{'enabled': !benchmark}),
-                  icon: Icon(benchmark
-                      ? Icons.stop_circle_outlined
-                      : Icons.speed_outlined),
-                  label: Text(benchmark ? '停止基準測試' : 'DL 基準測試（120s）'))),
-          const SizedBox(width: 8),
-          Tooltip(
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Tooltip(
               message: '切換右側數值欄顯示',
               child: SegmentedButton<bool>(
                   segments: const [
@@ -1351,7 +1340,7 @@ class DesktopControlPanel extends StatelessWidget {
                       ? null
                       : (values) => onCommand('monitor.layout',
                           <String, dynamic>{'focus': values.first}))),
-        ]),
+        ),
         const SizedBox(height: 9),
         OutlinedButton.icon(
           onPressed: busy || (!running && !recording)

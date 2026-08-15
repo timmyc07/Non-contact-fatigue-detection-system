@@ -1003,7 +1003,6 @@ class MainWindow(QMainWindow):
         self._theme = "dark"
         self._pipeline_running = False
         self._recording = False
-        self._benchmark_active = False
         self._hotkeys = HotkeyConfig()
         self._user = UserProfile()
         self._overlay_state = OverlayRuntimeState()
@@ -2100,15 +2099,9 @@ class MainWindow(QMainWindow):
         self._btn_start = QPushButton("開始")
         self._btn_start.setObjectName("primaryButton")
         self._btn_start.clicked.connect(self._toggle_pipeline)
-        self._btn_bench = QPushButton("DL 基準測試（120s）")
-        self._btn_bench.clicked.connect(self._toggle_benchmark)
         main_row.addWidget(self._btn_start)
-        main_row.addWidget(self._btn_bench)
         main_row.addStretch(1)
         main_col.addLayout(main_row)
-        self._lbl_bench = QLabel("")
-        self._lbl_bench.setObjectName("hintLabel")
-        main_col.addWidget(self._lbl_bench)
         main_col.addStretch(1)
         grid.addLayout(main_col, 0, 0)
 
@@ -3933,7 +3926,6 @@ class MainWindow(QMainWindow):
             "recording": pipeline.recording,
             "recording_path": str(self._recording_db_path or ""),
             "auto_capture_active": self._auto_capture_timer is not None,
-            "benchmark_active": bool(self._benchmark_active),
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
             "selected_camera_index": camera.selected_index,
             "cameras": cameras,
@@ -4119,13 +4111,6 @@ class MainWindow(QMainWindow):
                     args, "include_belt"
                 )
             self._configure_capture_preferences(**capture_changes)
-
-        elif command == "benchmark.set":
-            enabled = self._require_bool(args, "enabled")
-            if enabled and not self._engine_controller.pipeline_snapshot().running:
-                raise ValueError("Start the pipeline before running the benchmark")
-            if enabled != self._benchmark_active:
-                self._toggle_benchmark()
 
         elif command == "monitor.layout":
             self._set_monitor_layout(self._require_bool(args, "focus"))
@@ -6274,11 +6259,6 @@ class MainWindow(QMainWindow):
                 self._stop_recording()
                 self._append_log("○ 管線停止，已一併結束記錄。")
             self._emit_web_metrics(force=True)
-            if self._benchmark_active:
-                self._benchmark_active = False
-                self._set_legacy_text("_btn_bench", "DL 基準測試（120s）")
-                self._set_legacy_text("_lbl_bench", "")
-                self._append_log("基準測試已隨管線停止。")
 
     def _toggle_recording(self) -> None:
         pipeline = self._engine_controller.pipeline_snapshot()
@@ -6480,20 +6460,6 @@ class MainWindow(QMainWindow):
             lines.append(f"心跳帶 belt-truth capture → {belt_path}")
         self._append_log("● " + "  ".join(lines))
         self._notify_user("自動採集完成", "\n".join(lines), level="info")
-
-    def _toggle_benchmark(self) -> None:
-        if not self._engine_controller.pipeline_snapshot().running:
-            self._notify_user("基準測試", "請先啟動管線再執行基準測試（示範）。", level="info")
-            return
-        self._benchmark_active = not self._benchmark_active
-        if self._benchmark_active:
-            self._set_legacy_text("_btn_bench", "停止基準測試")
-            self._set_legacy_text("_lbl_bench", "錄製中 0s／120s（示範）")
-            self._append_log("⏱ DL 基準測試開始（示範，無實際採樣）")
-        else:
-            self._set_legacy_text("_btn_bench", "DL 基準測試（120s）")
-            self._set_legacy_text("_lbl_bench", "")
-            self._append_log("基準測試已停止（示範）。")
 
     def _on_camera_combo_changed(self, _index: int) -> None:
         data = self._cmb_camera.currentData()

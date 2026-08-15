@@ -95,10 +95,13 @@ calibration bars. The one-second belt timer remains active because it drives new
 rPPG/belt calibration observations and the ROI coordinator; Flutter renders the
 BLE, HRV, and calibration fields already carried by Web metrics.
 Engine mode no longer creates a generic `_HeadlessControl` or fake pipeline,
-recording, camera, profile, or benchmark buttons, labels, and tags. Shared
+recording, camera, or profile buttons, labels, and tags. Shared
 lifecycle callbacks keep controller snapshots, recording resources, camera
 telemetry, baseline collection, notifications, and Web metrics intact; Qt text
 and button updates are restricted to the non-production legacy path.
+The desktop state/command contract and Flutter controls no longer expose the
+demo benchmark that only toggled UI text. Repeatable performance measurement
+remains available through `scripts.desktop_engine_benchmark`.
 The desktop command API exposes the controller-backed state to Flutter/Tauri.
 Tauri overlay geometry is part of the same state model as a platform-neutral
 physical-pixel `{x, y, width, height}` object. The shell applies geometry when
@@ -136,6 +139,14 @@ and sample settings when comparing future changes rather than treating these
 values as hard product limits.
 The raw result and capture metadata are retained in
 `docs/benchmarks/desktop-engine-2026-08-10.json`.
+
+After removing the UI-only demo benchmark on 2026-08-15, two equivalent runs
+measured 257.383/257.023 MiB RSS, 1847.185/1830.502 ms startup,
+`state.get` p50 19.993/20.101 ms and p95 40.366/40.234 ms, with synthetic JPEG
+encode p50 1.189/1.168 ms and p95 1.486/1.480 ms. Startup and latency remained
+flat; the roughly 2.3 MiB RSS difference from the previous 254.711 MiB repeat
+is below one percent and treated as process-allocation noise, not a regression.
+The local raw captures remain under ignored `build/` output.
 
 After extracting pipeline, analysis topology, recording/replay state, shutdown
 sequencing, and BLE ownership into the Qt-free controller, the 2026-08-11 run

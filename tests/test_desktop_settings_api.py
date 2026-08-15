@@ -84,6 +84,7 @@ def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> N
     assert state["hotkey_registration"]["failures"] == []
     assert state["rppg_enabled"] is False
     assert state["monitor_focus"] is False
+    assert "benchmark_active" not in state
 
 
 def test_engine_mode_does_not_construct_legacy_visual_shell(
@@ -1857,6 +1858,7 @@ def test_legacy_web_action_updates_state_saves_and_schedules_restart(
 @pytest.mark.parametrize(
     ("command", "args", "error"),
     [
+        ("benchmark.set", {"enabled": True}, "Unsupported desktop command"),
         ("replay.choose", {}, "Unsupported desktop command"),
         ("settings.action", {"action": "hotkeys"}, "Unsupported settings action"),
         ("settings.action", {"action": "profile"}, "Unsupported settings action"),
