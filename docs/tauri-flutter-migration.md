@@ -119,6 +119,22 @@ annotated output, UTA-RLDD validation reports, and analysis values are unchanged
 The capture-preference extraction likewise leaves camera capture, worker
 topology, BLE samples, calibration math, recording workers, rPPG output, and
 fatigue scores unchanged.
+Engine `app.shutdown` preserves the active-replay stop/defer gate; once the
+replay thread finishes, shutdown re-enters. Every other engine shutdown calls
+the re-entrant `_cleanup_runtime()` directly, then `QApplication.quit()`, rather
+than requiring hidden `MainWindow.closeEvent()`. Cleanup is ordered: hotkeys,
+pending auto-capture, belt calibration/timer/BLE, Web restart/server, recording,
+camera worker, then overlay; failed cleanup can be retried. `closeEvent()` now
+serves only as the legacy replay-gate adapter. The next boundaries are
+QThread/QTimer parent ownership, alarm/multimedia, and only then removal of
+`QMainWindow` inheritance. This ownership change does not alter camera, worker,
+recording, BLE, replay, rPPG, fatigue, ROI, or calibration behavior.
+Cleanup is stepwise best-effort: non-thread step failures are logged and later
+steps continue; the main event loop retries once after 100ms, then logs and
+best-effort quits if that second attempt still fails. If a video,
+camera, or analysis-adapter thread wait times out while ownership remains, the
+engine does not quit; `_on_adapter_thread_finished()` schedules shutdown to
+re-enter. Tauri waits six seconds before its final child-process kill fallback.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:

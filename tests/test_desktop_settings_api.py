@@ -2204,7 +2204,12 @@ def test_engine_shutdown_waits_for_active_replay(
     settings_window._replay_thread = object()  # type: ignore[assignment]
     settings_window._engine_controller.start_replay()
     monkeypatch.setattr(settings_window, "_stop_replay", lambda: events.append("stop"))
-    monkeypatch.setattr(settings_window, "close", lambda: events.append("close"))
+    monkeypatch.setattr(
+        settings_window,
+        "_cleanup_runtime",
+        lambda: events.append("cleanup"),
+        raising=False,
+    )
 
     class FakeApplication:
         @staticmethod
@@ -2221,6 +2226,43 @@ def test_engine_shutdown_waits_for_active_replay(
     assert events == ["stop"]
 
 
+def test_engine_shutdown_cleans_runtime_before_quit_without_closing_window(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    def cleanup_runtime() -> bool:
+        events.append("cleanup")
+        return True
+
+    monkeypatch.setattr(
+        settings_window,
+        "_cleanup_runtime",
+        cleanup_runtime,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "close",
+        lambda: events.append("close"),
+    )
+
+    class FakeApp:
+        def quit(self) -> None:
+            events.append("quit")
+
+    class FakeApplication:
+        @staticmethod
+        def instance():
+            return FakeApp()
+
+    monkeypatch.setattr("gui.main_window.QApplication", FakeApplication)
+
+    settings_window._shutdown_engine()
+
+    assert events == ["cleanup", "quit"]
+
+
 def test_engine_shutdown_resumes_after_replay_thread_finishes(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2234,7 +2276,17 @@ def test_engine_shutdown_resumes_after_replay_thread_finishes(
         "_set_replay_controls_running",
         lambda running: events.append(f"controls:{running}"),
     )
-    monkeypatch.setattr(settings_window, "close", lambda: events.append("close"))
+
+    def cleanup_runtime() -> bool:
+        events.append("cleanup")
+        return True
+
+    monkeypatch.setattr(
+        settings_window,
+        "_cleanup_runtime",
+        cleanup_runtime,
+        raising=False,
+    )
 
     class FakeApp:
         def quit(self) -> None:
@@ -2252,7 +2304,196 @@ def test_engine_shutdown_resumes_after_replay_thread_finishes(
     assert settings_window._replay_thread is None
     assert settings_window._replay_worker is None
     assert settings_window._engine_controller.replay_snapshot().running is False
-    assert events == ["controls:False", "close", "quit"]
+    assert events == ["controls:False", "cleanup", "quit"]
+
+
+def test_engine_shutdown_resumes_only_after_adapter_thread_finishes(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    cleanup_results = [False, True]
+    thread = object()
+    settings_window._cam_thread = thread  # type: ignore[assignment]
+    settings_window._cam_worker = object()  # type: ignore[assignment]
+
+    def cleanup_runtime() -> bool:
+        result = cleanup_results.pop(0) if cleanup_results else True
+        events.append(f"cleanup:{result}")
+        return result
+
+    class FakeApp:
+        def quit(self) -> None:
+            events.append("quit")
+
+    class FakeApplication:
+        @staticmethod
+        def instance():
+            return FakeApp()
+
+    class FakeTimer:
+        @staticmethod
+        def singleShot(delay_ms: int, callback) -> None:  # noqa: N802
+            events.append(f"scheduled:{delay_ms}")
+            callback()
+
+    monkeypatch.setattr(settings_window, "_cleanup_runtime", cleanup_runtime)
+    monkeypatch.setattr(main_window_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(main_window_module, "QTimer", FakeTimer)
+
+    settings_window._shutdown_engine()
+
+    assert settings_window._runtime_shutdown_waiting_for_adapters is True
+    assert events == ["cleanup:False"]
+
+    settings_window._on_adapter_thread_finished(
+        "camera",
+        thread,  # type: ignore[arg-type]
+    )
+
+    assert settings_window._cam_thread is None
+    assert settings_window._runtime_shutdown_waiting_for_adapters is False
+    assert events == ["cleanup:False", "scheduled:0", "cleanup:True", "quit"]
+
+
+def test_engine_shutdown_retries_cleanup_error_before_quit(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    cleanup_results = [False, True]
+
+    def cleanup_runtime() -> bool:
+        result = cleanup_results.pop(0) if cleanup_results else True
+        events.append(f"cleanup:{result}")
+        return result
+
+    class FakeApp:
+        def quit(self) -> None:
+            events.append("quit")
+
+    class FakeApplication:
+        @staticmethod
+        def instance():
+            return FakeApp()
+
+    class FakeTimer:
+        @staticmethod
+        def singleShot(delay_ms: int, callback) -> None:  # noqa: N802
+            events.append(f"scheduled:{delay_ms}")
+            callback()
+
+    monkeypatch.setattr(settings_window, "_cleanup_runtime", cleanup_runtime)
+    monkeypatch.setattr(main_window_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(main_window_module, "QTimer", FakeTimer)
+
+    settings_window._shutdown_engine()
+
+    assert settings_window._runtime_cleanup_retry_attempted is True
+    assert settings_window._runtime_cleanup_retry_scheduled is False
+    assert events == ["cleanup:False", "scheduled:100", "cleanup:True", "quit"]
+
+
+def test_runtime_cleanup_is_ordered_and_idempotent(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    class FakeTimer:
+        def stop(self) -> None:
+            events.append("belt_timer.stop")
+
+    class FakeOverlay:
+        def hide(self) -> None:
+            events.append("overlay.hide")
+
+        def close(self) -> None:
+            events.append("overlay.close")
+
+    settings_window._belt_calibrator = object()  # type: ignore[assignment]
+    settings_window._belt_ui_timer = FakeTimer()  # type: ignore[assignment]
+    settings_window._preview_overlay = FakeOverlay()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        settings_window,
+        "_unregister_global_hotkeys",
+        lambda: events.append("hotkeys.unregister"),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_cancel_pending_auto_capture_timer",
+        lambda: events.append("auto_capture.cancel"),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_stop_belt_calibration",
+        lambda: events.append("belt_calibration.stop"),
+    )
+    monkeypatch.setattr(
+        settings_window._engine_controller,
+        "stop_belt",
+        lambda: events.append("belt.stop"),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_stop_web_server",
+        lambda: events.append("web.stop"),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_stop_recording",
+        lambda: events.append("recording.stop"),
+    )
+    monkeypatch.setattr(
+        settings_window,
+        "_stop_camera_worker",
+        lambda: events.append("camera.stop"),
+    )
+
+    settings_window._cleanup_runtime()
+    settings_window._cleanup_runtime()
+
+    assert events == [
+        "hotkeys.unregister",
+        "auto_capture.cancel",
+        "belt_calibration.stop",
+        "belt_timer.stop",
+        "belt.stop",
+        "web.stop",
+        "recording.stop",
+        "camera.stop",
+        "overlay.hide",
+        "overlay.close",
+    ]
+    assert settings_window._web_restart_shutdown is True
+    assert settings_window._web_restart_scheduled is False
+
+
+def test_runtime_cleanup_guard_allows_retry_after_failure(
+    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_unregister = settings_window._unregister_global_hotkeys
+    attempts = 0
+
+    def flaky_unregister() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("cleanup failed")
+        original_unregister()
+
+    monkeypatch.setattr(
+        settings_window,
+        "_unregister_global_hotkeys",
+        flaky_unregister,
+    )
+
+    assert settings_window._cleanup_runtime() is False
+
+    assert settings_window._runtime_cleanup_in_progress is False
+    assert settings_window._runtime_cleanup_complete is False
+
+    assert settings_window._cleanup_runtime() is True
+
+    assert attempts == 2
+    assert settings_window._runtime_cleanup_complete is True
 
 
 def test_camera_failure_stops_active_recording_runtime(

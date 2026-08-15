@@ -21,6 +21,8 @@
 - engine mode 不建立監測頁 `_mon_*` label、progress bar、sparkline 或 legacy REC pill timer；rPPG、行為與融合 callback 仍依原順序更新 `_latest_*` 快照、觸發警報／基線採集／記錄並推播 Web metrics，監測視覺只由 Flutter 消費同一份 metrics payload。
 - engine mode 不建立心跳帶 label、banner、device-status、sparkline 或 calibration bar 假元件；Flutter 直接使用 Web metrics 的 BLE、HRV 與校準欄位。每秒 belt timer 仍驅動新 rPPG／心跳帶配對觀測與 ROI 參數協調器，並非 presentation timer，不得因移除 Qt 面板而停用。
 - engine mode 不建立通用 `_HeadlessControl`，也不保留 pipeline、recording、camera、profile 的 button／label／tag 假投影。共用 lifecycle callback 仍更新 controller 快照、錄影資源、相機 telemetry、基線 collector、通知與 Web metrics；只有 legacy Qt 路徑接收文字與按鈕狀態。正式 desktop state/command 與 Flutter 面板不再暴露僅切換文字的示範 benchmark；可重複效能量測仍由 `scripts.desktop_engine_benchmark` 提供。
+- engine `app.shutdown` 先保留進行中 replay 的停止／延後結束 gate；其餘 engine 路徑直接以可重入 `_cleanup_runtime()` 依序清理快捷鍵、待處理採集、校準／timer／BLE、Web、錄影、相機與 Overlay，然後呼叫 `QApplication.quit()`。隱藏 `MainWindow.closeEvent()` 僅為 legacy replay gate／adapter，不是 engine 必要路徑。下一階段依序處理 QThread/QTimer parent ownership、alarm/multimedia，最後才移除 `QMainWindow` inheritance；這只移動 shutdown ownership，不改 camera、worker、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
+- cleanup 為逐步 best-effort：非 thread step 例外記錄後仍繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。video、camera、analysis adapter thread wait timeout 而 ownership 尚存時，engine 不 quit，待 `_on_adapter_thread_finished()` 排程重入 shutdown。Tauri 僅在 6 秒仍未結束後才作最後的 child-process kill fallback。
 
 ## 整體資料流
 

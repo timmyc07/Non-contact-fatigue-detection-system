@@ -1055,6 +1055,11 @@ class MainWindow(QMainWindow):
         self._web_restart_in_progress = False
         self._web_restart_shutdown = False
         self._web_restart_stopping_server: WebServerThread | None = None
+        self._runtime_cleanup_in_progress = False
+        self._runtime_cleanup_complete = False
+        self._runtime_cleanup_retry_attempted = False
+        self._runtime_cleanup_retry_scheduled = False
+        self._runtime_shutdown_waiting_for_adapters = False
         self._web_restart_bridge = _WebRestartBridge(self)
         self._web_restart_bridge.stopped.connect(
             self._on_web_restart_stopped,
@@ -4271,11 +4276,82 @@ class MainWindow(QMainWindow):
         if self._engine_controller.request_shutdown() == "stop_replay":
             self._stop_replay()
             return
-        self.close()
-        if self._engine_mode:
-            app = QApplication.instance()
-            if app is not None:
-                app.quit()
+        if not self._engine_mode:
+            self.close()
+            return
+        if self._runtime_cleanup_retry_scheduled:
+            return
+        if not self._cleanup_runtime():
+            if not self._runtime_adapter_threads_stopped():
+                self._runtime_shutdown_waiting_for_adapters = True
+                return
+            if not self._runtime_cleanup_retry_attempted:
+                self._runtime_cleanup_retry_attempted = True
+                self._runtime_cleanup_retry_scheduled = True
+                QTimer.singleShot(100, self._retry_runtime_shutdown)
+                return
+            logger.error("Engine runtime cleanup remained incomplete after retry")
+        self._runtime_shutdown_waiting_for_adapters = False
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def _retry_runtime_shutdown(self) -> None:
+        self._runtime_cleanup_retry_scheduled = False
+        self._shutdown_engine()
+
+    def _cleanup_runtime(self) -> bool:
+        if self._runtime_cleanup_complete:
+            return True
+        if self._runtime_cleanup_in_progress:
+            return False
+        self._runtime_cleanup_in_progress = True
+        had_error = False
+
+        def cleanup_step(label: str, action: Callable[[], Any]) -> Any | None:
+            nonlocal had_error
+            try:
+                return action()
+            except Exception:
+                had_error = True
+                logger.exception("Engine runtime cleanup step failed: %s", label)
+                return None
+
+        try:
+            cleanup_step("global hotkeys", self._unregister_global_hotkeys)
+            cleanup_step("auto-capture timer", self._cancel_pending_auto_capture_timer)
+            if self._belt_calibrator is not None:
+                cleanup_step(
+                    "belt calibration",
+                    self._stop_belt_calibration,  # 存本次 session 校準版本
+                )
+            cleanup_step("belt timer", self._belt_ui_timer.stop)
+            cleanup_step("belt runtime", self._engine_controller.stop_belt)
+            self._web_restart_shutdown = True
+            self._web_restart_scheduled = False
+            cleanup_step("web server", self._stop_web_server)
+            cleanup_step("recording", self._stop_recording)
+            cleanup_step("camera and analysis adapters", self._stop_camera_worker)
+            if self._preview_overlay is not None:
+                cleanup_step("overlay hide", self._preview_overlay.hide)
+                cleanup_step("overlay close", self._preview_overlay.close)
+            adapters_stopped = self._runtime_adapter_threads_stopped()
+            self._runtime_cleanup_complete = not had_error and adapters_stopped
+            return self._runtime_cleanup_complete
+        finally:
+            self._runtime_cleanup_in_progress = False
+
+    def _runtime_adapter_threads_stopped(self) -> bool:
+        return all(
+            thread is None
+            for thread in (
+                self._video_thread,
+                self._cam_thread,
+                self._combined_thread,
+                self._rppg_thread,
+                self._fatigue_thread,
+            )
+        )
 
     def _emit_web_metrics(self, *, force: bool = False) -> None:
         if self._web_server is None:
@@ -5020,9 +5096,10 @@ class MainWindow(QMainWindow):
             f"{'，水平翻轉' if horizontal_flip else ''}）"
         )
 
-    def _stop_camera_worker(self) -> None:
+    def _stop_camera_worker(self) -> bool:
         self._engine_controller.mark_pipeline_cleanup_pending()
         self._fail_closed_pipeline_adapters()
+        return self._runtime_adapter_threads_stopped()
 
     def _fail_closed_pipeline_adapters(self) -> None:
         """Best-effort cleanup after controller can no longer restore live topology."""
@@ -5110,6 +5187,8 @@ class MainWindow(QMainWindow):
             return
         if self._engine_controller.pipeline_snapshot().cleanup_pending:
             self._fail_closed_pipeline_adapters()
+        if self._runtime_shutdown_waiting_for_adapters:
+            QTimer.singleShot(0, self._shutdown_engine)
 
     # ── Frame routing ─────────────────────────────────────────────────────────
 
@@ -6593,18 +6672,5 @@ class MainWindow(QMainWindow):
             self._stop_replay()
             event.ignore()
             return
-        self._unregister_global_hotkeys()
-        self._cancel_pending_auto_capture_timer()
-        if self._belt_calibrator is not None:
-            self._stop_belt_calibration()   # 存本次 session 校準版本
-        self._belt_ui_timer.stop()
-        self._engine_controller.stop_belt()
-        self._web_restart_shutdown = True
-        self._web_restart_scheduled = False
-        self._stop_web_server()
-        self._stop_recording()
-        self._stop_camera_worker()
-        if self._preview_overlay is not None:
-            self._preview_overlay.hide()
-            self._preview_overlay.close()
+        self._cleanup_runtime()
         super().closeEvent(event)
