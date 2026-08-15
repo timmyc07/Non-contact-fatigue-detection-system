@@ -1,0 +1,60 @@
+{
+  "capture": {
+    "command": ".venv\\Scripts\\python -m scripts.desktop_engine_benchmark --port 5002 --samples 10",
+    "date": "2026-08-15",
+    "source_revision": "c274c9e",
+    "working_tree_changes": [
+      "application-owned EngineRuntime for live camera and analysis adapters",
+      "join-before-release and stale-session protection",
+      "camera failure timeout preserves cleanup guard"
+    ]
+  },
+  "engine": {
+    "command": {
+      "latency_ms": {
+        "max": 40.436,
+        "mean": 27.997,
+        "min": 19.413,
+        "p50": 20.436,
+        "p95": 40.436
+      },
+      "samples": 10
+    },
+    "pid": 24408,
+    "process_tree_pids": [
+      24408,
+      21312
+    ],
+    "rss_bytes_at_ready": 269914112,
+    "rss_mib_at_ready": 257.41,
+    "startup_to_api_ready_ms": 1837.974
+  },
+  "noise_control": {
+    "loopback_only": true,
+    "samples": 10,
+    "warmup_discarded": 5
+  },
+  "platform": "win32",
+  "preview": {
+    "base64_bytes": 12156,
+    "dimensions": [
+      640,
+      360
+    ],
+    "dispatch_delivered": 10,
+    "dispatch_frames_per_second": 15119.444,
+    "encode_latency_ms": {
+      "max": 1.493,
+      "mean": 1.294,
+      "min": 1.171,
+      "p50": 1.22,
+      "p95": 1.493
+    },
+    "jpeg_bytes": 9115,
+    "kind": "synthetic_in_process",
+    "limitations": "Excludes camera, network, Tauri WebView decode, and Flutter rendering",
+    "samples": 10
+  },
+  "python": "3.11.9",
+  "schema_version": 1
+}

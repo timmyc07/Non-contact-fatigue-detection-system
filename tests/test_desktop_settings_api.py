@@ -55,6 +55,13 @@ def settings_window(
     window.close()
 
 
+def _install_runtime_adapter(
+    window: MainWindow, kind: str, worker: object, thread: object
+) -> None:
+    """Install a fake adapter session without restoring MainWindow storage."""
+    window._engine_runtime._adapters[kind] = (worker, thread)  # type: ignore[assignment]
+
+
 def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> None:
     state = settings_window._handle_desktop_command("state.get", {})
 
@@ -911,8 +918,9 @@ def test_fail_closed_pipeline_cleanup_releases_live_adapter_resources(
     settings_window._engine_controller.start_pipeline()
     settings_window._pipeline_running = True
     settings_window._recording = True
-    settings_window._cam_worker = FakeCameraWorker()  # type: ignore[assignment]
-    settings_window._cam_thread = FakeCameraThread()  # type: ignore[assignment]
+    _install_runtime_adapter(
+        settings_window, "camera", FakeCameraWorker(), FakeCameraThread()
+    )
     monkeypatch.setattr(settings_window, "_stop_recording", lambda: events.append("recording"))
 
     settings_window._fail_closed_pipeline_adapters()
@@ -956,8 +964,7 @@ def test_fail_closed_pipeline_keeps_camera_ownership_when_thread_times_out(
         fatigue_enabled=True,
     )
     settings_window._engine_controller.start_pipeline()
-    settings_window._cam_worker = worker  # type: ignore[assignment]
-    settings_window._cam_thread = thread  # type: ignore[assignment]
+    _install_runtime_adapter(settings_window, "camera", worker, thread)
     monkeypatch.setattr(settings_window, "_stop_recording", lambda: None)
 
     settings_window._fail_closed_pipeline_adapters()
@@ -969,8 +976,7 @@ def test_fail_closed_pipeline_keeps_camera_ownership_when_thread_times_out(
     assert snapshot.cleanup_pending is True
     with pytest.raises(RuntimeError, match="cleanup"):
         settings_window._engine_controller.start_replay()
-    settings_window._cam_worker = None
-    settings_window._cam_thread = None
+    settings_window._engine_runtime.release_adapter("camera", thread)
     settings_window._engine_controller.finish_pipeline_cleanup()
 
 
@@ -999,8 +1005,7 @@ def test_late_camera_finish_releases_pending_cleanup_and_allows_replay(
         fatigue_enabled=True,
     )
     settings_window._engine_controller.start_pipeline()
-    settings_window._cam_worker = worker  # type: ignore[assignment]
-    settings_window._cam_thread = thread  # type: ignore[assignment]
+    _install_runtime_adapter(settings_window, "camera", worker, thread)
     monkeypatch.setattr(settings_window, "_stop_recording", lambda: True)
 
     settings_window._fail_closed_pipeline_adapters()
@@ -1228,7 +1233,7 @@ def test_engine_metric_callbacks_keep_non_visual_side_effects(
     fatigue_metrics = object()
     fused_score = object()
     events: list[tuple[str, object]] = []
-    settings_window._combined_worker = object()  # type: ignore[assignment]
+    _install_runtime_adapter(settings_window, "combined", object(), object())
     monkeypatch.setattr(
         settings_window._alarm_controller,
         "on_metrics",
@@ -2313,8 +2318,7 @@ def test_engine_shutdown_resumes_only_after_adapter_thread_finishes(
     events: list[str] = []
     cleanup_results = [False, True]
     thread = object()
-    settings_window._cam_thread = thread  # type: ignore[assignment]
-    settings_window._cam_worker = object()  # type: ignore[assignment]
+    _install_runtime_adapter(settings_window, "camera", object(), thread)
 
     def cleanup_runtime() -> bool:
         result = cleanup_results.pop(0) if cleanup_results else True
@@ -2543,6 +2547,44 @@ def test_camera_failure_stops_active_recording_runtime(
     assert settings_window._video_thread is None
     assert settings_window._engine_controller.pipeline_snapshot().running is False
     assert settings_window._engine_controller.pipeline_snapshot().recording is False
+
+
+def test_camera_failure_timeout_blocks_replay_until_adapter_release(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCameraWorker:
+        def detach_bgr_queue(self) -> None:
+            pass
+
+        def request_stop(self) -> None:
+            pass
+
+    class FakeCameraThread:
+        def quit(self) -> None:
+            pass
+
+        def wait(self, _timeout_ms: int) -> bool:
+            return False
+
+    worker = FakeCameraWorker()
+    thread = FakeCameraThread()
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.start_pipeline()
+    _install_runtime_adapter(settings_window, "camera", worker, thread)
+    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: None)
+
+    settings_window._on_camera_failed("camera disconnected")
+
+    assert settings_window._engine_controller.pipeline_snapshot().cleanup_pending is True
+    with pytest.raises(RuntimeError, match="cleanup"):
+        settings_window._engine_controller.start_replay()
+
+    settings_window._engine_runtime.release_adapter("camera", thread)
+
+    assert settings_window._engine_controller.pipeline_snapshot().cleanup_pending is False
+    settings_window._engine_controller.start_replay()
+    settings_window._engine_controller.finish_replay()
 
 
 def test_pipeline_command_rolls_back_when_replay_is_active(
@@ -2840,8 +2882,7 @@ def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(
         fatigue_enabled=True,
     )
     settings_window._engine_controller.start_pipeline()
-    settings_window._cam_worker = FakeCameraWorker()  # type: ignore[assignment]
-    settings_window._cam_thread = thread  # type: ignore[assignment]
+    _install_runtime_adapter(settings_window, "camera", FakeCameraWorker(), thread)
     monkeypatch.setattr(settings_window, "_stop_recording", lambda: True)
 
     settings_window._stop_camera_worker()

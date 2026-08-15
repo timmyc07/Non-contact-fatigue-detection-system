@@ -125,10 +125,15 @@ the re-entrant `_cleanup_runtime()` directly, then `QApplication.quit()`, rather
 than requiring hidden `MainWindow.closeEvent()`. Cleanup is ordered: hotkeys,
 pending auto-capture, belt calibration/timer/BLE, Web restart/server, recording,
 camera worker, then overlay; failed cleanup can be retried. `closeEvent()` now
-serves only as the legacy replay-gate adapter. The next boundaries are
-QThread/QTimer parent ownership, alarm/multimedia, and only then removal of
-`QMainWindow` inheritance. This ownership change does not alter camera, worker,
-recording, BLE, replay, rPPG, fatigue, ROI, or calibration behavior.
+serves only as the legacy replay-gate adapter. An application-owned
+`EngineRuntime(QObject)` now owns the live camera and combined/rPPG/fatigue
+adapter threads and workers, including common signal wiring, the existing stop
+timeouts, join-before-release, and stale-finish protection. `MainWindow` retains only worker-specific
+callbacks, queue/routing work, and legacy presentation side effects. Recording
+and replay threads, runtime timers, and alarm/multimedia ownership remain the
+next boundaries before removing `QMainWindow` inheritance. This ownership
+change does not alter camera, worker topology, recording, BLE, replay, rPPG,
+fatigue, ROI, or calibration behavior.
 Cleanup is stepwise best-effort: non-thread step failures are logged and later
 steps continue; the main event loop retries once after 100ms, then logs and
 best-effort quits if that second attempt still fails. If a video,
@@ -176,6 +181,16 @@ lifecycle regressions only; startup and encoding variance must not be treated
 as a performance improvement or regression without repeated measurements. Raw
 baseline data is retained in
 `docs/benchmarks/desktop-engine-lifecycle-2026-08-11.json`.
+
+After moving live camera and analysis adapter ownership into `EngineRuntime`,
+two final 2026-08-15 runs measured 257.625/257.410 MiB RSS,
+1848.390/1837.974 ms startup, `state.get` p50 20.048/20.436 ms and p95
+40.894/40.436 ms, with synthetic JPEG encode p50 1.213/1.220 ms and p95
+1.478/1.493 ms. These values remain within the prior shutdown-slice range and
+are treated as normal process/startup noise rather than a regression. Raw
+captures and limitations are retained in
+`docs/benchmarks/desktop-engine-runtime-ownership-2026-08-15-run1.json` and
+`docs/benchmarks/desktop-engine-runtime-ownership-2026-08-15-run2.json`.
 
 ## Build prerequisites
 

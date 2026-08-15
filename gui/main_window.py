@@ -93,6 +93,7 @@ from gui.engine_controller import (
     CameraDevice,
     EngineController,
 )
+from gui.engine_runtime import EngineRuntime
 from gui.fatigue_scorer import FuserConfig
 from gui.fatigue_worker import FatigueWorker
 from gui.global_hotkeys import GlobalHotkeyRuntime
@@ -1014,16 +1015,13 @@ class MainWindow(QMainWindow):
         if not self._engine_mode:
             assert self._preview_overlay is not None
             self._preview_overlay.move(100, 100)
-        self._cam_thread: QThread | None = None
-        self._cam_worker: CameraStreamWorker | None = None
-        self._rppg_thread: QThread | None = None
-        self._rppg_worker: RppgWorker | None = None
+        app = QApplication.instance()
+        if app is None:
+            raise RuntimeError("MainWindow requires a QApplication instance")
+        self._engine_runtime = EngineRuntime(app)
+        self._engine_runtime.adapter_released.connect(self._on_adapter_released)
         self._bgr_queue: "queue.Queue | None" = None
-        self._fatigue_thread: QThread | None = None
-        self._fatigue_worker: FatigueWorker | None = None
         self._fatigue_queue: "queue.Queue | None" = None
-        self._combined_thread: QThread | None = None
-        self._combined_worker: CombinedWorker | None = None
         self._combined_queue: "queue.Queue | None" = None
 
         self._metrics_recorder: MetricsRecorder | None = None
@@ -1039,6 +1037,7 @@ class MainWindow(QMainWindow):
         self._latest_rppg_metrics = None
         self._latest_fatigue_metrics = None
         self._latest_fused_score = None
+
         self._last_camera_info = {"codec": "", "width": 0, "height": 0}
         self._last_fps: float = 0.0
 
@@ -1060,6 +1059,7 @@ class MainWindow(QMainWindow):
         self._runtime_cleanup_retry_attempted = False
         self._runtime_cleanup_retry_scheduled = False
         self._runtime_shutdown_waiting_for_adapters = False
+        self._adapter_cleanup_in_progress = False
         self._web_restart_bridge = _WebRestartBridge(self)
         self._web_restart_bridge.stopped.connect(
             self._on_web_restart_stopped,
@@ -1153,6 +1153,38 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("就緒 — 選擇攝影機後按「開始」可預覽（無 MediaPipe）")
         if not self._engine_mode:
             self._apply_native_titlebar_theme()
+
+    @property
+    def _cam_thread(self) -> QThread | None:
+        return self._engine_runtime.thread("camera")
+
+    @property
+    def _cam_worker(self) -> CameraStreamWorker | None:
+        return cast(CameraStreamWorker | None, self._engine_runtime.worker("camera"))
+
+    @property
+    def _combined_thread(self) -> QThread | None:
+        return self._engine_runtime.thread("combined")
+
+    @property
+    def _combined_worker(self) -> CombinedWorker | None:
+        return cast(CombinedWorker | None, self._engine_runtime.worker("combined"))
+
+    @property
+    def _rppg_thread(self) -> QThread | None:
+        return self._engine_runtime.thread("rppg")
+
+    @property
+    def _rppg_worker(self) -> RppgWorker | None:
+        return cast(RppgWorker | None, self._engine_runtime.worker("rppg"))
+
+    @property
+    def _fatigue_thread(self) -> QThread | None:
+        return self._engine_runtime.thread("fatigue")
+
+    @property
+    def _fatigue_worker(self) -> FatigueWorker | None:
+        return cast(FatigueWorker | None, self._engine_runtime.worker("fatigue"))
 
     def _set_legacy_text(self, name: str, text: object) -> None:
         """Update a real Qt label/button without creating an engine-mode mirror."""
@@ -4342,16 +4374,7 @@ class MainWindow(QMainWindow):
             self._runtime_cleanup_in_progress = False
 
     def _runtime_adapter_threads_stopped(self) -> bool:
-        return all(
-            thread is None
-            for thread in (
-                self._video_thread,
-                self._cam_thread,
-                self._combined_thread,
-                self._rppg_thread,
-                self._fatigue_thread,
-            )
-        )
+        return self._video_thread is None and self._engine_runtime.all_stopped()
 
     def _emit_web_metrics(self, *, force: bool = False) -> None:
         if self._web_server is None:
@@ -5067,27 +5090,19 @@ class MainWindow(QMainWindow):
         backend_label = backend.upper()
         horizontal_flip = spec.horizontal_flip
 
-        thread = QThread(self)
         worker = CameraStreamWorker(cam_idx, width=w, height=h,
                                     target_fps=target_fps, backend=backend,
                                     horizontal_flip=horizontal_flip)
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.camera_info.connect(self._on_camera_info)
-        worker.diagnostic_ready.connect(self._append_log)
-        worker.fps_ready.connect(self._on_fps)
-        worker.failed.connect(self._on_camera_failed)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(
-            lambda current=thread: self._on_adapter_thread_finished("camera", current)
+        self._engine_runtime.start_adapter(
+            "camera",
+            worker,
+            connect=lambda current: (
+                current.camera_info.connect(self._on_camera_info),
+                current.diagnostic_ready.connect(self._append_log),
+                current.fps_ready.connect(self._on_fps),
+                current.failed.connect(self._on_camera_failed),
+            ),
         )
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(worker.deleteLater)
-
-        self._cam_thread = thread
-        self._cam_worker = worker
-        thread.start()
         # Initial frame routing (camera → overlay); may be overridden when
         # rPPG / fatigue workers start and call _update_frame_routing().
         self._update_frame_routing()
@@ -5103,6 +5118,16 @@ class MainWindow(QMainWindow):
 
     def _fail_closed_pipeline_adapters(self) -> None:
         """Best-effort cleanup after controller can no longer restore live topology."""
+        if self._adapter_cleanup_in_progress:
+            return
+        self._adapter_cleanup_in_progress = True
+        try:
+            self._fail_closed_pipeline_adapters_impl()
+        finally:
+            self._adapter_cleanup_in_progress = False
+
+    def _fail_closed_pipeline_adapters_impl(self) -> None:
+        """Run fail-closed cleanup once; nested release signals are ignored by the guard."""
         all_stopped = True
         cleanup_steps = [("recording", self._stop_recording)]
         if self._combined_worker is not None or self._combined_thread is not None:
@@ -5126,29 +5151,22 @@ class MainWindow(QMainWindow):
             camera_steps.extend(
                 (
                     ("camera queues", self._cam_worker.detach_bgr_queue),
-                    ("camera worker", self._cam_worker.request_stop),
                 )
             )
         if self._cam_thread is not None:
-            camera_steps.extend(
-                (
-                    ("camera thread quit", self._cam_thread.quit),
-                    ("camera thread wait", lambda: self._cam_thread.wait(3000)),
-                )
+            camera_steps.append(
+                ("camera thread stop", lambda: self._engine_runtime.stop_adapter("camera", 3000))
             )
         camera_thread_stopped = self._cam_thread is None
         for label, cleanup in camera_steps:
             try:
                 result = cleanup()
-                if label == "camera thread wait":
+                if label == "camera thread stop":
                     camera_thread_stopped = result is not False
             except Exception as exc:
                 all_stopped = False
                 logger.warning("fail-closed %s cleanup failed: %s", label, exc)
-        if camera_thread_stopped:
-            self._cam_thread = None
-            self._cam_worker = None
-        else:
+        if not camera_thread_stopped:
             all_stopped = False
         self._pipeline_running = False
         self._recording = False
@@ -5162,30 +5180,35 @@ class MainWindow(QMainWindow):
         self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
 
     def _on_adapter_thread_finished(self, kind: str, thread: QThread) -> None:
-        """Release late-finishing adapter ownership without touching a newer session."""
+        """Compatibility adapter for tests and legacy video-thread wiring."""
         if kind == "video" and self._video_thread is thread:
             self._video_thread = None
             self._video_worker = None
             self._video_queue = None
             self._recording_video_path = None
-        elif kind == "camera" and self._cam_thread is thread:
-            self._cam_thread = None
-            self._cam_worker = None
-        elif kind == "combined" and self._combined_thread is thread:
-            self._combined_thread = None
-            self._combined_worker = None
+            if self._engine_controller.pipeline_snapshot().cleanup_pending:
+                self._fail_closed_pipeline_adapters()
+            if self._runtime_shutdown_waiting_for_adapters:
+                QTimer.singleShot(0, self._shutdown_engine)
+            return
+        self._engine_runtime.release_adapter(kind, thread)
+
+    def _on_adapter_released(self, kind: str, _thread: object) -> None:
+        """Apply MainWindow-only queue and shutdown side effects after runtime release."""
+        if kind == "camera":
+            pass
+        elif kind == "combined":
             self._combined_queue = None
-        elif kind == "rppg" and self._rppg_thread is thread:
-            self._rppg_thread = None
-            self._rppg_worker = None
+        elif kind == "rppg":
             self._bgr_queue = None
-        elif kind == "fatigue" and self._fatigue_thread is thread:
-            self._fatigue_thread = None
-            self._fatigue_worker = None
+        elif kind == "fatigue":
             self._fatigue_queue = None
         else:
             return
-        if self._engine_controller.pipeline_snapshot().cleanup_pending:
+        if (
+            self._engine_controller.pipeline_snapshot().cleanup_pending
+            and not self._adapter_cleanup_in_progress
+        ):
             self._fail_closed_pipeline_adapters()
         if self._runtime_shutdown_waiting_for_adapters:
             QTimer.singleShot(0, self._shutdown_engine)
@@ -5790,7 +5813,6 @@ class MainWindow(QMainWindow):
         self._combined_queue = queue.Queue(maxsize=2)
         self._cam_worker.attach_bgr_queue(self._combined_queue)
 
-        thread = QThread(self)
         worker = CombinedWorker(
             self._combined_queue,
             enable_rppg=enable_rppg, enable_fatigue=True,
@@ -5800,26 +5822,19 @@ class MainWindow(QMainWindow):
             fuser_config=FuserConfig.for_rppg(),
             personal_profile=self._personal_profile,
         )
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.rppg_metrics_ready.connect(self._on_rppg_metrics)
-        worker.fatigue_metrics_ready.connect(self._on_fatigue_metrics)
-        worker.fused_score_ready.connect(self._on_fused_score)
-        worker.face_detected.connect(self._on_face_detected)
-        worker.status_changed.connect(self._on_combined_status)
-        worker.failed.connect(self._on_combined_failed)
-        worker.candidate_bpm_ready.connect(self._on_candidate_bpm_ready)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(
-            lambda current=thread: self._on_adapter_thread_finished("combined", current)
+        self._engine_runtime.start_adapter(
+            "combined",
+            worker,
+            connect=lambda current: (
+                current.rppg_metrics_ready.connect(self._on_rppg_metrics),
+                current.fatigue_metrics_ready.connect(self._on_fatigue_metrics),
+                current.fused_score_ready.connect(self._on_fused_score),
+                current.face_detected.connect(self._on_face_detected),
+                current.status_changed.connect(self._on_combined_status),
+                current.failed.connect(self._on_combined_failed),
+                current.candidate_bpm_ready.connect(self._on_candidate_bpm_ready),
+            ),
         )
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(worker.deleteLater)
-
-        self._combined_thread = thread
-        self._combined_worker = worker
-        thread.start()
 
         self._begin_auto_baseline()
         self._update_frame_routing()
@@ -5830,19 +5845,14 @@ class MainWindow(QMainWindow):
         self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
     def _stop_combined_worker(self) -> bool:
-        if self._combined_worker is not None:
-            self._combined_worker.request_stop()
-        stopped = True
-        if self._combined_thread is not None:
-            self._combined_thread.quit()
-            stopped = self._combined_thread.wait(5000) is not False
+        combined_queue = self._combined_queue
+        camera_worker = self._cam_worker
+        stopped = self._engine_runtime.stop_adapter("combined", 5000)
         if not stopped:
             return False
-        self._combined_thread = None
-        self._combined_worker = None
         self._end_baseline_collection()
-        if self._combined_queue is not None and self._cam_worker is not None:
-            self._cam_worker.detach_bgr_queue(self._combined_queue)
+        if combined_queue is not None and camera_worker is not None:
+            camera_worker.detach_bgr_queue(combined_queue)
         self._combined_queue = None
         if self._preview_overlay is not None:
             self._preview_overlay.show_rppg_panel(False)
@@ -5883,29 +5893,21 @@ class MainWindow(QMainWindow):
         self._bgr_queue = queue.Queue(maxsize=2)
         self._cam_worker.attach_bgr_queue(self._bgr_queue)
 
-        thread = QThread(self)
         worker = RppgWorker(
             self._bgr_queue, target_fps=30.0, buffer_sec=12.0,
             calibration_loader=self._load_rppg_calibration_version,
         )
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.metrics_ready.connect(self._on_rppg_metrics)
-        worker.face_detected.connect(self._on_face_detected)
-        worker.status_changed.connect(self._on_rppg_status)
-        worker.failed.connect(self._on_rppg_failed)
-        worker.candidate_bpm_ready.connect(self._on_candidate_bpm_ready)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(
-            lambda current=thread: self._on_adapter_thread_finished("rppg", current)
+        self._engine_runtime.start_adapter(
+            "rppg",
+            worker,
+            connect=lambda current: (
+                current.metrics_ready.connect(self._on_rppg_metrics),
+                current.face_detected.connect(self._on_face_detected),
+                current.status_changed.connect(self._on_rppg_status),
+                current.failed.connect(self._on_rppg_failed),
+                current.candidate_bpm_ready.connect(self._on_candidate_bpm_ready),
+            ),
         )
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(worker.deleteLater)
-
-        self._rppg_thread = thread
-        self._rppg_worker = worker
-        thread.start()
 
         self._update_frame_routing()
         if self._preview_overlay is not None:
@@ -5913,18 +5915,13 @@ class MainWindow(QMainWindow):
         self._append_log("▶ rPPG 引擎啟動（MediaPipe Face Landmarker + POS）")
 
     def _stop_rppg_worker(self) -> bool:
-        if self._rppg_worker is not None:
-            self._rppg_worker.request_stop()
-        stopped = True
-        if self._rppg_thread is not None:
-            self._rppg_thread.quit()
-            stopped = self._rppg_thread.wait(4000) is not False
+        bgr_queue = self._bgr_queue
+        camera_worker = self._cam_worker
+        stopped = self._engine_runtime.stop_adapter("rppg", 4000)
         if not stopped:
             return False
-        self._rppg_thread = None
-        self._rppg_worker = None
-        if self._bgr_queue is not None and self._cam_worker is not None:
-            self._cam_worker.detach_bgr_queue(self._bgr_queue)
+        if bgr_queue is not None and camera_worker is not None:
+            camera_worker.detach_bgr_queue(bgr_queue)
         self._bgr_queue = None
         self._update_frame_routing()
         if self._preview_overlay is not None:
@@ -5995,26 +5992,18 @@ class MainWindow(QMainWindow):
         self._fatigue_queue = queue.Queue(maxsize=2)
         self._cam_worker.attach_bgr_queue(self._fatigue_queue)
 
-        thread = QThread(self)
         worker = FatigueWorker(self._fatigue_queue, target_fps=30.0,
                                personal_profile=self._personal_profile)
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.metrics_ready.connect(self._on_fatigue_metrics)
-        worker.face_detected.connect(self._on_fatigue_face_detected)
-        worker.status_changed.connect(self._on_fatigue_status)
-        worker.failed.connect(self._on_fatigue_failed)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(
-            lambda current=thread: self._on_adapter_thread_finished("fatigue", current)
+        self._engine_runtime.start_adapter(
+            "fatigue",
+            worker,
+            connect=lambda current: (
+                current.metrics_ready.connect(self._on_fatigue_metrics),
+                current.face_detected.connect(self._on_fatigue_face_detected),
+                current.status_changed.connect(self._on_fatigue_status),
+                current.failed.connect(self._on_fatigue_failed),
+            ),
         )
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(worker.deleteLater)
-
-        self._fatigue_thread = thread
-        self._fatigue_worker = worker
-        thread.start()
 
         self._begin_auto_baseline()
         self._update_frame_routing()
@@ -6023,19 +6012,14 @@ class MainWindow(QMainWindow):
         self._append_log("▶ 行為警覺引擎啟動（V2：EAR + 瞳孔 + 注視 + 頭部）")
 
     def _stop_fatigue_worker(self) -> bool:
-        if self._fatigue_worker is not None:
-            self._fatigue_worker.request_stop()
-        stopped = True
-        if self._fatigue_thread is not None:
-            self._fatigue_thread.quit()
-            stopped = self._fatigue_thread.wait(4000) is not False
+        fatigue_queue = self._fatigue_queue
+        camera_worker = self._cam_worker
+        stopped = self._engine_runtime.stop_adapter("fatigue", 4000)
         if not stopped:
             return False
-        self._fatigue_thread = None
-        self._fatigue_worker = None
         self._end_baseline_collection()
-        if self._fatigue_queue is not None and self._cam_worker is not None:
-            self._cam_worker.detach_bgr_queue(self._fatigue_queue)
+        if fatigue_queue is not None and camera_worker is not None:
+            camera_worker.detach_bgr_queue(fatigue_queue)
         self._fatigue_queue = None
         self._update_frame_routing()
         if self._preview_overlay is not None:
@@ -6223,12 +6207,12 @@ class MainWindow(QMainWindow):
             self._append_log("○ 相機中斷，已一併結束記錄。")
         self._set_record_source(None)
         self._set_frame_source(None)
-        if self._cam_worker is not None:
-            self._cam_worker.request_stop()
+        camera_stopped = self._engine_runtime.stop_adapter("camera", 3000)
         self._pipeline_running = False
-        self._engine_controller.stop_pipeline()
-        self._cam_worker = None
-        self._cam_thread = None
+        if camera_stopped:
+            self._engine_controller.stop_pipeline()
+        else:
+            self._engine_controller.mark_pipeline_cleanup_pending()
         self._latest_rppg_metrics = None
         self._latest_fatigue_metrics = None
         self._latest_fused_score = None

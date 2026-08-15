@@ -24,15 +24,18 @@
 - cleanup 現為逐步 best-effort：非 thread step 例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera、analysis
   adapter thread wait timeout 且 ownership 尚存，engine 不 quit，待 `_on_adapter_thread_finished()` 排程重入 shutdown。
   Tauri 只在等待 6 秒後仍未結束時才作最後的 child-process kill fallback。
+- live camera 與 combined／rPPG／fatigue adapter 已改由 application-owned `EngineRuntime(QObject)` 建立並
+  保存 QThread／worker；共同 signal wiring、原 timeout、join-before-release 與 stale-finish 保護集中於 runtime。`MainWindow`
+  僅保留 worker-specific callback、queue／routing 與 legacy presentation side effect。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證：Python `715 passed, 2 skipped`、desktop settings `124 passed`、
+- 最近一次完整驗證：Python `720 passed, 2 skipped`、desktop settings `125 passed`、engine runtime `4 passed`、
   Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
   Tauri release/NSIS、`compileall` 與 `pip check` 均通過。
-- 最近兩次重複 benchmark：RSS `257.406/256.770 MiB`、API ready
-  `1849.056/1838.147 ms`、IPC p50/p95 `19.881/41.122` 與 `20.529/40.643 ms`、
-  preview p50/p95 `1.268/1.714` 與 `1.226/1.618 ms`；原始結果見
-  `docs/benchmarks/desktop-engine-shutdown-2026-08-15-run1.json` 與 `run2.json`。
+- 最近兩次重複 benchmark：RSS `257.625/257.410 MiB`、API ready
+  `1848.390/1837.974 ms`、IPC p50/p95 `20.048/40.894` 與 `20.436/40.436 ms`、
+  preview p50/p95 `1.213/1.478` 與 `1.220/1.493 ms`；原始結果見
+  `docs/benchmarks/desktop-engine-runtime-ownership-2026-08-15-run1.json` 與 `run2.json`。
 
 以上變更未修改 camera frame routing、worker topology、錄影、警報、BLE 樣本、回放、
 rPPG、疲勞分數、ROI、校準或任何數值閾值。
@@ -40,8 +43,9 @@ rPPG、疲勞分數、ROI、校準或任何數值閾值。
 ## 已知剩餘缺口
 
 1. Python engine 仍以隱藏的 `QApplication + MainWindow` 作 runtime 容器。這不是可見舊面板，
-   但仍有 Qt widget shell 成本；shutdown 已不再依賴 `MainWindow.closeEvent()`，下一個主要邊界是
-   QThread/QTimer parent ownership，其後為 alarm/multimedia，最後才移除 `QMainWindow` inheritance。
+   但仍有 Qt widget shell 成本；shutdown 已不再依賴 `MainWindow.closeEvent()`，live camera／analysis
+   QThread ownership 也已移入 `EngineRuntime`。下一個主要邊界是錄影／回放 thread 與 runtime QTimer ownership，
+   其後為 alarm/multimedia，最後才移除 `QMainWindow` inheritance。
 2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
 
 ## 下一階段執行順序
@@ -56,8 +60,10 @@ rPPG、疲勞分數、ROI、校準或任何數值閾值。
      `RegisterHotKey(HWND=NULL, ...)`，不再依賴 `MainWindow.winId()`／`nativeEvent()`。
    - **已完成：** 可重入 runtime shutdown cleanup 讓 engine `app.shutdown` 直接清理後呼叫
      `QApplication.quit()`；replay shutdown deferral 保留，`closeEvent()` 僅作 legacy adapter。
-   - **下一步：** 盤點並移轉 QThread/QTimer parent ownership，再處理 alarm/multimedia 與其餘
-     widget-only API，最後才以獨立 `EngineRuntime(QObject)` 垂直切片移除 `QMainWindow` inheritance。
+   - **已完成：** application-owned `EngineRuntime(QObject)` 承接 live camera 與三種 analysis adapter
+     的 QThread／worker ownership、共同 wiring、停止 timeout、join-before-release 與 stale-finish release。
+   - **下一步：** 抽離錄影／回放 thread 與 runtime QTimer ownership，再處理 alarm/multimedia 與其餘
+     widget-only API，最後移除 `QMainWindow` inheritance。
    - 每個切片維持 desktop API v2、worker topology 與數值輸出不變。
 
 3. **完成 parity 與效能驗收**

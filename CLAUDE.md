@@ -125,8 +125,11 @@ engine `app.shutdown` 先請 `EngineController` 判斷；回放進行中仍只�
 完成後再重入 shutdown。其他 engine 路徑直接執行具 in-progress／complete guard 的 `_cleanup_runtime()`，再呼叫
 `QApplication.quit()`，不再依賴隱藏 `MainWindow.closeEvent()`。cleanup 順序固定為快捷鍵、待處理自動採集、
 心跳帶校準／timer／BLE、Web restart／server、錄影、相機 worker、Overlay，且失敗後可重試；`closeEvent()`
-只保留 legacy replay gate／adapter。下一步依序處理 QThread/QTimer parent ownership、alarm/multimedia，最後才移除
-`QMainWindow` inheritance；此 ownership 抽取不修改 camera、worker、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
+只保留 legacy replay gate／adapter。live camera 與 combined／rPPG／fatigue adapter 的 QThread／worker reference、
+共同 signal wiring、停止 timeout、join-before-release 與 stale-finish 保護已由 application-owned `EngineRuntime(QObject)` 負責；
+`MainWindow` 只保留 worker-specific callback、queue／routing 與 legacy presentation side effect。錄影、回放、
+runtime QTimer 與 alarm/multimedia ownership 仍待後續抽離，最後才移除 `QMainWindow` inheritance；此 ownership
+抽取不修改 camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
 cleanup 採逐步 best-effort：非 thread step 的例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera 或 analysis
 adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`_on_adapter_thread_finished()` 會排程重入 shutdown。
 Tauri 只在等待 6 秒後仍未結束時才作最後的 child-process kill fallback。
