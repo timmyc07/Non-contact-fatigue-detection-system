@@ -58,8 +58,8 @@ legacy Qt widgets remain presentation mirrors only in the non-production path.
 Replay folder, jobs, annotated-output preference, and progress text/counts now
 live in the Qt-free `ReplayRuntimeState`. Engine mode no longer constructs the
 replay spinbox, checkbox, folder/current/result/status labels, or replay buttons.
-`EngineController` still owns replay lifecycle, while `MainWindow` remains the
-adapter that constructs the existing QThread and `VideoReplayWorker`.
+`EngineController` still owns replay lifecycle, while the application-owned
+`EngineRuntime` now owns the existing QThread and `VideoReplayWorker`.
 Auto-record, belt-calibration, and auto-capture preferences now live in the
 Qt-free `CapturePreferencesState`. Engine mode no longer constructs their
 legacy checkboxes, duration spinbox, or auto-capture button. Auto-record and
@@ -67,8 +67,9 @@ belt-calibration retain the existing settings JSON toggle contract; duration
 and include-belt remain session-scoped. `MainWindow` still performs BLE,
 recording, and QTimer side effects and rolls the preference state back when an
 adapter fails.
-`MainWindow` still constructs the concrete QThreads, recording writers, Qt
-multimedia alarm backend, calibration adapters, and signal callbacks. Its
+`EngineRuntime` constructs and owns the concrete QThreads and workers, while
+`MainWindow` still constructs recording writers, the Qt multimedia alarm backend,
+calibration adapters, and worker-specific signal callbacks. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
 Qt resource state, not command/API authorities. Engine mode does not construct
 analysis checkbox stand-ins; the legacy analysis checkboxes exist only as
@@ -130,16 +131,21 @@ serves only as the legacy replay-gate adapter. An application-owned
 adapter threads and workers, including common signal wiring, the existing stop
 timeouts, join-before-release, and stale-finish protection. `MainWindow` retains only worker-specific
 callbacks, queue/routing work, and legacy presentation side effects. Recording
-and replay threads, runtime timers, and alarm/multimedia ownership remain the
-next boundaries before removing `QMainWindow` inheritance. This ownership
+and replay QThread/worker ownership is also held by `EngineRuntime`: recording
+retains cooperative stop plus the existing 2000 ms join timeout and late-finish
+cleanup, while replay sends only a cooperative stop request and completes its
+controller/shutdown deferral from the released-adapter callback. Runtime timers
+and alarm/multimedia ownership remain the next boundaries before removing
+`QMainWindow` inheritance. This ownership
 change does not alter camera, worker topology, recording, BLE, replay, rPPG,
 fatigue, ROI, or calibration behavior.
 Cleanup is stepwise best-effort: non-thread step failures are logged and later
 steps continue; the main event loop retries once after 100ms, then logs and
 best-effort quits if that second attempt still fails. If a video,
 camera, or analysis-adapter thread wait times out while ownership remains, the
-engine does not quit; `_on_adapter_thread_finished()` schedules shutdown to
-re-enter. Tauri waits six seconds before its final child-process kill fallback.
+engine does not quit; the `EngineRuntime.adapter_released` callback schedules
+shutdown to re-enter. Tauri waits six seconds before its final child-process
+kill fallback.
 
 The repeatable benchmark supports a non-default loopback port so it can run
 without stopping an active desktop session:
@@ -191,6 +197,22 @@ are treated as normal process/startup noise rather than a regression. Raw
 captures and limitations are retained in
 `docs/benchmarks/desktop-engine-runtime-ownership-2026-08-15-run1.json` and
 `docs/benchmarks/desktop-engine-runtime-ownership-2026-08-15-run2.json`.
+
+After moving recording and replay QThread/worker ownership into `EngineRuntime`,
+two 2026-08-17 runs measured 255.660/256.367 MiB RSS,
+1852.892/1843.677 ms startup, `state.get` p50 20.034/20.180 ms and p95
+40.615/40.010 ms, with synthetic JPEG encode p50 1.148/1.214 ms and p95
+1.341/1.666 ms. These results remain within the previous ownership-slice range
+and do not indicate a regression in engine startup, process-tree RSS, localhost
+`state.get`, or synthetic JPEG encode/dispatch. They do not measure a physical
+camera, network transport, Tauri WebView decode, or Flutter rendering. Raw
+captures are retained in
+`docs/benchmarks/desktop-engine-recording-replay-ownership-2026-08-17-run1.json`
+and `docs/benchmarks/desktop-engine-recording-replay-ownership-2026-08-17-run2.json`.
+The rebuilt PyInstaller bundle input and isolated NSIS installation both exposed
+desktop API v2 and completed `app.shutdown`; the bundle input exited with code 0.
+Evidence is retained in
+`docs/benchmarks/packaged-engine-recording-replay-ownership-2026-08-17.json`.
 
 ## Build prerequisites
 

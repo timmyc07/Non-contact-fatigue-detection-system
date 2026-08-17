@@ -6,6 +6,7 @@ from collections.abc import Callable
 import logging
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from shiboken6 import delete as delete_qobject
 
 
 AdapterConnect = Callable[[object], None]
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class EngineRuntime(QObject):
-    """Own live camera and analysis adapter threads independently of MainWindow."""
+    """Own engine adapter threads and workers independently of MainWindow."""
 
     adapter_released = Signal(str, object)
     _adapter_finished = Signal(str, object)
@@ -64,17 +65,37 @@ class EngineRuntime(QObject):
         thread.finished.connect(getattr(worker, "deleteLater"))
 
         self._adapters[kind] = (worker, thread)
-        move_to_thread(thread)
-        thread.start()
+        try:
+            move_to_thread(thread)
+            thread.start()
+        except Exception:
+            current = self._adapters.get(kind)
+            if current is not None and current[1] is thread:
+                del self._adapters[kind]
+            if isinstance(worker, QObject):
+                delete_qobject(worker)
+            else:
+                getattr(worker, "deleteLater")()
+            thread.deleteLater()
+            logger.exception("Engine adapter start failed: %s", kind)
+            raise
         return thread
 
-    def stop_adapter(self, kind: str, timeout_ms: int) -> bool:
-        """Request shutdown while retaining ownership when the wait times out."""
+    def request_adapter_stop(self, kind: str) -> bool:
+        """Request cooperative stop without forcing or joining the adapter thread."""
+        session = self._adapters.get(kind)
+        if session is None:
+            return False
+        worker, _thread = session
+        getattr(worker, "request_stop")()
+        return True
+
+    def join_adapter(self, kind: str, timeout_ms: int) -> bool:
+        """Quit and join one adapter while retaining ownership on timeout."""
         session = self._adapters.get(kind)
         if session is None:
             return True
-        worker, thread = session
-        getattr(worker, "request_stop")()
+        _worker, thread = session
         thread.quit()
         if thread.wait(timeout_ms) is False:
             logger.warning(
@@ -85,6 +106,12 @@ class EngineRuntime(QObject):
             return False
         self._release_joined_adapter(kind, thread)
         return True
+
+    def stop_adapter(self, kind: str, timeout_ms: int) -> bool:
+        """Request cooperative stop, then join the adapter thread."""
+        if not self.request_adapter_stop(kind):
+            return True
+        return self.join_adapter(kind, timeout_ms)
 
     def release_adapter(
         self,

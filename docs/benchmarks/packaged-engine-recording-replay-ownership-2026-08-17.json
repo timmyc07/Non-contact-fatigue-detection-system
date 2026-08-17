@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-17",
+  "verified_at_utc": "2026-08-17T04:10:48.5378092Z",
+  "bundle_input": "dist/ncfd-engine/ncfd-engine.exe",
+  "bundle_input_sha256": "D6D6111173FE9315D9D128F8D474F7BA01B1783AAF8EC3B89430D41B9766F0CD",
+  "installer": "src-tauri/target/release/bundle/nsis/疲勞監測操作台_0.1.0_x64-setup.exe",
+  "installer_sha256": "29183EF5A7BD2CF45A558FC0AA2AB834823A0C2454782D7DFB026EB83761ED29",
+  "installed_smoke": {
+    "install_exit_code": 0,
+    "desktop_api_version": 2,
+    "shutdown_success": true,
+    "engine_exited": true,
+    "shell_exit_code": 0,
+    "uninstall_exit_code": 0,
+    "install_dir_removed": true
+  },
+  "bundle_input_smoke": {
+    "desktop_api_version": 2,
+    "shutdown_success": true,
+    "engine_exit_code": 0
+  },
+  "notes": [
+    "The installer was exercised in an isolated temporary directory and then uninstalled silently.",
+    "The bundle-input smoke observed HTTP 503 from Werkzeug during cleanup, but the packaged engine still completed app.shutdown and exited with code 0."
+  ]
+}

@@ -1029,8 +1029,6 @@ class MainWindow(QMainWindow):
         self._recording_started_at: float | None = None
         self._recording_count: int = 0
         self._recording_video_path: Path | None = None
-        self._video_thread: QThread | None = None
-        self._video_worker: VideoRecorderWorker | None = None
         self._video_queue: "queue.Queue | None" = None
         self._frame_source: str | None = None
         self._record_source: str | None = None
@@ -1070,8 +1068,6 @@ class MainWindow(QMainWindow):
         self._web_frame_interval = 1.0 / WEB_PREVIEW_TARGET_FPS
         self._web_last_emit = 0.0
         self._web_last_frame_emit = 0.0
-        self._replay_thread: QThread | None = None
-        self._replay_worker: VideoReplayWorker | None = None
         self._replay_state = ReplayRuntimeState()
         self._replay_stopping = False
         self._replay_active_videos: dict[str, ReplayVideoSummary] = {}
@@ -1185,6 +1181,22 @@ class MainWindow(QMainWindow):
     @property
     def _fatigue_worker(self) -> FatigueWorker | None:
         return cast(FatigueWorker | None, self._engine_runtime.worker("fatigue"))
+
+    @property
+    def _video_thread(self) -> QThread | None:
+        return self._engine_runtime.thread("video")
+
+    @property
+    def _video_worker(self) -> VideoRecorderWorker | None:
+        return cast(VideoRecorderWorker | None, self._engine_runtime.worker("video"))
+
+    @property
+    def _replay_thread(self) -> QThread | None:
+        return self._engine_runtime.thread("replay")
+
+    @property
+    def _replay_worker(self) -> VideoReplayWorker | None:
+        return cast(VideoReplayWorker | None, self._engine_runtime.worker("replay"))
 
     def _set_legacy_text(self, name: str, text: object) -> None:
         """Update a real Qt label/button without creating an engine-mode mirror."""
@@ -4374,7 +4386,7 @@ class MainWindow(QMainWindow):
             self._runtime_cleanup_in_progress = False
 
     def _runtime_adapter_threads_stopped(self) -> bool:
-        return self._video_thread is None and self._engine_runtime.all_stopped()
+        return self._engine_runtime.all_stopped()
 
     def _emit_web_metrics(self, *, force: bool = False) -> None:
         if self._web_server is None:
@@ -4444,22 +4456,16 @@ class MainWindow(QMainWindow):
         self._video_queue = queue.Queue(maxsize=8)
         video_path = rec_dir / f"video_{stamp}.mp4"
         self._recording_video_path = video_path
-        thread = QThread(self)
         worker = VideoRecorderWorker(self._video_queue, video_path, fps=self._last_fps or 30.0)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.started.connect(self._on_video_recording_started)
-        worker.warning.connect(self._on_video_recording_warning)
-        worker.failed.connect(self._on_video_recording_failed)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(
-            lambda current=thread: self._on_adapter_thread_finished("video", current)
+        self._engine_runtime.start_adapter(
+            "video",
+            worker,
+            connect=lambda current: (
+                current.started.connect(self._on_video_recording_started),
+                current.warning.connect(self._on_video_recording_warning),
+                current.failed.connect(self._on_video_recording_failed),
+            ),
         )
-        thread.finished.connect(thread.deleteLater)
-        self._video_thread = thread
-        self._video_worker = worker
-        thread.start()
         self._update_recording_routing()
 
     def _stop_recording(self) -> bool:
@@ -4477,14 +4483,13 @@ class MainWindow(QMainWindow):
                 self._metrics_recorder = None
         if self._video_worker is not None:
             try:
-                self._video_worker.request_stop()
+                self._engine_runtime.request_adapter_stop("video")
             except Exception as exc:
                 logger.warning("停止影片記錄器失敗：%s", exc)
         stopped = True
         if self._video_thread is not None:
             try:
-                self._video_thread.quit()
-                stopped = self._video_thread.wait(2000) is not False
+                stopped = self._engine_runtime.join_adapter("video", 2000)
             except Exception as exc:
                 stopped = False
                 logger.warning("等待影片記錄執行緒結束失敗：%s", exc)
@@ -4492,8 +4497,6 @@ class MainWindow(QMainWindow):
         self._recording_db_path = None
         self._recording_started_at = None
         if stopped:
-            self._video_thread = None
-            self._video_worker = None
             self._video_queue = None
             self._recording_video_path = None
         self._update_recording_routing()
@@ -4737,27 +4740,12 @@ class MainWindow(QMainWindow):
         previous_replay_state = self._replay_state.snapshot()
         self._engine_controller.start_replay()
         try:
-            thread = QThread(self)
             worker = VideoReplayWorker(
                 replay_state.dataset_dir,
                 write_annotated_video=replay_state.annotated,
                 jobs=jobs,
                 preview_enabled=preview_enabled,
             )
-            worker.moveToThread(thread)
-            thread.started.connect(worker.run)
-            worker.progress.connect(self._on_replay_progress)
-            if preview_enabled:
-                worker.preview_frame.connect(self._on_replay_preview_frame)
-            worker.finished_ok.connect(self._on_replay_finished_ok)
-            worker.failed.connect(self._on_replay_failed)
-            worker.finished.connect(thread.quit)
-            worker.finished.connect(worker.deleteLater)
-            thread.finished.connect(thread.deleteLater)
-            thread.finished.connect(self._on_replay_thread_finished)
-
-            self._replay_thread = thread
-            self._replay_worker = worker
             self._replay_stopping = False
             self._replay_state.begin(
                 mode_label=mode_label,
@@ -4788,10 +4776,19 @@ class MainWindow(QMainWindow):
                 f"[影片回測] 開始{mode_label}：{replay_state.dataset_dir} "
                 f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
             )
-            thread.start()
+            self._engine_runtime.start_adapter(
+                "replay",
+                worker,
+                connect=lambda current: (
+                    current.progress.connect(self._on_replay_progress),
+                    current.preview_frame.connect(self._on_replay_preview_frame)
+                    if preview_enabled
+                    else None,
+                    current.finished_ok.connect(self._on_replay_finished_ok),
+                    current.failed.connect(self._on_replay_failed),
+                ),
+            )
         except Exception:
-            self._replay_thread = None
-            self._replay_worker = None
             self._replay_state.restore(previous_replay_state)
             self._sync_replay_controls()
             self._set_replay_controls_running(False)
@@ -4803,7 +4800,7 @@ class MainWindow(QMainWindow):
             return
         self._engine_controller.request_replay_stop()
         self._replay_stopping = True
-        self._replay_worker.request_stop()
+        self._engine_runtime.request_adapter_stop("replay")
         self._update_replay_presentation(
             current_text="目前影片：正在停止，請稍候",
             parallel_status_text="處理清單：正在停止，已派發的影片會安全收尾",
@@ -5029,8 +5026,6 @@ class MainWindow(QMainWindow):
         self._notify_user("影片回測", msg)
 
     def _on_replay_thread_finished(self) -> None:
-        self._replay_thread = None
-        self._replay_worker = None
         self._replay_stopping = False
         self._replay_state.finish_thread()
         self._sync_replay_controls()
@@ -5179,20 +5174,6 @@ class MainWindow(QMainWindow):
         self._set_legacy_text("_btn_record", "開始記錄")
         self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
 
-    def _on_adapter_thread_finished(self, kind: str, thread: QThread) -> None:
-        """Compatibility adapter for tests and legacy video-thread wiring."""
-        if kind == "video" and self._video_thread is thread:
-            self._video_thread = None
-            self._video_worker = None
-            self._video_queue = None
-            self._recording_video_path = None
-            if self._engine_controller.pipeline_snapshot().cleanup_pending:
-                self._fail_closed_pipeline_adapters()
-            if self._runtime_shutdown_waiting_for_adapters:
-                QTimer.singleShot(0, self._shutdown_engine)
-            return
-        self._engine_runtime.release_adapter(kind, thread)
-
     def _on_adapter_released(self, kind: str, _thread: object) -> None:
         """Apply MainWindow-only queue and shutdown side effects after runtime release."""
         if kind == "camera":
@@ -5203,6 +5184,12 @@ class MainWindow(QMainWindow):
             self._bgr_queue = None
         elif kind == "fatigue":
             self._fatigue_queue = None
+        elif kind == "video":
+            self._video_queue = None
+            self._recording_video_path = None
+        elif kind == "replay":
+            self._on_replay_thread_finished()
+            return
         else:
             return
         if (

@@ -8,8 +8,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread, Signal  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
+from shiboken6 import isValid  # noqa: E402
 
 from gui.engine_runtime import EngineRuntime  # noqa: E402
 
@@ -48,6 +50,12 @@ class _FakeThread:
         self.events.append("thread.delete")
 
 
+class _FailingStartThread(_FakeThread):
+    def start(self) -> None:
+        self.events.append("thread.start")
+        raise RuntimeError("thread start failed")
+
+
 class _FakeWorker:
     def __init__(self, events: list[str]) -> None:
         self.events = events
@@ -64,6 +72,21 @@ class _FakeWorker:
 
     def deleteLater(self) -> None:
         self.events.append("worker.delete")
+
+
+class _QtWorker(QObject):
+    finished = Signal()
+
+    def run(self) -> None:
+        pass
+
+    def request_stop(self) -> None:
+        pass
+
+
+class _FailingQThread(QThread):
+    def start(self, *args: object) -> None:
+        raise RuntimeError("thread start failed")
 
 
 @pytest.fixture(scope="module")
@@ -133,6 +156,28 @@ def test_stop_timeout_keeps_ownership_until_the_same_thread_finishes(
     assert runtime.all_stopped() is True
 
 
+def test_request_stop_can_defer_join_until_replay_finishes(
+    qt_app: QApplication,
+) -> None:
+    events: list[str] = []
+    thread = _FakeThread(events)
+    worker = _FakeWorker(events)
+    runtime = EngineRuntime(qt_app, thread_factory=lambda _parent: thread)
+
+    runtime.start_adapter("replay", worker)
+
+    assert runtime.request_adapter_stop("replay") is True
+    assert runtime.worker("replay") is worker
+    assert runtime.thread("replay") is thread
+    assert events[-1:] == ["worker.stop"]
+    assert "thread.quit" not in events
+    assert not any(event.startswith("thread.wait:") for event in events)
+
+    thread.finished.emit()
+
+    assert runtime.all_stopped() is True
+
+
 def test_stale_finish_cannot_release_a_new_adapter_session(
     qt_app: QApplication,
 ) -> None:
@@ -176,4 +221,42 @@ def test_connect_failure_does_not_create_a_partial_thread_session(
         )
 
     assert created == []
+    assert runtime.all_stopped() is True
+
+
+def test_thread_start_failure_does_not_leave_partial_ownership(
+    qt_app: QApplication,
+) -> None:
+    events: list[str] = []
+    thread = _FailingStartThread(events)
+    runtime = EngineRuntime(qt_app, thread_factory=lambda _parent: thread)
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        runtime.start_adapter("replay", _FakeWorker(events))
+
+    assert runtime.worker("replay") is None
+    assert runtime.thread("replay") is None
+    assert runtime.all_stopped() is True
+    assert events[-2:] == ["worker.delete", "thread.delete"]
+
+
+def test_thread_start_failure_disposes_real_qt_worker_and_thread(
+    qt_app: QApplication,
+) -> None:
+    created: list[_FailingQThread] = []
+
+    def create_thread(parent: QObject) -> _FailingQThread:
+        thread = _FailingQThread(parent)
+        created.append(thread)
+        return thread
+
+    worker = _QtWorker()
+    runtime = EngineRuntime(qt_app, thread_factory=create_thread)
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        runtime.start_adapter("replay", worker)
+
+    assert isValid(worker) is False
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert isValid(created[0]) is False
     assert runtime.all_stopped() is True

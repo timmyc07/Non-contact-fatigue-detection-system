@@ -1011,7 +1011,7 @@ def test_late_camera_finish_releases_pending_cleanup_and_allows_replay(
     settings_window._fail_closed_pipeline_adapters()
     assert settings_window._engine_controller.pipeline_snapshot().cleanup_pending is True
 
-    settings_window._on_adapter_thread_finished("camera", thread)  # type: ignore[arg-type]
+    settings_window._engine_runtime.release_adapter("camera", thread)
 
     assert settings_window._cam_worker is None
     assert settings_window._cam_thread is None
@@ -2047,7 +2047,10 @@ def test_replay_runtime_state_supplies_existing_worker_parameters(
         def deleteLater(self) -> None:
             pass
 
-    monkeypatch.setattr(main_window_module, "QThread", FakeThread)
+        def request_stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(settings_window._engine_runtime, "_thread_factory", FakeThread)
     monkeypatch.setattr(main_window_module, "VideoReplayWorker", FakeWorker)
     settings_window._replay_state.configure(
         dataset_dir=tmp_path,
@@ -2069,9 +2072,9 @@ def test_replay_runtime_state_supplies_existing_worker_parameters(
         "started": True,
     }
     assert settings_window._engine_controller.replay_snapshot().running is True
-    settings_window._replay_thread = None
-    settings_window._replay_worker = None
-    settings_window._engine_controller.finish_replay()
+    thread = settings_window._replay_thread
+    assert thread is not None
+    assert settings_window._engine_runtime.release_adapter("replay", thread) is True
 
 
 def test_replay_start_failure_rolls_back_controller_and_presentation(
@@ -2120,7 +2123,10 @@ def test_replay_start_failure_rolls_back_controller_and_presentation(
         def deleteLater(self) -> None:
             pass
 
-    monkeypatch.setattr(main_window_module, "QThread", FailingThread)
+        def request_stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(settings_window._engine_runtime, "_thread_factory", FailingThread)
     monkeypatch.setattr(main_window_module, "VideoReplayWorker", FakeWorker)
 
     with pytest.raises(RuntimeError, match="thread start failed"):
@@ -2190,7 +2196,11 @@ def test_replay_start_rechecks_controller_before_creating_adapter(
         raise AssertionError("replay QThread must not be created")
 
     monkeypatch.setattr(settings_window, "_start_replay", start_after_pipeline_race)
-    monkeypatch.setattr(main_window_module, "QThread", fail_if_thread_created)
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "_thread_factory",
+        fail_if_thread_created,
+    )
 
     state = settings_window._handle_desktop_command(
         "replay.set",
@@ -2206,7 +2216,8 @@ def test_engine_shutdown_waits_for_active_replay(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
-    settings_window._replay_thread = object()  # type: ignore[assignment]
+    replay_thread = object()
+    _install_runtime_adapter(settings_window, "replay", object(), replay_thread)
     settings_window._engine_controller.start_replay()
     monkeypatch.setattr(settings_window, "_stop_replay", lambda: events.append("stop"))
     monkeypatch.setattr(
@@ -2229,6 +2240,8 @@ def test_engine_shutdown_waits_for_active_replay(
     assert replay.shutdown_pending is True
     assert replay.stopping is True
     assert events == ["stop"]
+    settings_window._engine_controller.finish_replay()
+    settings_window._engine_runtime.release_adapter("replay", replay_thread)
 
 
 def test_engine_shutdown_cleans_runtime_before_quit_without_closing_window(
@@ -2272,8 +2285,8 @@ def test_engine_shutdown_resumes_after_replay_thread_finishes(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
-    settings_window._replay_thread = object()  # type: ignore[assignment]
-    settings_window._replay_worker = object()  # type: ignore[assignment]
+    replay_thread = object()
+    _install_runtime_adapter(settings_window, "replay", object(), replay_thread)
     settings_window._engine_controller.start_replay()
     assert settings_window._engine_controller.request_shutdown() == "stop_replay"
     monkeypatch.setattr(
@@ -2304,7 +2317,7 @@ def test_engine_shutdown_resumes_after_replay_thread_finishes(
 
     monkeypatch.setattr("gui.main_window.QApplication", FakeApplication)
 
-    settings_window._on_replay_thread_finished()
+    settings_window._engine_runtime.release_adapter("replay", replay_thread)
 
     assert settings_window._replay_thread is None
     assert settings_window._replay_worker is None
@@ -2349,10 +2362,7 @@ def test_engine_shutdown_resumes_only_after_adapter_thread_finishes(
     assert settings_window._runtime_shutdown_waiting_for_adapters is True
     assert events == ["cleanup:False"]
 
-    settings_window._on_adapter_thread_finished(
-        "camera",
-        thread,  # type: ignore[arg-type]
-    )
+    settings_window._engine_runtime.release_adapter("camera", thread)
 
     assert settings_window._cam_thread is None
     assert settings_window._runtime_shutdown_waiting_for_adapters is False
@@ -2520,6 +2530,9 @@ def test_camera_failure_stops_active_recording_runtime(
         def wait(self, timeout_ms: int) -> None:
             events.append(("thread.wait", timeout_ms))
 
+        def deleteLater(self) -> None:
+            pass
+
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
     settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
@@ -2530,8 +2543,12 @@ def test_camera_failure_stops_active_recording_runtime(
     settings_window._pipeline_running = True
     settings_window._recording = True
     settings_window._metrics_recorder = FakeMetricsRecorder()  # type: ignore[assignment]
-    settings_window._video_worker = FakeVideoWorker()  # type: ignore[assignment]
-    settings_window._video_thread = FakeVideoThread()  # type: ignore[assignment]
+    _install_runtime_adapter(
+        settings_window,
+        "video",
+        FakeVideoWorker(),
+        FakeVideoThread(),
+    )
 
     settings_window._on_camera_failed("camera disconnected")
 
@@ -2723,6 +2740,16 @@ def test_recording_command_rolls_back_partial_writer_failure(
         def request_stop(self) -> None:
             events.append("video.stop")
 
+    class FakeVideoThread:
+        def quit(self) -> None:
+            pass
+
+        def wait(self, _timeout_ms: int) -> bool:
+            return True
+
+        def deleteLater(self) -> None:
+            pass
+
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
     settings_window._engine_controller.configure_analysis(
         rppg_enabled=True,
@@ -2733,7 +2760,12 @@ def test_recording_command_rolls_back_partial_writer_failure(
 
     def fail_after_partial_setup() -> None:
         settings_window._metrics_recorder = FakeMetricsRecorder()  # type: ignore[assignment]
-        settings_window._video_worker = FakeVideoWorker()  # type: ignore[assignment]
+        _install_runtime_adapter(
+            settings_window,
+            "video",
+            FakeVideoWorker(),
+            FakeVideoThread(),
+        )
         raise OSError("writer unavailable")
 
     monkeypatch.setattr(settings_window, "_start_recording", fail_after_partial_setup)
@@ -2817,6 +2849,7 @@ def test_video_warning_keeps_recording_active(
 
 def test_recording_stop_keeps_video_ownership_when_thread_times_out(
     settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeVideoWorker:
         def request_stop(self) -> None:
@@ -2832,9 +2865,18 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
     worker = FakeVideoWorker()
     thread = FakeVideoThread()
     frame_queue: queue.Queue = queue.Queue()
-    settings_window._video_worker = worker  # type: ignore[assignment]
-    settings_window._video_thread = thread  # type: ignore[assignment]
+    _install_runtime_adapter(settings_window, "video", worker, thread)
     settings_window._video_queue = frame_queue
+    settings_window._recording_video_path = Path("capture.mp4")
+    settings_window._runtime_shutdown_waiting_for_adapters = True
+    scheduled: list[int] = []
+
+    class FakeTimer:
+        @staticmethod
+        def singleShot(delay_ms: int, _callback) -> None:  # noqa: N802
+            scheduled.append(delay_ms)
+
+    monkeypatch.setattr(main_window_module, "QTimer", FakeTimer)
 
     stopped = settings_window._stop_recording()
 
@@ -2842,20 +2884,24 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
     assert settings_window._video_worker is worker
     assert settings_window._video_thread is thread
     assert settings_window._video_queue is frame_queue
-    settings_window._video_worker = None
-    settings_window._video_thread = None
-    settings_window._video_queue = None
+    settings_window._engine_runtime.release_adapter("video", thread)
+    assert settings_window._video_worker is None
+    assert settings_window._video_thread is None
+    assert settings_window._video_queue is None
+    assert settings_window._recording_video_path is None
+    assert scheduled == [0]
 
 
 def test_recording_start_rejects_previous_video_cleanup(
     settings_window: MainWindow,
 ) -> None:
-    settings_window._video_worker = object()  # type: ignore[assignment]
+    thread = object()
+    _install_runtime_adapter(settings_window, "video", object(), thread)
 
     with pytest.raises(RuntimeError, match="cleanup"):
         settings_window._start_recording()
 
-    settings_window._video_worker = None
+    settings_window._engine_runtime.release_adapter("video", thread)
 
 
 def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(
@@ -2891,7 +2937,7 @@ def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(
     with pytest.raises(RuntimeError, match="cleanup"):
         settings_window._engine_controller.start_pipeline()
 
-    settings_window._on_adapter_thread_finished("camera", thread)  # type: ignore[arg-type]
+    settings_window._engine_runtime.release_adapter("camera", thread)
     assert settings_window._engine_controller.pipeline_snapshot().cleanup_pending is False
 
 

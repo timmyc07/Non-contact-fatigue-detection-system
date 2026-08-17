@@ -106,8 +106,9 @@ presentation mirror。`overlay.geometry` 使用平台中立 physical pixel
 Python runtime，`settings.save` 才持久化。
 Replay lifecycle 仍由 `EngineController` 管理；Flutter/Tauri 所需的 replay configuration 與
 progress payload 由 `ReplayRuntimeState` 提供，legacy Qt widgets 僅為 mirror，實際 QThread 與
-`VideoReplayWorker` 建立仍留在 `MainWindow` adapter。此狀態目前不寫入 settings JSON，維持既有
-當次執行設定契約。
+`VideoReplayWorker` ownership 已由 application-owned `EngineRuntime` 承接；`MainWindow` 只保留
+worker-specific progress／preview／完成 callback 與 shutdown 重入。此狀態目前不寫入 settings JSON，
+維持既有當次執行設定契約。
 採集偏好由 `CapturePreferencesState` 提供 desktop state：`auto_record` 與
 `belt_calibration` 仍沿用 settings JSON `toggles` 持久化；自動採集秒數與是否包含心跳帶仍為
 session-only，不新增 schema。BLE 啟停、錄影與 `QTimer` side effect 仍由 `MainWindow` adapter
@@ -127,11 +128,14 @@ engine `app.shutdown` 先請 `EngineController` 判斷；回放進行中仍只�
 心跳帶校準／timer／BLE、Web restart／server、錄影、相機 worker、Overlay，且失敗後可重試；`closeEvent()`
 只保留 legacy replay gate／adapter。live camera 與 combined／rPPG／fatigue adapter 的 QThread／worker reference、
 共同 signal wiring、停止 timeout、join-before-release 與 stale-finish 保護已由 application-owned `EngineRuntime(QObject)` 負責；
-`MainWindow` 只保留 worker-specific callback、queue／routing 與 legacy presentation side effect。錄影、回放、
-runtime QTimer 與 alarm/multimedia ownership 仍待後續抽離，最後才移除 `QMainWindow` inheritance；此 ownership
-抽取不修改 camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
+`MainWindow` 只保留 worker-specific callback、queue／routing 與 legacy presentation side effect。錄影與回放
+worker 的 QThread／worker reference 也已移入 `EngineRuntime`：錄影維持 request-stop + 2000ms join timeout，
+timeout 時保留 ownership；回放只送 cooperative stop request，待 thread finished 後完成 controller state 與
+shutdown deferral。runtime QTimer 與 alarm/multimedia ownership 仍待後續抽離，最後才移除 `QMainWindow`
+inheritance；此 ownership 抽取不修改 camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
 cleanup 採逐步 best-effort：非 thread step 的例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera 或 analysis
-adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`_on_adapter_thread_finished()` 會排程重入 shutdown。
+adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`EngineRuntime.adapter_released`
+callback 會排程重入 shutdown。
 Tauri 只在等待 6 秒後仍未結束時才作最後的 child-process kill fallback。
 engine mode 不建立監測頁 `_mon_*` label、bar 或 sparkline 假元件；worker callback 只更新
 `_latest_*` 快照並維持警報、記錄與 Web metrics side effect，且不建立 legacy REC pill timer；

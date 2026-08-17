@@ -1,11 +1,11 @@
 # 下一階段續作計畫
 
-更新日期：2026-08-15
+更新日期：2026-08-17
 
-本切片起始基準：`c52ed9e docs(plan): 更新下一階段續作邊界`
+本切片起始基準：`d915824 refactor(desktop): 抽離 live adapter ownership`
 
-目前狀態：Windows 全域快捷鍵已不再依賴隱藏 `QMainWindow` 的 HWND 或 `nativeEvent()`；
-本階段完成後停止新增實作。
+目前狀態：live camera、analysis、錄影與 Replay QThread／worker ownership 已不再由隱藏
+`MainWindow` 保存；下一切片從 runtime QTimer ownership 開始。
 
 ## 本階段完成狀態
 
@@ -22,20 +22,25 @@
   `_cleanup_runtime()` 依序清理快捷鍵、待處理採集、校準／timer／BLE、Web、錄影、相機與 Overlay，然後呼叫
   `QApplication.quit()`。`MainWindow.closeEvent()` 現僅作 legacy replay gate／adapter，不再是 engine 必要路徑。
 - cleanup 現為逐步 best-effort：非 thread step 例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera、analysis
-  adapter thread wait timeout 且 ownership 尚存，engine 不 quit，待 `_on_adapter_thread_finished()` 排程重入 shutdown。
+  adapter thread wait timeout 且 ownership 尚存，engine 不 quit，待 `EngineRuntime.adapter_released` callback
+  排程重入 shutdown。
   Tauri 只在等待 6 秒後仍未結束時才作最後的 child-process kill fallback。
 - live camera 與 combined／rPPG／fatigue adapter 已改由 application-owned `EngineRuntime(QObject)` 建立並
   保存 QThread／worker；共同 signal wiring、原 timeout、join-before-release 與 stale-finish 保護集中於 runtime。`MainWindow`
   僅保留 worker-specific callback、queue／routing 與 legacy presentation side effect。
+- 錄影與 Replay QThread／worker ownership 也已移入 `EngineRuntime`。錄影維持原 request-stop、2000ms wait
+  timeout 與 late-finish cleanup；Replay 維持非同步 cooperative stop、deterministic timestamp、報表輸出與
+  shutdown deferral，完成後由 adapter release callback 重入 controller／shutdown。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證：Python `720 passed, 2 skipped`、desktop settings `125 passed`、engine runtime `4 passed`、
+- 最近一次完整驗證：Python `723 passed, 2 skipped`、desktop settings + engine runtime `132 passed`、
   Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
-  Tauri release/NSIS、`compileall` 與 `pip check` 均通過。
-- 最近兩次重複 benchmark：RSS `257.625/257.410 MiB`、API ready
-  `1848.390/1837.974 ms`、IPC p50/p95 `20.048/40.894` 與 `20.436/40.436 ms`、
-  preview p50/p95 `1.213/1.478` 與 `1.220/1.493 ms`；原始結果見
-  `docs/benchmarks/desktop-engine-runtime-ownership-2026-08-15-run1.json` 與 `run2.json`。
+  PyInstaller、Tauri release/NSIS、source/bundled engine shutdown、`compileall` 與 `pip check` 均通過。
+- 最近兩次重複 benchmark：RSS `255.660/256.367 MiB`、API ready
+  `1852.892/1843.677 ms`、IPC p50/p95 `20.034/40.615` 與 `20.180/40.010 ms`、
+  preview p50/p95 `1.148/1.341` 與 `1.214/1.666 ms`；原始結果見
+  `docs/benchmarks/desktop-engine-recording-replay-ownership-2026-08-17-run1.json` 與 `run2.json`。
+  packaged smoke 見 `docs/benchmarks/packaged-engine-recording-replay-ownership-2026-08-17.json`。
 
 以上變更未修改 camera frame routing、worker topology、錄影、警報、BLE 樣本、回放、
 rPPG、疲勞分數、ROI、校準或任何數值閾值。
@@ -44,8 +49,8 @@ rPPG、疲勞分數、ROI、校準或任何數值閾值。
 
 1. Python engine 仍以隱藏的 `QApplication + MainWindow` 作 runtime 容器。這不是可見舊面板，
    但仍有 Qt widget shell 成本；shutdown 已不再依賴 `MainWindow.closeEvent()`，live camera／analysis
-   QThread ownership 也已移入 `EngineRuntime`。下一個主要邊界是錄影／回放 thread 與 runtime QTimer ownership，
-   其後為 alarm/multimedia，最後才移除 `QMainWindow` inheritance。
+   QThread ownership 也已移入 `EngineRuntime`；錄影／回放 thread ownership 亦已完成。下一個主要邊界是
+   runtime QTimer ownership，其後為 alarm/multimedia，最後才移除 `QMainWindow` inheritance。
 2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
 
 ## 下一階段執行順序
@@ -62,7 +67,9 @@ rPPG、疲勞分數、ROI、校準或任何數值閾值。
      `QApplication.quit()`；replay shutdown deferral 保留，`closeEvent()` 僅作 legacy adapter。
    - **已完成：** application-owned `EngineRuntime(QObject)` 承接 live camera 與三種 analysis adapter
      的 QThread／worker ownership、共同 wiring、停止 timeout、join-before-release 與 stale-finish release。
-   - **下一步：** 抽離錄影／回放 thread 與 runtime QTimer ownership，再處理 alarm/multimedia 與其餘
+   - **已完成：** `EngineRuntime` 承接錄影與 Replay QThread／worker ownership，並分別保留同步 timeout stop
+     與非同步 shutdown deferral 契約。
+   - **下一步：** 抽離 runtime QTimer ownership，再處理 alarm/multimedia 與其餘
      widget-only API，最後移除 `QMainWindow` inheritance。
    - 每個切片維持 desktop API v2、worker topology 與數值輸出不變。
 
@@ -83,7 +90,7 @@ C:\tools\flutter\bin\flutter.bat analyze
 C:\tools\flutter\bin\flutter.bat build web --release
 cargo test --manifest-path src-tauri/Cargo.toml
 $env:Path = 'C:\tools\flutter\bin;' + $env:Path
-npm run desktop:build
+powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
 .venv\Scripts\python -m scripts.desktop_engine_benchmark --port 5001 --samples 10
 git diff --check
 ```
