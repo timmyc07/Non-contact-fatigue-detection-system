@@ -2,10 +2,10 @@
 
 更新日期：2026-08-17
 
-本切片起始基準：`70d79fb refactor(desktop): 抽離錄影與回放 ownership`
+本切片起始基準：`9a921c8 refactor(desktop): 抽離 runtime timer ownership`
 
-目前狀態：live camera、analysis、錄影與 Replay QThread／worker，以及 production runtime QTimer
-ownership 已不再由隱藏 `MainWindow` 保存；下一切片從 alarm/multimedia ownership 開始。
+目前狀態：live camera、analysis、錄影與 Replay QThread／worker、production runtime QTimer，以及
+alarm/Qt multimedia ownership 已不再由隱藏 `MainWindow` 保存；下一切片移除 `QMainWindow` inheritance。
 
 ## 本階段完成狀態
 
@@ -15,11 +15,11 @@ ownership 已不再由隱藏 `MainWindow` 保存；下一切片從 alarm/multime
   monitor、心跳帶、camera、recording、profile 等 Qt 假控件。
 - `EngineController` 與 Qt-free runtime state 已承接 camera、analysis topology、pipeline、
   recording、replay、shutdown、BLE、overlay、capture 及 Web preference 的正式狀態。
-- Python/Qt 目前只保留 `QApplication`、`QMainWindow`、`QThread`、`QTimer`、signal/slot、
-  multimedia alarm 與其餘尚未抽離的隱藏 runtime adapter。Windows native hotkey 已由
+- Python/Qt 目前只保留 `QApplication`、`QMainWindow`、`QThread`、`QTimer`、signal/slot 與
+  其餘尚未抽離的隱藏 runtime adapter。Windows native hotkey 已由
   application-level `GlobalHotkeyRuntime` 承接，不再需要原生主視窗。
 - engine `app.shutdown` 已先保留 active replay 的停止／延後結束 gate；其餘 engine 路徑直接以可重入
-  `_cleanup_runtime()` 依序清理快捷鍵、待處理採集、校準／timer／BLE、Web、錄影、相機與 Overlay，然後呼叫
+  `_cleanup_runtime()` 依序清理快捷鍵、待處理採集、校準／timer／BLE、Web、錄影、相機／analysis producer、alarm 與 Overlay，然後呼叫
   `QApplication.quit()`。`MainWindow.closeEvent()` 現僅作 legacy replay gate／adapter，不再是 engine 必要路徑。
 - cleanup 現為逐步 best-effort：非 thread step 例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera、analysis
   adapter thread wait timeout 且 ownership 尚存，engine 不 quit，待 `EngineRuntime.adapter_released` callback
@@ -34,26 +34,28 @@ ownership 已不再由隱藏 `MainWindow` 保存；下一切片從 alarm/multime
 - desktop command drain、心跳帶 1 秒 tick、自動採集 one-shot 與 shutdown defer/retry 的 QTimer ownership
   已移入 `EngineRuntime`。`MainWindow` 只保留既有 callback；legacy REC presentation timer、Web restart 與
   Overlay 自有排程維持各自既有 owner。
+- `EngineRuntime` 已承接 `FatigueAlarmController` 與 `QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput`；
+  `MainWindow` 只路由 configure、preview 與 metrics。shutdown 在 camera／analysis producer 停止後冪等 close alarm。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證：Python `732 passed, 2 skipped`、desktop settings + engine runtime + camera controller `144 passed`、
+- 最近一次完整驗證：Python `737 passed, 2 skipped`、alarm controller + engine runtime + desktop settings `156 passed`、
   Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
   PyInstaller、Tauri release/NSIS、source/bundled engine shutdown、`compileall` 與 `pip check` 均通過。
-- 最近兩次重複 benchmark：RSS `256.473/256.059 MiB`、API ready
-  `1848.305/1846.954 ms`、IPC p50/p95 `20.342/40.437` 與 `20.529/39.684 ms`、
-  preview p50/p95 `1.229/1.480` 與 `1.211/1.480 ms`；原始結果見
-  `docs/benchmarks/desktop-engine-runtime-timer-ownership-2026-08-17-run1.json` 與 `run2.json`。
-  packaged smoke 見 `docs/benchmarks/packaged-engine-runtime-timer-ownership-2026-08-17.json`。
+- 最近兩次重複 benchmark：RSS `256.434/256.199 MiB`、API ready
+  `1845.500/1850.936 ms`、`state.get` p50 `20.121/20.207 ms`、synthetic JPEG p50
+  `1.157/1.146 ms`；原始結果見
+  `docs/benchmarks/desktop-engine-runtime-alarm-ownership-2026-08-17-run1.json` 與 `run2.json`。
+  packaged smoke 見 `docs/benchmarks/packaged-engine-runtime-alarm-ownership-2026-08-17.json`。
 
-以上變更未修改 camera frame routing、worker topology、錄影、警報、BLE 樣本、回放、
-rPPG、疲勞分數、ROI、校準或任何數值閾值。
+以上變更未修改 camera frame routing、worker topology、錄影、警報條件／音量／fallback／strict validation／
+錯誤映射／metrics 順序、BLE 樣本、回放、rPPG、疲勞分數、ROI、校準或任何數值閾值。
 
 ## 已知剩餘缺口
 
 1. Python engine 仍以隱藏的 `QApplication + MainWindow` 作 runtime 容器。這不是可見舊面板，
    但仍有 Qt widget shell 成本；shutdown 已不再依賴 `MainWindow.closeEvent()`，live camera／analysis
-   QThread ownership 也已移入 `EngineRuntime`；錄影／回放 thread 與 production runtime QTimer ownership
-   亦已完成。下一個主要邊界是 alarm/multimedia，最後才移除 `QMainWindow` inheritance。
+   QThread ownership 也已移入 `EngineRuntime`；錄影／回放 thread、production runtime QTimer 與 alarm／multimedia
+   ownership 亦已完成。下一個主要邊界是移除 `QMainWindow` inheritance。
 2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
 
 ## 下一階段執行順序
@@ -74,8 +76,9 @@ rPPG、疲勞分數、ROI、校準或任何數值閾值。
      與非同步 shutdown deferral 契約。
    - **已完成：** `EngineRuntime` 承接 desktop command、belt tick、auto-capture 與 shutdown defer/retry
      timer ownership；legacy REC、Web restart、Overlay timer 留在其既有 presentation／subsystem owner。
-   - **下一步：** 抽離 alarm/multimedia ownership 與其餘
-     widget-only API，最後移除 `QMainWindow` inheritance。
+   - **已完成：** `EngineRuntime` 承接 alarm controller 與 Qt multimedia ownership，`MainWindow` 僅路由
+     configure／preview／metrics，cleanup 在 producer 停止後冪等 close。
+   - **下一步：** 移除 `QMainWindow` inheritance 與其餘 widget-only API。
    - 每個切片維持 desktop API v2、worker topology 與數值輸出不變。
 
 3. **完成 parity 與效能驗收**

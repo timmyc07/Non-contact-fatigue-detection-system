@@ -74,7 +74,8 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 state 與 BLE runtime ownership；analysis desired state 在 pipeline 停止時仍由 controller
 保存，engine mode 不建立 analysis checkbox 假元件，legacy Qt checkbox 僅為非 production presentation mirror；camera scan/settings/desktop
 commands 在 engine mode 直接使用 controller，不建立 camera combo/checkbox 假元件；`MainWindow` 僅作
-QThread/signal/Qt multimedia adapter；Overlay 偏好由 Qt-free `OverlayRuntimeState` 保存，
+QThread/signal routing 與 legacy presentation adapter；Qt multimedia alarm 由 application-owned
+`EngineRuntime` 保存；Overlay 偏好由 Qt-free `OverlayRuntimeState` 保存，
 engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter；replay 的資料夾、jobs、
 annotated 與進度投影由 Qt-free `ReplayRuntimeState` 保存，engine mode 不建立 replay
 spinbox/checkbox/label 假元件；自動記錄、心跳帶校準與自動採集偏好由 Qt-free
@@ -134,8 +135,11 @@ engine `app.shutdown` 先請 `EngineController` 判斷；回放進行中仍只�
 worker 的 QThread／worker reference 也已移入 `EngineRuntime`：錄影維持 request-stop + 2000ms join timeout，
 timeout 時保留 ownership；回放只送 cooperative stop request，待 thread finished 後完成 controller state 與
 shutdown deferral。production runtime QTimer ownership 也已移入 `EngineRuntime`；legacy REC presentation timer、
-Web restart 與 Overlay 自有排程留在各自既有 owner。下一個邊界是 alarm/multimedia ownership，最後才移除
-`QMainWindow` inheritance；此 ownership 抽取不修改 camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
+Web restart 與 Overlay 自有排程留在各自既有 owner。`EngineRuntime` 亦已承接 `FatigueAlarmController` 與
+`QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput` ownership；`MainWindow` 只路由 configure、preview 與
+metrics，shutdown 在 camera／analysis producer 停止後冪等關閉 alarm。下一個主要邊界是移除
+`QMainWindow` inheritance；此 ownership 抽取不修改警報條件、音量、fallback、strict validation、錯誤映射、
+metrics 順序、camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI、校準或任何數值行為。
 cleanup 採逐步 best-effort：非 thread step 的例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera 或 analysis
 adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`EngineRuntime.adapter_released`
 callback 會排程重入 shutdown。

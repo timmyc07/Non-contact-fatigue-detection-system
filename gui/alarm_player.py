@@ -43,6 +43,9 @@ class AlarmPlaybackBackend(Protocol):
     def play_builtin(self, scenario: str) -> None:
         ...
 
+    def close(self) -> None:
+        ...
+
 
 @dataclass
 class AlarmTriggerState:
@@ -163,6 +166,9 @@ class QtAlarmPlaybackBackend(QObject):
         if app is not None and callable(beep):
             beep()
 
+    def close(self) -> None:
+        self._player.stop()
+
 
 class FatigueAlarmController:
     """接收 FatigueMetrics，在適當時機觸發警報音效。"""
@@ -179,6 +185,7 @@ class FatigueAlarmController:
         self._state = AlarmTriggerState()
         self._playback = playback or QtAlarmPlaybackBackend(parent)
         self._monotonic = monotonic or time.monotonic
+        self._closed = False
 
     @property
     def config(self) -> AlarmConfig:
@@ -192,6 +199,8 @@ class FatigueAlarmController:
         self._state = AlarmTriggerState()
 
     def on_metrics(self, metrics: Any) -> None:
+        if self._closed:
+            return
         status = str(getattr(metrics, "status", "") or "")
         calibrated = bool(getattr(metrics, "calibrated", False))
         if not self._config.enabled:
@@ -220,6 +229,8 @@ class FatigueAlarmController:
 
     def preview_scenario(self, scenario: str, *, config: AlarmConfig | None = None) -> str | None:
         """設定對話框試聽用。"""
+        if self._closed:
+            return None
         preview_config = config or self._config
         scenario_cfg = preview_config.scenarios.get(scenario)
         if scenario_cfg is None:
@@ -246,3 +257,11 @@ class FatigueAlarmController:
             self._playback.play_builtin(scenario)
             return "builtin"
         return None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        close = getattr(self._playback, "close", None)
+        if callable(close):
+            close()

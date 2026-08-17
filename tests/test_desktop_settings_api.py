@@ -1282,8 +1282,8 @@ def test_engine_metric_callbacks_keep_non_visual_side_effects(
     events: list[tuple[str, object]] = []
     _install_runtime_adapter(settings_window, "combined", object(), object())
     monkeypatch.setattr(
-        settings_window._alarm_controller,
-        "on_metrics",
+        settings_window._engine_runtime,
+        "handle_alarm_metrics",
         lambda metrics: events.append(("alarm", metrics)),
     )
     monkeypatch.setattr(
@@ -1583,7 +1583,9 @@ def test_alarm_configure_updates_runtime_controller(
     )
 
     assert state["alarm"] == alarm
-    assert settings_window._alarm_controller.config.to_dict() == alarm
+    controller = settings_window._engine_runtime.alarm_controller
+    assert controller is not None
+    assert controller.config.to_dict() == alarm
     assert state["settings_dirty"] is True
 
 
@@ -1641,6 +1643,9 @@ class _PlaybackSpy:
     def play_builtin(self, scenario: str) -> None:
         self.builtins.append(scenario)
 
+    def close(self) -> None:
+        pass
+
 
 def test_alarm_test_uses_draft_without_mutating_runtime(
     settings_window: MainWindow, tmp_path: Path
@@ -1650,8 +1655,9 @@ def test_alarm_test_uses_draft_without_mutating_runtime(
     runtime = AlarmConfig.defaults()
     playback = _PlaybackSpy()
     settings_window._alarm_config = runtime
-    settings_window._alarm_controller = FatigueAlarmController(
-        runtime, playback=playback
+    controller = FatigueAlarmController(runtime, playback=playback)
+    settings_window._engine_runtime.replace_alarm_controller(
+        controller
     )
     draft = _alarm_payload(volume=25)
     scenarios = draft["scenarios"]
@@ -1665,7 +1671,8 @@ def test_alarm_test_uses_draft_without_mutating_runtime(
     assert playback.files == [(str(sound_path), 0.25)]
     assert playback.builtins == []
     assert state["alarm"] == runtime.to_dict()
-    assert settings_window._alarm_controller.config is runtime
+    assert settings_window._engine_runtime.alarm_controller is controller
+    assert controller.config is runtime
     assert state["settings_dirty"] is False
     assert state["command_result"] == {
         "command": "alarm.test",
@@ -1679,7 +1686,9 @@ def test_alarm_test_reports_builtin_source(settings_window: MainWindow) -> None:
     runtime = AlarmConfig.defaults()
     playback = _PlaybackSpy()
     settings_window._alarm_config = runtime
-    settings_window._alarm_controller = FatigueAlarmController(runtime, playback=playback)
+    settings_window._engine_runtime.replace_alarm_controller(
+        FatigueAlarmController(runtime, playback=playback)
+    )
 
     state = settings_window._handle_desktop_command(
         "alarm.test", {"scenario": "drowsy"}
@@ -1732,7 +1741,9 @@ def test_settings_reset_only_resets_selected_sections(
 
     assert state["hotkeys"]["toggle_metrics"] == "Ctrl+Alt+O"
     assert state["alarm"] == AlarmConfig.defaults().to_dict()
-    assert settings_window._alarm_controller.config.to_dict() == state["alarm"]
+    controller = settings_window._engine_runtime.alarm_controller
+    assert controller is not None
+    assert controller.config.to_dict() == state["alarm"]
     assert state["user_profile"] == {
         "age": 40,
         "height_cm": 180,
@@ -2528,6 +2539,11 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
         "_stop_camera_worker",
         lambda: events.append("camera.stop"),
     )
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "close_alarm",
+        lambda: events.append("alarm.close"),
+    )
 
     settings_window._cleanup_runtime()
     settings_window._cleanup_runtime()
@@ -2542,6 +2558,7 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
         "web.stop",
         "recording.stop",
         "camera.stop",
+        "alarm.close",
         "overlay.hide",
         "overlay.close",
     ]

@@ -1,0 +1,50 @@
+{
+  "engine": {
+    "command": {
+      "latency_ms": {
+        "max": 40.578,
+        "mean": 25.322,
+        "min": 18.869,
+        "p50": 20.121,
+        "p95": 40.243
+      },
+      "samples": 30
+    },
+    "pid": 19564,
+    "process_tree_pids": [
+      19564,
+      7212
+    ],
+    "rss_bytes_at_ready": 268890112,
+    "rss_mib_at_ready": 256.434,
+    "startup_to_api_ready_ms": 1845.5
+  },
+  "noise_control": {
+    "loopback_only": true,
+    "samples": 30,
+    "warmup_discarded": 5
+  },
+  "platform": "win32",
+  "preview": {
+    "base64_bytes": 12156,
+    "dimensions": [
+      640,
+      360
+    ],
+    "dispatch_delivered": 30,
+    "dispatch_frames_per_second": 15678.896,
+    "encode_latency_ms": {
+      "max": 1.568,
+      "mean": 1.198,
+      "min": 1.128,
+      "p50": 1.157,
+      "p95": 1.473
+    },
+    "jpeg_bytes": 9115,
+    "kind": "synthetic_in_process",
+    "limitations": "Excludes camera, network, Tauri WebView decode, and Flutter rendering",
+    "samples": 30
+  },
+  "python": "3.11.9",
+  "schema_version": 1
+}

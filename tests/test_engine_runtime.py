@@ -9,10 +9,13 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread, Signal  # noqa: E402
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from shiboken6 import isValid  # noqa: E402
 
+from gui.alarm_config import AlarmConfig  # noqa: E402
+from gui.alarm_player import QtAlarmPlaybackBackend  # noqa: E402
 from gui.engine_runtime import EngineRuntime  # noqa: E402
 
 
@@ -116,6 +119,34 @@ class _QtWorker(QObject):
         pass
 
 
+class _FakeAlarmController:
+    def __init__(self, config: AlarmConfig) -> None:
+        self.config = config
+        self.configs: list[AlarmConfig] = []
+        self.metrics: list[object] = []
+        self.previews: list[tuple[str, AlarmConfig | None]] = []
+        self.close_calls = 0
+
+    def set_config(self, config: AlarmConfig) -> None:
+        self.config = config
+        self.configs.append(config)
+
+    def on_metrics(self, metrics: object) -> None:
+        self.metrics.append(metrics)
+
+    def preview_scenario(
+        self,
+        scenario: str,
+        *,
+        config: AlarmConfig | None = None,
+    ) -> str | None:
+        self.previews.append((scenario, config))
+        return "file"
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 class _FailingQThread(QThread):
     def start(self, *args: object) -> None:
         raise RuntimeError("thread start failed")
@@ -159,6 +190,91 @@ def test_start_wires_worker_before_thread_start_and_releases_on_finish(
     assert runtime.thread("camera") is None
     assert releases == [("camera", thread)]
     assert events[-2:] == ["thread.delete", "worker.delete"]
+
+
+def test_runtime_owns_and_routes_alarm_controller(qt_app: QApplication) -> None:
+    created: list[tuple[AlarmConfig, object, _FakeAlarmController]] = []
+
+    def create_alarm(
+        config: AlarmConfig,
+        parent: object,
+    ) -> _FakeAlarmController:
+        controller = _FakeAlarmController(config)
+        created.append((config, parent, controller))
+        return controller
+
+    runtime = EngineRuntime(qt_app, alarm_controller_factory=create_alarm)  # type: ignore[arg-type]
+    initial = AlarmConfig.defaults()
+
+    controller = runtime.initialize_alarm(initial)
+
+    assert created == [(initial, runtime, controller)]
+    assert runtime.alarm_controller is controller
+
+    updated = AlarmConfig.defaults()
+    updated.volume = 25
+    runtime.configure_alarm(updated)
+    metrics = object()
+    runtime.handle_alarm_metrics(metrics)
+
+    assert runtime.preview_alarm("critical", config=updated) == "file"
+    assert controller.configs == [updated]
+    assert controller.metrics == [metrics]
+    assert controller.previews == [("critical", updated)]
+
+
+def test_runtime_is_qt_multimedia_parent(qt_app: QApplication) -> None:
+    runtime = EngineRuntime(qt_app)
+
+    runtime.initialize_alarm(AlarmConfig.defaults())
+
+    backends = runtime.findChildren(QtAlarmPlaybackBackend)
+    assert len(backends) == 1
+    assert backends[0].parent() is runtime
+    assert len(backends[0].findChildren(QMediaPlayer)) == 1
+    assert len(backends[0].findChildren(QAudioOutput)) == 1
+    runtime.close_alarm()
+
+
+def test_runtime_alarm_close_releases_first_and_is_idempotent(
+    qt_app: QApplication,
+) -> None:
+    controller = _FakeAlarmController(AlarmConfig.defaults())
+    runtime = EngineRuntime(
+        qt_app,
+        alarm_controller_factory=lambda _config, _parent: controller,
+    )
+    runtime.initialize_alarm(controller.config)
+
+    assert runtime.close_alarm() is True
+    assert runtime.alarm_controller is None
+    assert controller.close_calls == 1
+
+    late_metrics = object()
+    runtime.handle_alarm_metrics(late_metrics)
+    assert runtime.preview_alarm("drowsy") is None
+    assert runtime.close_alarm() is False
+    assert controller.metrics == []
+    assert controller.close_calls == 1
+
+
+def test_runtime_alarm_close_is_best_effort(qt_app: QApplication) -> None:
+    controller = _FakeAlarmController(AlarmConfig.defaults())
+
+    def fail_close() -> None:
+        controller.close_calls += 1
+        raise RuntimeError("close failed")
+
+    controller.close = fail_close  # type: ignore[method-assign]
+    runtime = EngineRuntime(
+        qt_app,
+        alarm_controller_factory=lambda _config, _parent: controller,
+    )
+    runtime.initialize_alarm(controller.config)
+
+    assert runtime.close_alarm() is True
+    assert runtime.alarm_controller is None
+    assert controller.close_calls == 1
 
 
 def test_stop_timeout_keeps_ownership_until_the_same_thread_finishes(

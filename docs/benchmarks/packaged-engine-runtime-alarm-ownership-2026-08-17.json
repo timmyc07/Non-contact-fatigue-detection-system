@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-17",
+  "verified_at_utc": "2026-08-17T05:40:57.3994358Z",
+  "bundle_input": "dist/ncfd-engine/ncfd-engine.exe",
+  "bundle_input_sha256": "BCD1F414002174530B8C196E0F14280C4878B45B4F84433CBC90E66696F79D8E",
+  "installer": "src-tauri/target/release/bundle/nsis/疲勞監測操作台_0.1.0_x64-setup.exe",
+  "installer_sha256": "DFAF27CE648D2775F8271FE15C3962427A67F91CE671011BC1DE81B296474000",
+  "installed_smoke": {
+    "install_exit_code": 0,
+    "desktop_api_version": 2,
+    "shutdown_success": true,
+    "engine_exited": true,
+    "shell_exit_code": 0,
+    "uninstall_exit_code": 0,
+    "install_dir_removed": true
+  },
+  "bundle_input_smoke": {
+    "desktop_api_version": 2,
+    "shutdown_success": true,
+    "engine_exit_code": 0
+  },
+  "notes": [
+    "The installer was exercised in an isolated temporary directory and then uninstalled silently.",
+    "The installed smoke waits two seconds after API readiness so the Tauri setup hook has adopted the engine child before app.shutdown is sent.",
+    "No physical camera, BLE sensor, or UTA-RLDD dataset was used in this packaging smoke."
+  ]
+}

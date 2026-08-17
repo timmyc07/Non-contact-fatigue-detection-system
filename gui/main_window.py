@@ -66,7 +66,6 @@ from gui.alarm_config import (
     ALARM_SCENARIO_KEYS,
     AlarmConfig,
 )
-from gui.alarm_player import FatigueAlarmController
 from gui.belt_runtime import BeltRuntime
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.capture_preferences_state import CapturePreferencesState
@@ -1136,7 +1135,7 @@ class MainWindow(QMainWindow):
         )
 
         self._load_settings()
-        self._alarm_controller = FatigueAlarmController(self._alarm_config, self)
+        self._engine_runtime.initialize_alarm(self._alarm_config)
         self._apply_hotkey_shortcuts()
         if not self._engine_mode:
             self._apply_overlay_state()
@@ -3919,7 +3918,7 @@ class MainWindow(QMainWindow):
             self._user = UserProfile()
         if "alarm" in selected:
             self._alarm_config = AlarmConfig.defaults()
-            self._alarm_controller.set_config(self._alarm_config)
+            self._engine_runtime.configure_alarm(self._alarm_config)
         if "camera" in selected:
             self._engine_controller.reset_camera_settings()
             self._sync_camera_widgets()
@@ -4238,7 +4237,7 @@ class MainWindow(QMainWindow):
 
         elif command == "alarm.configure":
             self._alarm_config = self._parse_alarm_config(args)
-            self._alarm_controller.set_config(self._alarm_config)
+            self._engine_runtime.configure_alarm(self._alarm_config)
             self._settings_dirty = True
 
         elif command == "alarm.test":
@@ -4252,7 +4251,7 @@ class MainWindow(QMainWindow):
                 if "alarm" in args
                 else self._alarm_config
             )
-            source = self._alarm_controller.preview_scenario(
+            source = self._engine_runtime.preview_alarm(
                 scenario,
                 config=preview_config,
             )
@@ -4380,6 +4379,7 @@ class MainWindow(QMainWindow):
             cleanup_step("web server", self._stop_web_server)
             cleanup_step("recording", self._stop_recording)
             cleanup_step("camera and analysis adapters", self._stop_camera_worker)
+            cleanup_step("alarm", self._engine_runtime.close_alarm)
             if self._preview_overlay is not None:
                 cleanup_step("overlay hide", self._preview_overlay.hide)
                 cleanup_step("overlay close", self._preview_overlay.close)
@@ -6033,7 +6033,7 @@ class MainWindow(QMainWindow):
             self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
         self._latest_fatigue_metrics = metrics
         self._refresh_monitor_metrics()
-        self._alarm_controller.on_metrics(metrics)
+        self._engine_runtime.handle_alarm_metrics(metrics)
         self._feed_baseline_collectors(metrics)
         self._record_metrics()
         self._emit_web_metrics()

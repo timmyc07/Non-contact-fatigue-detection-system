@@ -68,9 +68,11 @@ and include-belt remain session-scoped. `EngineRuntime` owns the belt tick and
 auto-capture timers, while `MainWindow` still performs BLE, calibration,
 recording, and callback side effects and rolls preference state back when an
 adapter fails.
-`EngineRuntime` constructs and owns the concrete QThreads and workers, while
-`MainWindow` still constructs recording writers, the Qt multimedia alarm backend,
-calibration adapters, and worker-specific signal callbacks. Its
+`EngineRuntime` constructs and owns the concrete QThreads and workers, plus the
+`FatigueAlarmController` and Qt multimedia `QtAlarmPlaybackBackend`/
+`QMediaPlayer`/`QAudioOutput`. `MainWindow` still constructs recording writers,
+calibration adapters, and worker-specific signal callbacks, and only routes alarm
+configure, preview, and metrics calls. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
 Qt resource state, not command/API authorities. Engine mode does not construct
 analysis checkbox stand-ins; the legacy analysis checkboxes exist only as
@@ -126,7 +128,9 @@ replay thread finishes, shutdown re-enters. Every other engine shutdown calls
 the re-entrant `_cleanup_runtime()` directly, then `QApplication.quit()`, rather
 than requiring hidden `MainWindow.closeEvent()`. Cleanup is ordered: hotkeys,
 pending auto-capture, belt calibration/timer/BLE, Web restart/server, recording,
-camera worker, then overlay; failed cleanup can be retried. `closeEvent()` now
+camera/analysis producers, alarm, then overlay; failed cleanup can be retried.
+Alarm close is idempotent and releases the runtime controller before best-effort
+player stop. `closeEvent()` now
 serves only as the legacy replay-gate adapter. An application-owned
 `EngineRuntime(QObject)` now owns the live camera and combined/rPPG/fatigue
 adapter threads and workers, including common signal wiring, the existing stop
@@ -138,10 +142,11 @@ cleanup, while replay sends only a cooperative stop request and completes its
 controller/shutdown deferral from the released-adapter callback. `EngineRuntime`
 also owns desktop-command drain, belt tick, auto-capture, and shutdown defer/retry
 timers; the legacy REC presentation timer, Web restart, and Overlay scheduling
-remain with their existing owners. Alarm/multimedia ownership is the next boundary
-before removing `QMainWindow` inheritance. This ownership
-change does not alter camera, worker topology, recording, BLE, replay, rPPG,
-fatigue, ROI, or calibration behavior.
+remain with their existing owners. Alarm/multimedia ownership is now application-owned;
+the next major boundary is removing `QMainWindow` inheritance. This ownership
+change does not alter alarm conditions, volume, fallback, strict validation, error
+mapping, metrics ordering, camera, worker topology, recording, BLE, replay, rPPG,
+fatigue, ROI, calibration, or any measurement values.
 Cleanup is stepwise best-effort: non-thread step failures are logged and later
 steps continue; the main event loop retries once after 100ms, then logs and
 best-effort quits if that second attempt still fails. If a video,
@@ -230,6 +235,22 @@ and `docs/benchmarks/desktop-engine-runtime-timer-ownership-2026-08-17-run2.json
 The rebuilt bundle input and isolated NSIS installation exposed desktop API v2,
 completed `app.shutdown`, and exited normally; hashes and smoke details are in
 `docs/benchmarks/packaged-engine-runtime-timer-ownership-2026-08-17.json`.
+
+After moving alarm controller and Qt multimedia ownership into `EngineRuntime`,
+two later 2026-08-17 runs measured 256.434/256.199 MiB RSS,
+1845.500/1850.936 ms startup, `state.get` p50 20.121/20.207 ms, and synthetic
+JPEG encode p50 1.157/1.146 ms. These results remain within the prior ownership
+slice range. Raw captures are retained in
+`docs/benchmarks/desktop-engine-runtime-alarm-ownership-2026-08-17-run1.json`
+and `docs/benchmarks/desktop-engine-runtime-alarm-ownership-2026-08-17-run2.json`.
+Python completed `737 passed, 2 skipped` with the focused alarm/runtime/settings
+slice at `156 passed`; compileall and pip check passed. Flutter completed 28 tests,
+analyze, and release Web build; Rust completed 8 tests; PyInstaller sidecar, Tauri
+release/NSIS, bundle-input smoke, and isolated installed smoke all passed. Hashes
+and smoke details are retained in
+`docs/benchmarks/packaged-engine-runtime-alarm-ownership-2026-08-17.json`.
+Golden/replay was not run because no UTA-RLDD dataset path was available. The
+benchmarks do not cover a physical camera, BLE device, or Flutter WebView rendering.
 
 ## Build prerequisites
 

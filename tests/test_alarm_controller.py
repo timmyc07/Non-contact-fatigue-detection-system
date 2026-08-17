@@ -13,6 +13,7 @@ class _FakePlayback:
     def __init__(self) -> None:
         self.files: list[tuple[str, float]] = []
         self.builtins: list[str] = []
+        self.close_calls = 0
 
     def play_file(self, path: str, *, volume: float) -> bool:
         self.files.append((path, volume))
@@ -20,6 +21,9 @@ class _FakePlayback:
 
     def play_builtin(self, scenario: str) -> None:
         self.builtins.append(scenario)
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def _cfg(**kwargs) -> AlarmConfig:
@@ -176,3 +180,21 @@ def test_controller_uses_builtin_when_file_missing() -> None:
     )
     controller.on_metrics(type("M", (), {"status": "DROWSY", "calibrated": True})())
     assert playback.builtins == ["drowsy"]
+
+
+def test_controller_close_stops_playback_and_ignores_queued_metrics() -> None:
+    cfg = AlarmConfig.defaults()
+    cfg.enabled = True
+    cfg.trigger_delay_sec = 0.0
+    playback = _FakePlayback()
+
+    from gui.alarm_player import FatigueAlarmController
+
+    controller = FatigueAlarmController(cfg, playback=playback)
+    controller.close()
+    controller.close()
+    controller.on_metrics(type("M", (), {"status": "DROWSY", "calibrated": True})())
+
+    assert controller.preview_scenario("critical") is None
+    assert playback.close_calls == 1
+    assert playback.builtins == []

@@ -8,8 +8,12 @@ import logging
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from shiboken6 import delete as delete_qobject
 
+from gui.alarm_config import AlarmConfig
+from gui.alarm_player import FatigueAlarmController
+
 
 AdapterConnect = Callable[[object], None]
+AlarmControllerFactory = Callable[[AlarmConfig, QObject], FatigueAlarmController]
 ThreadFactory = Callable[[QObject], QThread]
 TimerCallback = Callable[[], None]
 TimerFactory = Callable[[QObject], QTimer]
@@ -28,16 +32,71 @@ class EngineRuntime(QObject):
         *,
         thread_factory: ThreadFactory = QThread,
         timer_factory: TimerFactory = QTimer,
+        alarm_controller_factory: AlarmControllerFactory = FatigueAlarmController,
     ) -> None:
         super().__init__(parent)
         self._thread_factory = thread_factory
         self._timer_factory = timer_factory
+        self._alarm_controller_factory = alarm_controller_factory
+        self._alarm_controller: FatigueAlarmController | None = None
         self._adapters: dict[str, tuple[object, QThread]] = {}
         self._finished_pending: dict[str, object] = {}
         self._finished_join_scheduled = False
         self._timers: dict[str, QTimer] = {}
         self._deferred_timers: list[QTimer] = []
         self._adapter_finished.connect(self._on_adapter_finished)
+
+    @property
+    def alarm_controller(self) -> FatigueAlarmController | None:
+        return self._alarm_controller
+
+    def initialize_alarm(self, config: AlarmConfig) -> FatigueAlarmController:
+        """Create the application-owned alarm controller once settings are loaded."""
+        if self._alarm_controller is not None:
+            raise RuntimeError("Alarm controller is already initialized")
+        controller = self._alarm_controller_factory(config, self)
+        self._alarm_controller = controller
+        return controller
+
+    def replace_alarm_controller(self, controller: FatigueAlarmController) -> None:
+        """Replace the owned controller while retaining one lifecycle boundary."""
+        if controller is self._alarm_controller:
+            return
+        self.close_alarm()
+        self._alarm_controller = controller
+
+    def configure_alarm(self, config: AlarmConfig) -> None:
+        controller = self._alarm_controller
+        if controller is None:
+            raise RuntimeError("Alarm controller is not initialized")
+        controller.set_config(config)
+
+    def preview_alarm(
+        self,
+        scenario: str,
+        *,
+        config: AlarmConfig | None = None,
+    ) -> str | None:
+        controller = self._alarm_controller
+        if controller is None:
+            return None
+        return controller.preview_scenario(scenario, config=config)
+
+    def handle_alarm_metrics(self, metrics: object) -> None:
+        controller = self._alarm_controller
+        if controller is not None:
+            controller.on_metrics(metrics)
+
+    def close_alarm(self) -> bool:
+        controller = self._alarm_controller
+        if controller is None:
+            return False
+        self._alarm_controller = None
+        try:
+            controller.close()
+        except Exception:
+            logger.exception("Alarm controller cleanup failed")
+        return True
 
     def start_periodic_timer(
         self,
