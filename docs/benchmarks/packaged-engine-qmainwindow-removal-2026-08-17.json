@@ -14,12 +14,15 @@
     "install_exit_code": 0,
     "desktop_api_version": 2,
     "shutdown_success": true,
-    "normal_shell_close_verified": false,
-    "failure": "The shell did not exit within 10 seconds after WM_CLOSE from the smoke harness."
+    "engine_exited": true,
+    "normal_shell_close_verified": true,
+    "shell_exit_code": 0,
+    "uninstall_exit_code": 0,
+    "install_dir_removed": true
   },
   "notes": [
     "PyInstaller sidecar and Tauri release/NSIS builds completed successfully.",
-    "The failed harness attempt terminated the exact shell process and removed its isolated temporary installation.",
+    "The installed smoke closes only the top-level Tauri Window; Tao event-pump helper windows must not receive WM_CLOSE.",
     "No physical camera, BLE sensor, Flutter WebView interaction, or UTA-RLDD dataset was used."
   ]
 }

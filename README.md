@@ -89,6 +89,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
 ```
 輸出位於 `src-tauri\target\release\bundle\nsis\`。建置流程會先用 PyInstaller 產生 `dist\ncfd-engine\`，再由 Tauri 將 engine、MediaPipe model、不可變 tuning 資源一起嵌入 installer。正式安裝時，Tauri 會把設定、錄影與校準寫入使用者資料目錄，不需要 repository 或 `.venv`；若要開發 fallback，仍可用 `NCFD_ENGINE_ROOT` 與 `NCFD_ENGINE_PYTHON` 指向 Python engine。
 
+Windows 安裝版完整 smoke（隔離安裝、API v2、engine shutdown、主視窗正常關閉與靜默解除安裝）：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.installed_desktop_smoke
+```
+
 Ubuntu engine（供 Tauri 背景服務使用）：
 ```bash
 .venv/bin/python main.py --engine

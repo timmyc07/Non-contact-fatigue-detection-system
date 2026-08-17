@@ -53,7 +53,7 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
   `1.157/1.146 ms`；原始結果見
   `docs/benchmarks/desktop-engine-runtime-alarm-ownership-2026-08-17-run1.json` 與 `run2.json`。
   本切片 packaged smoke 見
-  `docs/benchmarks/packaged-engine-qmainwindow-removal-2026-08-17.json`；installed shell 正常關閉仍待確認。
+  `docs/benchmarks/packaged-engine-qmainwindow-removal-2026-08-17.json`；installed shell 正常關閉已通過。
 
 以上變更未修改 camera frame routing、worker topology、錄影、警報條件／音量／fallback／strict validation／
 錯誤映射／metrics 順序、BLE 樣本、回放、rPPG、疲勞分數、ROI、校準或任何數值閾值。
@@ -95,8 +95,8 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
      notification、alarm 與正常 shutdown。
    - 使用固定 benchmark 參數比較 API ready、process-tree RSS、IPC 與 preview latency。
    - 有 UTA-RLDD 資料集時執行 golden/replay 零漂移檢查。
-   - 優先釐清 isolated NSIS smoke 的 shell close：engine API v2 與 `app.shutdown` 已通過，但 harness
-     送出 WM_CLOSE 後 shell 未在 10 秒內退出；不可把這次結果記成正常關閉通過。
+   - isolated NSIS smoke 已固化為 `scripts.installed_desktop_smoke`：只向 class=`Tauri Window`
+     的主視窗送 WM_CLOSE，不得關閉 `Tao Thread Event Target` 等事件泵 helper HWND。
 
 ## 驗收命令
 
@@ -110,6 +110,7 @@ C:\tools\flutter\bin\flutter.bat build web --release
 cargo test --manifest-path src-tauri/Cargo.toml
 $env:Path = 'C:\tools\flutter\bin;' + $env:Path
 powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
+.venv\Scripts\python -m scripts.installed_desktop_smoke
 .venv\Scripts\python -m scripts.desktop_engine_benchmark --port 5001 --samples 10
 git diff --check
 ```

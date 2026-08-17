@@ -266,9 +266,10 @@ Raw captures are in
 Python completed `739 passed, 2 skipped`; Flutter completed 28 tests, analyze,
 and release Web build; Rust completed 8 tests; compileall, pip check,
 PyInstaller, Tauri release/NSIS, and bundle-input API/shutdown smoke passed.
-The isolated installer exposed API v2 and accepted `app.shutdown`, but the
-smoke harness could not make the Tauri shell exit normally within 10 seconds,
-so installed-shell close verification remains open. Evidence and hashes are in
+The isolated installer exposed API v2, accepted `app.shutdown`, exited the Tauri
+shell with code 0, uninstalled silently, and removed its installation directory.
+The reusable smoke targets only the top-level `Tauri Window`; sending WM_CLOSE
+to Tao event-pump helper windows prevents normal event-loop exit. Evidence and hashes are in
 `docs/benchmarks/packaged-engine-qmainwindow-removal-2026-08-17.json`.
 
 ## Build prerequisites
