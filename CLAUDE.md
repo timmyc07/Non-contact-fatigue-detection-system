@@ -111,8 +111,10 @@ worker-specific progress／preview／完成 callback 與 shutdown 重入。此�
 維持既有當次執行設定契約。
 採集偏好由 `CapturePreferencesState` 提供 desktop state：`auto_record` 與
 `belt_calibration` 仍沿用 settings JSON `toggles` 持久化；自動採集秒數與是否包含心跳帶仍為
-session-only，不新增 schema。BLE 啟停、錄影與 `QTimer` side effect 仍由 `MainWindow` adapter
-執行；狀態層只保存意圖，adapter 失敗時回滾狀態。此抽取不修改 BLE 樣本、校準器、錄影
+session-only，不新增 schema。application-owned `EngineRuntime` 已承接 desktop command drain、
+心跳帶 1 秒 tick、自動採集 one-shot 與 shutdown defer/retry 的 `QTimer` ownership；BLE 啟停、
+校準、錄影與 callback side effect 仍由 `MainWindow` adapter 執行。狀態層只保存意圖，adapter
+失敗時回滾狀態。此抽取不修改 BLE 樣本、校準器、錄影
 worker、相機／分析 worker topology 或任何 rPPG／疲勞數值路徑。
 Web LAN 偏好由 `WebPreferencesState` 提供 runtime、desktop state 與 settings JSON `web.allow_lan`
 投影；engine mode 不建立 legacy QAction。Web server 建立、shared-token URL 與非阻塞 restart
@@ -131,8 +133,9 @@ engine `app.shutdown` 先請 `EngineController` 判斷；回放進行中仍只�
 `MainWindow` 只保留 worker-specific callback、queue／routing 與 legacy presentation side effect。錄影與回放
 worker 的 QThread／worker reference 也已移入 `EngineRuntime`：錄影維持 request-stop + 2000ms join timeout，
 timeout 時保留 ownership；回放只送 cooperative stop request，待 thread finished 後完成 controller state 與
-shutdown deferral。runtime QTimer 與 alarm/multimedia ownership 仍待後續抽離，最後才移除 `QMainWindow`
-inheritance；此 ownership 抽取不修改 camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
+shutdown deferral。production runtime QTimer ownership 也已移入 `EngineRuntime`；legacy REC presentation timer、
+Web restart 與 Overlay 自有排程留在各自既有 owner。下一個邊界是 alarm/multimedia ownership，最後才移除
+`QMainWindow` inheritance；此 ownership 抽取不修改 camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI 或校準行為。
 cleanup 採逐步 best-effort：非 thread step 的例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera 或 analysis
 adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`EngineRuntime.adapter_released`
 callback 會排程重入 shutdown。
@@ -141,7 +144,7 @@ engine mode 不建立監測頁 `_mon_*` label、bar 或 sparkline 假元件；wo
 `_latest_*` 快照並維持警報、記錄與 Web metrics side effect，且不建立 legacy REC pill timer；
 監測視覺完全由 Flutter 呈現。
 engine mode 不建立心跳帶 label、banner、sparkline、calibration bar 或 device-status 假元件；
-`_belt_ui_timer` 仍保留為校準觀測與 ROI 協調器的必要 runtime driver，Flutter 直接消費
+`EngineRuntime` 的 `belt_tick` timer 保留為校準觀測與 ROI 協調器的必要 runtime driver，Flutter 直接消費
 Web metrics 中的 BLE、HRV 與校準狀態。
 engine mode 不再建立任何 `_HeadlessControl` 或 pipeline／recording／camera／profile 的
 button、label、tag 假元件；共用 callback 只更新 controller、runtime 快照、記錄、通知與 Web

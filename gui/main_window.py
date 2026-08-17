@@ -1099,9 +1099,6 @@ class MainWindow(QMainWindow):
         self._belt_truth_capture: BeltTruthCaptureWriter | None = None
         self._rppg_param_coordinator: RppgParamCoordinator | None = None
         self._rppg_param_current_weights: dict[str, float] = dict(ROI_BASE_WEIGHTS)
-        self._belt_ui_timer = QTimer(self)
-        self._belt_ui_timer.setInterval(1000)
-        self._belt_ui_timer.timeout.connect(self._tick_belt_calibration)
         # 純 legacy UI 顯示用：REC pill 的 elapsed 計時；engine mode 不建立。
         self._rec_ui_timer: QTimer | None = None
         if not self._engine_mode:
@@ -1110,7 +1107,6 @@ class MainWindow(QMainWindow):
             self._rec_ui_timer.timeout.connect(self._update_rec_pill)
         # 自動採集：一鍵串接既有「開始」/「開始記錄」/「心跳帶真值校準」觸發點，
         # 不重寫任何 worker 啟停或記錄/校準邏輯本身（見 _on_auto_capture_clicked）。
-        self._auto_capture_timer: QTimer | None = None
         self._auto_capture_belt_path: Path | None = None
         self._auto_capture_started_belt_calib: bool = False
         self._auto_capture_started_stress: bool = False
@@ -1133,10 +1129,11 @@ class MainWindow(QMainWindow):
             self._build_menu()
             self._build_central()
 
-        self._desktop_control_timer = QTimer(self)
-        self._desktop_control_timer.setInterval(20)
-        self._desktop_control_timer.timeout.connect(self._drain_desktop_commands)
-        self._desktop_control_timer.start()
+        self._engine_runtime.start_periodic_timer(
+            "desktop_command",
+            20,
+            self._drain_desktop_commands,
+        )
 
         self._load_settings()
         self._alarm_controller = FatigueAlarmController(self._alarm_config, self)
@@ -3973,7 +3970,7 @@ class MainWindow(QMainWindow):
             "pipeline_running": pipeline.running,
             "recording": pipeline.recording,
             "recording_path": str(self._recording_db_path or ""),
-            "auto_capture_active": self._auto_capture_timer is not None,
+            "auto_capture_active": self._engine_runtime.timer_active("auto_capture"),
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
             "selected_camera_index": camera.selected_index,
             "cameras": cameras,
@@ -4139,13 +4136,13 @@ class MainWindow(QMainWindow):
                     if "include_belt" in args
                     else False
                 )
-                if self._auto_capture_timer is None:
+                if not self._engine_runtime.timer_active("auto_capture"):
                     self._configure_capture_preferences(
                         auto_capture_seconds=duration,
                         auto_capture_include_belt=include_belt,
                     )
                     self._on_auto_capture_clicked()
-            elif self._auto_capture_timer is not None:
+            elif self._engine_runtime.timer_active("auto_capture"):
                 self._on_auto_capture_clicked()
 
         elif command == "auto_capture.configure":
@@ -4309,7 +4306,7 @@ class MainWindow(QMainWindow):
             return state
 
         elif command == "app.shutdown":
-            QTimer.singleShot(0, self._shutdown_engine)
+            self._engine_runtime.defer(0, self._shutdown_engine)
 
         else:
             raise ValueError(f"Unsupported desktop command: {command}")
@@ -4332,7 +4329,7 @@ class MainWindow(QMainWindow):
             if not self._runtime_cleanup_retry_attempted:
                 self._runtime_cleanup_retry_attempted = True
                 self._runtime_cleanup_retry_scheduled = True
-                QTimer.singleShot(100, self._retry_runtime_shutdown)
+                self._engine_runtime.defer(100, self._retry_runtime_shutdown)
                 return
             logger.error("Engine runtime cleanup remained incomplete after retry")
         self._runtime_shutdown_waiting_for_adapters = False
@@ -4362,6 +4359,10 @@ class MainWindow(QMainWindow):
                 return None
 
         try:
+            cleanup_step(
+                "desktop command timer",
+                lambda: self._engine_runtime.cancel_timer("desktop_command"),
+            )
             cleanup_step("global hotkeys", self._unregister_global_hotkeys)
             cleanup_step("auto-capture timer", self._cancel_pending_auto_capture_timer)
             if self._belt_calibrator is not None:
@@ -4369,7 +4370,10 @@ class MainWindow(QMainWindow):
                     "belt calibration",
                     self._stop_belt_calibration,  # 存本次 session 校準版本
                 )
-            cleanup_step("belt timer", self._belt_ui_timer.stop)
+            cleanup_step(
+                "belt timer",
+                lambda: self._engine_runtime.cancel_timer("belt_tick"),
+            )
             cleanup_step("belt runtime", self._engine_controller.stop_belt)
             self._web_restart_shutdown = True
             self._web_restart_scheduled = False
@@ -5198,7 +5202,7 @@ class MainWindow(QMainWindow):
         ):
             self._fail_closed_pipeline_adapters()
         if self._runtime_shutdown_waiting_for_adapters:
-            QTimer.singleShot(0, self._shutdown_engine)
+            self._engine_runtime.defer(0, self._shutdown_engine)
 
     # ── Frame routing ─────────────────────────────────────────────────────────
 
@@ -5337,7 +5341,11 @@ class MainWindow(QMainWindow):
             seed = 0.0
         self._last_calib_fed_metrics = None
         self._belt_calibrator = OnlineBpmCalibrator(initial_offset=seed)
-        self._belt_ui_timer.start()
+        self._engine_runtime.start_periodic_timer(
+            "belt_tick",
+            1000,
+            self._tick_belt_calibration,
+        )
         self._append_log(f"▶ 心跳帶真值校準啟動（背景參考，起始 offset {seed:+.1f} BPM）")
         # P6b-3b：協調層開關（預設 False）。開啟時才建立協調層並記錄目前生效
         # 的 ROI 權重作為 A/B 的「現行」基準；關閉時協調層維持 None，
@@ -5386,7 +5394,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 logger.exception("心跳帶校準啟動回滾時關閉錄製 writer 失敗")
         try:
-            self._belt_ui_timer.stop()
+            self._engine_runtime.cancel_timer("belt_tick")
         except Exception:
             logger.exception("心跳帶校準啟動回滾時停止計時器失敗")
         self._rppg_param_coordinator = None
@@ -5413,7 +5421,7 @@ class MainWindow(QMainWindow):
         return dict(override) if override is not None else dict(ROI_BASE_WEIGHTS)
 
     def _stop_belt_calibration(self) -> None:
-        self._belt_ui_timer.stop()
+        self._engine_runtime.cancel_timer("belt_tick")
         self._persist_belt_calibration()
         self._belt_calibrator = None
         # P6b-3b：協調層與任何已下發的候選一併清除，避免停止後 worker 仍持續
@@ -6354,11 +6362,8 @@ class MainWindow(QMainWindow):
         一併回滾（見 `_rollback_auto_capture_toggles`）。供所有既有「停止」入口
         （手動停止記錄／停止管線／相機失敗／關閉視窗）呼叫，避免自動採集計時器在
         它所依附的錄製已被其他操作結束後，仍在背景倒數並於稍後誤停一段不相關的新錄製。"""
-        if self._auto_capture_timer is None:
+        if not self._engine_runtime.cancel_timer("auto_capture"):
             return
-        self._auto_capture_timer.stop()
-        self._auto_capture_timer.deleteLater()
-        self._auto_capture_timer = None
         if not self._engine_mode:
             self._btn_auto_capture.setText("自動採集")
             self._spn_auto_capture_seconds.setEnabled(True)
@@ -6386,7 +6391,7 @@ class MainWindow(QMainWindow):
     def _on_auto_capture_clicked(self) -> None:
         """一鍵自動採集：只串接既有偏好入口、_toggle_pipeline 與 _toggle_recording，
         不重寫任何 worker 啟停、記錄或心跳帶校準邏輯本身。"""
-        if self._auto_capture_timer is not None:
+        if self._engine_runtime.timer_active("auto_capture"):
             # 倒數中再按一次 → 提前停止。
             self._append_log("■ 自動採集：使用者提前按下停止。")
             self._finish_auto_capture(early=True)
@@ -6451,10 +6456,11 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"▶ 自動採集開始（{duration_s}s，{'含心跳帶' if include_belt else '僅記錄'}）"
         )
-        self._auto_capture_timer = QTimer(self)
-        self._auto_capture_timer.setSingleShot(True)
-        self._auto_capture_timer.timeout.connect(lambda: self._finish_auto_capture(early=False))
-        self._auto_capture_timer.start(duration_s * 1000)
+        self._engine_runtime.schedule_timer(
+            "auto_capture",
+            duration_s * 1000,
+            lambda: self._finish_auto_capture(early=False),
+        )
 
     def _finish_auto_capture(self, early: bool) -> None:
         """自動採集收尾：只呼叫既有停止觸發點，belt-truth capture writer 的關閉交給

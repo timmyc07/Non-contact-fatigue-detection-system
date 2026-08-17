@@ -11,11 +11,13 @@ from shiboken6 import delete as delete_qobject
 
 AdapterConnect = Callable[[object], None]
 ThreadFactory = Callable[[QObject], QThread]
+TimerCallback = Callable[[], None]
+TimerFactory = Callable[[QObject], QTimer]
 logger = logging.getLogger(__name__)
 
 
 class EngineRuntime(QObject):
-    """Own engine adapter threads and workers independently of MainWindow."""
+    """Own engine Qt adapters and timers independently of MainWindow."""
 
     adapter_released = Signal(str, object)
     _adapter_finished = Signal(str, object)
@@ -25,13 +27,117 @@ class EngineRuntime(QObject):
         parent: QObject,
         *,
         thread_factory: ThreadFactory = QThread,
+        timer_factory: TimerFactory = QTimer,
     ) -> None:
         super().__init__(parent)
         self._thread_factory = thread_factory
+        self._timer_factory = timer_factory
         self._adapters: dict[str, tuple[object, QThread]] = {}
         self._finished_pending: dict[str, object] = {}
         self._finished_join_scheduled = False
+        self._timers: dict[str, QTimer] = {}
+        self._deferred_timers: list[QTimer] = []
         self._adapter_finished.connect(self._on_adapter_finished)
+
+    def start_periodic_timer(
+        self,
+        kind: str,
+        interval_ms: int,
+        callback: TimerCallback,
+    ) -> QTimer:
+        """Create and start one runtime-owned periodic timer."""
+        self.cancel_timer(kind)
+        timer = self._timer_factory(self)
+        timer.setInterval(interval_ms)
+        timer.timeout.connect(callback)
+        self._timers[kind] = timer
+        try:
+            timer.start()
+        except Exception:
+            if self._timers.get(kind) is timer:
+                del self._timers[kind]
+            self._dispose_timer(timer)
+            raise
+        return timer
+
+    def schedule_timer(
+        self,
+        kind: str,
+        delay_ms: int,
+        callback: TimerCallback,
+    ) -> QTimer:
+        """Replace one named runtime-owned single-shot timer."""
+        self.cancel_timer(kind)
+        timer = self._timer_factory(self)
+        timer.setSingleShot(True)
+        timer.setInterval(delay_ms)
+
+        def on_timeout() -> None:
+            if self._timers.get(kind) is not timer:
+                return
+            try:
+                callback()
+            finally:
+                if self._timers.get(kind) is timer:
+                    del self._timers[kind]
+                    self._dispose_timer(timer)
+
+        timer.timeout.connect(on_timeout)
+        self._timers[kind] = timer
+        try:
+            timer.start()
+        except Exception:
+            if self._timers.get(kind) is timer:
+                del self._timers[kind]
+            self._dispose_timer(timer)
+            raise
+        return timer
+
+    def cancel_timer(self, kind: str) -> bool:
+        """Cancel and release one named runtime-owned timer."""
+        timer = self._timers.pop(kind, None)
+        if timer is None:
+            return False
+        self._dispose_timer(timer)
+        return True
+
+    def timer_active(self, kind: str) -> bool:
+        timer = self._timers.get(kind)
+        return timer is not None and timer.isActive()
+
+    def defer(self, delay_ms: int, callback: TimerCallback) -> QTimer:
+        """Keep an anonymous single-shot callback alive until it fires."""
+        timer = self._timer_factory(self)
+        timer.setSingleShot(True)
+        timer.setInterval(delay_ms)
+
+        def on_timeout() -> None:
+            if not self._release_deferred_timer(timer):
+                return
+            self._dispose_timer(timer)
+            callback()
+
+        timer.timeout.connect(on_timeout)
+        self._deferred_timers.append(timer)
+        try:
+            timer.start()
+        except Exception:
+            self._release_deferred_timer(timer)
+            self._dispose_timer(timer)
+            raise
+        return timer
+
+    @staticmethod
+    def _dispose_timer(timer: QTimer) -> None:
+        timer.stop()
+        timer.deleteLater()
+
+    def _release_deferred_timer(self, timer: QTimer) -> bool:
+        for index, current in enumerate(self._deferred_timers):
+            if current is timer:
+                del self._deferred_timers[index]
+                return True
+        return False
 
     def start_adapter(
         self,

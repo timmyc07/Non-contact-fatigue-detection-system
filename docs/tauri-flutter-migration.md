@@ -64,8 +64,9 @@ Auto-record, belt-calibration, and auto-capture preferences now live in the
 Qt-free `CapturePreferencesState`. Engine mode no longer constructs their
 legacy checkboxes, duration spinbox, or auto-capture button. Auto-record and
 belt-calibration retain the existing settings JSON toggle contract; duration
-and include-belt remain session-scoped. `MainWindow` still performs BLE,
-recording, and QTimer side effects and rolls the preference state back when an
+and include-belt remain session-scoped. `EngineRuntime` owns the belt tick and
+auto-capture timers, while `MainWindow` still performs BLE, calibration,
+recording, and callback side effects and rolls preference state back when an
 adapter fails.
 `EngineRuntime` constructs and owns the concrete QThreads and workers, while
 `MainWindow` still constructs recording writers, the Qt multimedia alarm backend,
@@ -94,9 +95,9 @@ or the legacy REC-pill timer.
 The rPPG, behavior, and fusion callbacks retain their snapshot, alarm, baseline,
 recording, and Web-metrics side effects; Flutter renders the shared metrics payload.
 Engine mode also omits hidden belt labels, banners, device status, sparklines, and
-calibration bars. The one-second belt timer remains active because it drives new
-rPPG/belt calibration observations and the ROI coordinator; Flutter renders the
-BLE, HRV, and calibration fields already carried by Web metrics.
+calibration bars. The `EngineRuntime`-owned one-second belt timer remains active
+because it drives new rPPG/belt calibration observations and the ROI coordinator;
+Flutter renders the BLE, HRV, and calibration fields already carried by Web metrics.
 Engine mode no longer creates a generic `_HeadlessControl` or fake pipeline,
 recording, camera, or profile buttons, labels, and tags. Shared
 lifecycle callbacks keep controller snapshots, recording resources, camera
@@ -134,9 +135,11 @@ callbacks, queue/routing work, and legacy presentation side effects. Recording
 and replay QThread/worker ownership is also held by `EngineRuntime`: recording
 retains cooperative stop plus the existing 2000 ms join timeout and late-finish
 cleanup, while replay sends only a cooperative stop request and completes its
-controller/shutdown deferral from the released-adapter callback. Runtime timers
-and alarm/multimedia ownership remain the next boundaries before removing
-`QMainWindow` inheritance. This ownership
+controller/shutdown deferral from the released-adapter callback. `EngineRuntime`
+also owns desktop-command drain, belt tick, auto-capture, and shutdown defer/retry
+timers; the legacy REC presentation timer, Web restart, and Overlay scheduling
+remain with their existing owners. Alarm/multimedia ownership is the next boundary
+before removing `QMainWindow` inheritance. This ownership
 change does not alter camera, worker topology, recording, BLE, replay, rPPG,
 fatigue, ROI, or calibration behavior.
 Cleanup is stepwise best-effort: non-thread step failures are logged and later
@@ -213,6 +216,20 @@ The rebuilt PyInstaller bundle input and isolated NSIS installation both exposed
 desktop API v2 and completed `app.shutdown`; the bundle input exited with code 0.
 Evidence is retained in
 `docs/benchmarks/packaged-engine-recording-replay-ownership-2026-08-17.json`.
+
+After moving production desktop-command, belt-tick, auto-capture, and shutdown
+timer ownership into `EngineRuntime`, two later 2026-08-17 runs measured
+256.473/256.059 MiB RSS, 1848.305/1846.954 ms startup, `state.get` p50
+20.342/20.529 ms and p95 40.437/39.684 ms, with synthetic JPEG encode p50
+1.229/1.211 ms and p95 1.480/1.480 ms. These values remain within the prior
+ownership-slice range and do not indicate a regression in the measured startup,
+process-tree RSS, localhost `state.get`, or synthetic JPEG path. Raw captures
+are retained in
+`docs/benchmarks/desktop-engine-runtime-timer-ownership-2026-08-17-run1.json`
+and `docs/benchmarks/desktop-engine-runtime-timer-ownership-2026-08-17-run2.json`.
+The rebuilt bundle input and isolated NSIS installation exposed desktop API v2,
+completed `app.shutdown`, and exited normally; hashes and smoke details are in
+`docs/benchmarks/packaged-engine-runtime-timer-ownership-2026-08-17.json`.
 
 ## Build prerequisites
 

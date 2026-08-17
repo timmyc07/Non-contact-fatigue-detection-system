@@ -2,10 +2,10 @@
 
 更新日期：2026-08-17
 
-本切片起始基準：`d915824 refactor(desktop): 抽離 live adapter ownership`
+本切片起始基準：`70d79fb refactor(desktop): 抽離錄影與回放 ownership`
 
-目前狀態：live camera、analysis、錄影與 Replay QThread／worker ownership 已不再由隱藏
-`MainWindow` 保存；下一切片從 runtime QTimer ownership 開始。
+目前狀態：live camera、analysis、錄影與 Replay QThread／worker，以及 production runtime QTimer
+ownership 已不再由隱藏 `MainWindow` 保存；下一切片從 alarm/multimedia ownership 開始。
 
 ## 本階段完成狀態
 
@@ -31,16 +31,19 @@
 - 錄影與 Replay QThread／worker ownership 也已移入 `EngineRuntime`。錄影維持原 request-stop、2000ms wait
   timeout 與 late-finish cleanup；Replay 維持非同步 cooperative stop、deterministic timestamp、報表輸出與
   shutdown deferral，完成後由 adapter release callback 重入 controller／shutdown。
+- desktop command drain、心跳帶 1 秒 tick、自動採集 one-shot 與 shutdown defer/retry 的 QTimer ownership
+  已移入 `EngineRuntime`。`MainWindow` 只保留既有 callback；legacy REC presentation timer、Web restart 與
+  Overlay 自有排程維持各自既有 owner。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證：Python `723 passed, 2 skipped`、desktop settings + engine runtime `132 passed`、
+- 最近一次完整驗證：Python `732 passed, 2 skipped`、desktop settings + engine runtime + camera controller `144 passed`、
   Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
   PyInstaller、Tauri release/NSIS、source/bundled engine shutdown、`compileall` 與 `pip check` 均通過。
-- 最近兩次重複 benchmark：RSS `255.660/256.367 MiB`、API ready
-  `1852.892/1843.677 ms`、IPC p50/p95 `20.034/40.615` 與 `20.180/40.010 ms`、
-  preview p50/p95 `1.148/1.341` 與 `1.214/1.666 ms`；原始結果見
-  `docs/benchmarks/desktop-engine-recording-replay-ownership-2026-08-17-run1.json` 與 `run2.json`。
-  packaged smoke 見 `docs/benchmarks/packaged-engine-recording-replay-ownership-2026-08-17.json`。
+- 最近兩次重複 benchmark：RSS `256.473/256.059 MiB`、API ready
+  `1848.305/1846.954 ms`、IPC p50/p95 `20.342/40.437` 與 `20.529/39.684 ms`、
+  preview p50/p95 `1.229/1.480` 與 `1.211/1.480 ms`；原始結果見
+  `docs/benchmarks/desktop-engine-runtime-timer-ownership-2026-08-17-run1.json` 與 `run2.json`。
+  packaged smoke 見 `docs/benchmarks/packaged-engine-runtime-timer-ownership-2026-08-17.json`。
 
 以上變更未修改 camera frame routing、worker topology、錄影、警報、BLE 樣本、回放、
 rPPG、疲勞分數、ROI、校準或任何數值閾值。
@@ -49,8 +52,8 @@ rPPG、疲勞分數、ROI、校準或任何數值閾值。
 
 1. Python engine 仍以隱藏的 `QApplication + MainWindow` 作 runtime 容器。這不是可見舊面板，
    但仍有 Qt widget shell 成本；shutdown 已不再依賴 `MainWindow.closeEvent()`，live camera／analysis
-   QThread ownership 也已移入 `EngineRuntime`；錄影／回放 thread ownership 亦已完成。下一個主要邊界是
-   runtime QTimer ownership，其後為 alarm/multimedia，最後才移除 `QMainWindow` inheritance。
+   QThread ownership 也已移入 `EngineRuntime`；錄影／回放 thread 與 production runtime QTimer ownership
+   亦已完成。下一個主要邊界是 alarm/multimedia，最後才移除 `QMainWindow` inheritance。
 2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
 
 ## 下一階段執行順序
@@ -69,7 +72,9 @@ rPPG、疲勞分數、ROI、校準或任何數值閾值。
      的 QThread／worker ownership、共同 wiring、停止 timeout、join-before-release 與 stale-finish release。
    - **已完成：** `EngineRuntime` 承接錄影與 Replay QThread／worker ownership，並分別保留同步 timeout stop
      與非同步 shutdown deferral 契約。
-   - **下一步：** 抽離 runtime QTimer ownership，再處理 alarm/multimedia 與其餘
+   - **已完成：** `EngineRuntime` 承接 desktop command、belt tick、auto-capture 與 shutdown defer/retry
+     timer ownership；legacy REC、Web restart、Overlay timer 留在其既有 presentation／subsystem owner。
+   - **下一步：** 抽離 alarm/multimedia ownership 與其餘
      widget-only API，最後移除 `QMainWindow` inheritance。
    - 每個切片維持 desktop API v2、worker topology 與數值輸出不變。
 

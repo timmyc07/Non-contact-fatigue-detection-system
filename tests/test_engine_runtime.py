@@ -28,6 +28,38 @@ class _FakeSignal:
             callback()
 
 
+class _FakeTimer:
+    def __init__(self, parent: object, events: list[str]) -> None:
+        self.parent = parent
+        self.events = events
+        self.timeout = _FakeSignal()
+        self.interval_ms: int | None = None
+        self.single_shot = False
+        self.active = False
+
+    def setInterval(self, interval_ms: int) -> None:  # noqa: N802
+        self.interval_ms = interval_ms
+        self.events.append(f"timer.interval:{interval_ms}")
+
+    def setSingleShot(self, single_shot: bool) -> None:  # noqa: N802
+        self.single_shot = single_shot
+        self.events.append(f"timer.single:{single_shot}")
+
+    def start(self) -> None:
+        self.active = True
+        self.events.append("timer.start")
+
+    def stop(self) -> None:
+        self.active = False
+        self.events.append("timer.stop")
+
+    def isActive(self) -> bool:  # noqa: N802
+        return self.active
+
+    def deleteLater(self) -> None:
+        self.events.append("timer.delete")
+
+
 class _FakeThread:
     def __init__(self, events: list[str], wait_result: bool = True) -> None:
         self.events = events
@@ -260,3 +292,119 @@ def test_thread_start_failure_disposes_real_qt_worker_and_thread(
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert isValid(created[0]) is False
     assert runtime.all_stopped() is True
+
+
+def test_runtime_owns_periodic_timer_until_cancelled(qt_app: QApplication) -> None:
+    events: list[str] = []
+    timers: list[_FakeTimer] = []
+
+    def create_timer(parent: object) -> _FakeTimer:
+        timer = _FakeTimer(parent, events)
+        timers.append(timer)
+        return timer
+
+    runtime = EngineRuntime(qt_app, timer_factory=create_timer)  # type: ignore[arg-type]
+    ticks: list[str] = []
+
+    timer = runtime.start_periodic_timer(
+        "command_drain",
+        20,
+        lambda: ticks.append("tick"),
+    )
+
+    assert timer is timers[0]
+    assert timer.parent is runtime
+    assert timer.interval_ms == 20
+    assert timer.single_shot is False
+    assert runtime.timer_active("command_drain") is True
+
+    timer.timeout.emit()
+    assert ticks == ["tick"]
+
+    assert runtime.cancel_timer("command_drain") is True
+    assert runtime.timer_active("command_drain") is False
+    assert events[-2:] == ["timer.stop", "timer.delete"]
+    assert runtime.cancel_timer("command_drain") is False
+
+
+def test_named_single_shot_replaces_stale_timer_without_firing_it(
+    qt_app: QApplication,
+) -> None:
+    events: list[str] = []
+    timers: list[_FakeTimer] = []
+
+    def create_timer(parent: object) -> _FakeTimer:
+        timer = _FakeTimer(parent, events)
+        timers.append(timer)
+        return timer
+
+    runtime = EngineRuntime(qt_app, timer_factory=create_timer)  # type: ignore[arg-type]
+    fired: list[str] = []
+    cancelled_from_callback: list[bool] = []
+
+    def fire_second() -> None:
+        cancelled_from_callback.append(runtime.cancel_timer("auto_capture"))
+        fired.append("second")
+
+    first = runtime.schedule_timer("auto_capture", 1000, lambda: fired.append("first"))
+    second = runtime.schedule_timer("auto_capture", 2000, fire_second)
+
+    assert first is timers[0]
+    assert second is timers[1]
+    assert first.active is False
+    assert second.active is True
+    assert second.single_shot is True
+    assert second.interval_ms == 2000
+
+    first.timeout.emit()
+    assert fired == []
+    assert runtime.timer_active("auto_capture") is True
+
+    second.timeout.emit()
+    assert fired == ["second"]
+    assert cancelled_from_callback == [True]
+    assert runtime.timer_active("auto_capture") is False
+    assert events[-1] == "timer.delete"
+
+
+def test_runtime_defer_keeps_each_callback_owned_until_timeout(
+    qt_app: QApplication,
+) -> None:
+    events: list[str] = []
+    timers: list[_FakeTimer] = []
+
+    def create_timer(parent: object) -> _FakeTimer:
+        timer = _FakeTimer(parent, events)
+        timers.append(timer)
+        return timer
+
+    runtime = EngineRuntime(qt_app, timer_factory=create_timer)  # type: ignore[arg-type]
+    fired: list[str] = []
+
+    first = runtime.defer(0, lambda: fired.append("first"))
+    second = runtime.defer(100, lambda: fired.append("second"))
+
+    first.timeout.emit()
+    second.timeout.emit()
+
+    assert fired == ["first", "second"]
+    assert timers == [first, second]
+    assert events.count("timer.delete") == 2
+
+
+def test_real_qt_single_shot_callback_can_cancel_its_runtime_owner(
+    qt_app: QApplication,
+) -> None:
+    runtime = EngineRuntime(qt_app)
+    cancelled: list[bool] = []
+
+    runtime.schedule_timer(
+        "auto_capture",
+        0,
+        lambda: cancelled.append(runtime.cancel_timer("auto_capture")),
+    )
+    QTest.qWait(10)
+    qt_app.processEvents()
+
+    assert cancelled == [True]
+    assert runtime.timer_active("auto_capture") is False

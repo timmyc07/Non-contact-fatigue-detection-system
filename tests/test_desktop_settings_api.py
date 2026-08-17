@@ -51,7 +51,7 @@ def settings_window(
     monkeypatch.setattr(MainWindow, "_start_camera_scan", lambda self: None)
     window = MainWindow(engine_mode=True)
     yield window
-    window._desktop_control_timer.stop()
+    window._engine_runtime.cancel_timer("desktop_command")
     window.close()
 
 
@@ -93,6 +93,23 @@ def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> N
     assert state["rppg_enabled"] is False
     assert state["monitor_focus"] is False
     assert "benchmark_active" not in state
+
+
+def test_engine_runtime_owns_desktop_command_drain_timer(
+    settings_window: MainWindow,
+) -> None:
+    assert settings_window._engine_runtime.timer_active("desktop_command") is True
+    assert not hasattr(settings_window, "_desktop_control_timer")
+
+
+def test_engine_runtime_owns_belt_tick_timer(settings_window: MainWindow) -> None:
+    assert settings_window._engine_runtime.timer_active("belt_tick") is False
+    assert not hasattr(settings_window, "_belt_ui_timer")
+
+
+def test_engine_runtime_owns_auto_capture_timer(settings_window: MainWindow) -> None:
+    assert settings_window._engine_runtime.timer_active("auto_capture") is False
+    assert not hasattr(settings_window, "_auto_capture_timer")
 
 
 def test_engine_mode_does_not_construct_legacy_visual_shell(
@@ -373,6 +390,34 @@ def test_auto_capture_commands_reject_non_boolean_include_belt(
     assert settings_window._capture_preferences.snapshot().auto_capture_include_belt is False
 
 
+def test_auto_capture_command_uses_runtime_timer_without_stopping_existing_recording(
+    settings_window: MainWindow,
+) -> None:
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.start_pipeline()
+    settings_window._engine_controller.start_recording()
+    settings_window._recording_db_path = Path("existing.db")
+
+    started = settings_window._handle_desktop_command(
+        "auto_capture.set",
+        {"enabled": True, "duration_seconds": 10, "include_belt": False},
+    )
+
+    assert started["auto_capture_active"] is True
+    assert settings_window._engine_runtime.timer_active("auto_capture") is True
+
+    stopped = settings_window._handle_desktop_command(
+        "auto_capture.set",
+        {"enabled": False},
+    )
+
+    assert stopped["auto_capture_active"] is False
+    assert settings_window._engine_runtime.timer_active("auto_capture") is False
+    assert settings_window._engine_controller.pipeline_snapshot().recording is True
+    settings_window._engine_controller.stop_recording()
+    settings_window._engine_controller.stop_pipeline()
+
+
 def test_belt_calibration_preference_rolls_back_when_ble_start_fails(
     settings_window: MainWindow,
     monkeypatch: pytest.MonkeyPatch,
@@ -497,9 +542,11 @@ def test_belt_calibration_start_failure_cleans_new_runtime_resources(
         )
     elif failure_point == "timer":
         monkeypatch.setattr(
-            settings_window._belt_ui_timer,
-            "start",
-            lambda: (_ for _ in ()).throw(RuntimeError("timer failed")),
+            settings_window._engine_runtime,
+            "start_periodic_timer",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("timer failed")
+            ),
         )
     elif failure_point == "coordinator":
         monkeypatch.setattr(
@@ -524,7 +571,7 @@ def test_belt_calibration_start_failure_cleans_new_runtime_resources(
     assert state["belt_calibration"] is False
     assert state["settings_dirty"] is False
     assert runtime.belt_running is False
-    assert settings_window._belt_ui_timer.isActive() is False
+    assert settings_window._engine_runtime.timer_active("belt_tick") is False
     assert settings_window._belt_calibrator is None
     assert settings_window._rppg_param_coordinator is None
     assert settings_window._belt_truth_capture is None
@@ -2212,6 +2259,25 @@ def test_replay_start_rechecks_controller_before_creating_adapter(
     assert state["replay_running"] is False
 
 
+def test_app_shutdown_command_defers_cleanup_through_engine_runtime(
+    settings_window: MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduled: list[tuple[int, object]] = []
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "defer",
+        lambda delay_ms, callback: scheduled.append((delay_ms, callback)),
+    )
+
+    state = settings_window._handle_desktop_command("app.shutdown", {})
+
+    assert state["engine_mode"] is True
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 0
+    assert getattr(scheduled[0][1], "__self__", None) is settings_window
+
+
 def test_engine_shutdown_waits_for_active_replay(
     settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2347,15 +2413,16 @@ def test_engine_shutdown_resumes_only_after_adapter_thread_finishes(
         def instance():
             return FakeApp()
 
-    class FakeTimer:
-        @staticmethod
-        def singleShot(delay_ms: int, callback) -> None:  # noqa: N802
-            events.append(f"scheduled:{delay_ms}")
-            callback()
-
     monkeypatch.setattr(settings_window, "_cleanup_runtime", cleanup_runtime)
     monkeypatch.setattr(main_window_module, "QApplication", FakeApplication)
-    monkeypatch.setattr(main_window_module, "QTimer", FakeTimer)
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "defer",
+        lambda delay_ms, callback: (
+            events.append(f"scheduled:{delay_ms}"),
+            callback(),
+        ),
+    )
 
     settings_window._shutdown_engine()
 
@@ -2389,15 +2456,16 @@ def test_engine_shutdown_retries_cleanup_error_before_quit(
         def instance():
             return FakeApp()
 
-    class FakeTimer:
-        @staticmethod
-        def singleShot(delay_ms: int, callback) -> None:  # noqa: N802
-            events.append(f"scheduled:{delay_ms}")
-            callback()
-
     monkeypatch.setattr(settings_window, "_cleanup_runtime", cleanup_runtime)
     monkeypatch.setattr(main_window_module, "QApplication", FakeApplication)
-    monkeypatch.setattr(main_window_module, "QTimer", FakeTimer)
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "defer",
+        lambda delay_ms, callback: (
+            events.append(f"scheduled:{delay_ms}"),
+            callback(),
+        ),
+    )
 
     settings_window._shutdown_engine()
 
@@ -2411,10 +2479,6 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
 ) -> None:
     events: list[str] = []
 
-    class FakeTimer:
-        def stop(self) -> None:
-            events.append("belt_timer.stop")
-
     class FakeOverlay:
         def hide(self) -> None:
             events.append("overlay.hide")
@@ -2423,8 +2487,12 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
             events.append("overlay.close")
 
     settings_window._belt_calibrator = object()  # type: ignore[assignment]
-    settings_window._belt_ui_timer = FakeTimer()  # type: ignore[assignment]
     settings_window._preview_overlay = FakeOverlay()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "cancel_timer",
+        lambda kind: events.append(f"{kind}.cancel"),
+    )
     monkeypatch.setattr(
         settings_window,
         "_unregister_global_hotkeys",
@@ -2465,10 +2533,11 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
     settings_window._cleanup_runtime()
 
     assert events == [
+        "desktop_command.cancel",
         "hotkeys.unregister",
         "auto_capture.cancel",
         "belt_calibration.stop",
-        "belt_timer.stop",
+        "belt_tick.cancel",
         "belt.stop",
         "web.stop",
         "recording.stop",
@@ -2871,12 +2940,11 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
     settings_window._runtime_shutdown_waiting_for_adapters = True
     scheduled: list[int] = []
 
-    class FakeTimer:
-        @staticmethod
-        def singleShot(delay_ms: int, _callback) -> None:  # noqa: N802
-            scheduled.append(delay_ms)
-
-    monkeypatch.setattr(main_window_module, "QTimer", FakeTimer)
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "defer",
+        lambda delay_ms, _callback: scheduled.append(delay_ms),
+    )
 
     stopped = settings_window._stop_recording()
 

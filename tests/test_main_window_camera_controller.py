@@ -54,7 +54,7 @@ def camera_window(
     )
     window = MainWindow(engine_mode=True)
     yield window
-    window._desktop_control_timer.stop()
+    window._engine_runtime.cancel_timer("desktop_command")
     window.close()
 
 
