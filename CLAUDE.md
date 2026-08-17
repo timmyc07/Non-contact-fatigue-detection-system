@@ -65,6 +65,7 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 - PowerShell 5.1 **沒有** `&&` / `||`：出現 parser error 不是指令壞掉，改 `A; if ($?) { B }` 或用 Bash tool。
 - PowerShell `Out-File`/`Set-Content` 預設 UTF-16 LE：寫給其他工具讀的檔案必加 `-Encoding utf8`；寫檔優先用 Write/Edit tool。
 - `git push` 可能因 gh credential helper hang 住：解法見 memory `git-push-credential-hang-workaround.md`（GIT_ASKPASS shim + `gh auth token`）。
+- Windows Qt offscreen 完整 pytest 偶爾會在 `test_preview_overlay_window.py` 發生 access violation：先隔離重跑該測試確認，再最多完整重跑一次；2026-08-17 隔離測試 `2 passed`、完整重跑 `741 passed, 2 skipped`。
 - 同一子任務最多重試 2 輪，第 2 輪失敗必須換假設或升級模型，不准第 3 輪原樣重試（詳見 `~/.claude/rules/judgment-rubrics.md`）。
 
 ## 架構總覽
@@ -72,9 +73,8 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 執行緒模型（每個 worker 跑在自己的 `QThread`，以 Qt Signal/Slot 溝通；Qt-free
 `EngineController` 管理 camera config、pipeline/analysis topology、recording/replay/shutdown
 state 與 BLE runtime ownership；analysis desired state 在 pipeline 停止時仍由 controller
-保存，engine mode 不建立 analysis checkbox 假元件，legacy Qt checkbox 僅為非 production presentation mirror；camera scan/settings/desktop
-commands 在 engine mode 直接使用 controller，不建立 camera combo/checkbox 假元件；
-`EngineApplication(QObject)` 作 QThread/signal routing 與 runtime adapter，`MainWindow` 僅為暫時相容 alias；Qt multimedia alarm 由 application-owned
+保存；camera scan/settings/desktop commands 直接使用 controller，不再建立或保留 Qt checkbox／camera combo mirror；
+`EngineApplication(QObject)` 作 QThread/signal routing 與 runtime adapter；Qt multimedia alarm 由 application-owned
 `EngineRuntime` 保存；Overlay 偏好由 Qt-free `OverlayRuntimeState` 保存，
 engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter；replay 的資料夾、jobs、
 annotated 與進度投影由 Qt-free `ReplayRuntimeState` 保存，engine mode 不建立 replay
@@ -100,13 +100,12 @@ validation）。設定引發的 Web server restart 必須在
 User/alarm/reset 的 strict JSON validation 位於 Qt-free `gui/desktop_settings_contract.py`；
 hotkey 與 camera validation 分別保留在 Qt adapter 與 `gui/engine_controller.py`。
 Overlay 的 preview/metrics/locked/all/opacity 與 Tauri 視窗 geometry 以
-`OverlayRuntimeState` 為 runtime 與持久化來源；legacy Qt widgets 只在非 engine 路徑作
-presentation mirror。`overlay.geometry` 使用平台中立 physical pixel
+`OverlayRuntimeState` 為 runtime 與持久化來源，不再保留 legacy Qt widget mirror。`overlay.geometry` 使用平台中立 physical pixel
 `{x,y,width,height}`（支援多螢幕負座標）；Tauri 在建立 Overlay 或 Python 權威值明確
 變更時套用 geometry，一般輪詢只回報實際位置與尺寸，由 Flutter 在原生值改變時更新
 Python runtime，`settings.save` 才持久化。
 Replay lifecycle 仍由 `EngineController` 管理；Flutter/Tauri 所需的 replay configuration 與
-progress payload 由 `ReplayRuntimeState` 提供，legacy Qt widgets 僅為 mirror，實際 QThread 與
+progress payload 由 `ReplayRuntimeState` 提供，不再保留 legacy Qt widget mirror；實際 QThread 與
 `VideoReplayWorker` ownership 已由 application-owned `EngineRuntime` 承接；`EngineApplication` 只保留
 worker-specific progress／preview／完成 callback 與 shutdown 重入。此狀態目前不寫入 settings JSON，
 維持既有當次執行設定契約。
@@ -120,8 +119,7 @@ worker、相機／分析 worker topology 或任何 rPPG／疲勞數值路徑。
 Web LAN 偏好由 `WebPreferencesState` 提供 runtime、desktop state 與 settings JSON `web.allow_lan`
 投影；engine mode 不建立 legacy QAction。Web server 建立、shared-token URL 與非阻塞 restart
 仍由 `EngineApplication` adapter 執行，預設維持 localhost-only。
-engine mode 的 runtime 訊息直接寫入 Python logger，不建立 QTextEdit 日誌假元件；legacy
-QTextEdit 與 status bar 僅保留在非 production Qt 路徑。
+engine runtime 訊息直接寫入 Python logger，不再保留 QTextEdit 或 status bar presentation source。
 engine mode 的全域快捷鍵以 `sequence + callback` binding 註冊與分派，不建立 QAction 假元件；
 Windows 原生註冊、thread message dispatch 與清理由 application-level `GlobalHotkeyRuntime` 負責，
 不再依賴 QWidget HWND 或 `nativeEvent()`；legacy 選單 QAction 原始碼不在 production 路徑建立。
@@ -130,14 +128,14 @@ engine `app.shutdown` 先請 `EngineController` 判斷；回放進行中仍只�
 `QApplication.quit()`；production 不再建立 QWidget，也沒有 `closeEvent()`。cleanup 順序固定為快捷鍵、待處理自動採集、
 心跳帶校準／timer／BLE、Web restart／server、錄影、相機 worker、Overlay，且失敗後可重試。live camera 與 combined／rPPG／fatigue adapter 的 QThread／worker reference、
 共同 signal wiring、停止 timeout、join-before-release 與 stale-finish 保護已由 application-owned `EngineRuntime(QObject)` 負責；
-`EngineApplication` 只保留 worker-specific callback、queue／routing 與尚待抽離的 legacy presentation side effect。錄影與回放
+`EngineApplication` 只保留 worker-specific callback、queue／routing 與 headless state side effect。錄影與回放
 worker 的 QThread／worker reference 也已移入 `EngineRuntime`：錄影維持 request-stop + 2000ms join timeout，
 timeout 時保留 ownership；回放只送 cooperative stop request，待 thread finished 後完成 controller state 與
-shutdown deferral。production runtime QTimer ownership 也已移入 `EngineRuntime`；legacy REC presentation timer、
+shutdown deferral。production runtime QTimer ownership 也已移入 `EngineRuntime`；REC presentation timer 已移除，
 Web restart 與 Overlay 自有排程留在各自既有 owner。`EngineRuntime` 亦已承接 `FatigueAlarmController` 與
 `QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput` ownership；`EngineApplication` 只路由 configure、preview 與
 metrics，shutdown 在 camera／analysis producer 停止後冪等關閉 alarm。production adapter 已移除
-`QMainWindow` inheritance；2026-08-17 cleanup 已刪除舊 QSS/theme token 與主頁面 builders，下一個主要邊界是逐組刪除仍保留的不可達 widget imports、compatibility methods 與相容 alias。此抽取不修改警報條件、音量、fallback、strict validation、錯誤映射、
+`QMainWindow` inheritance；2026-08-17 cleanup 已刪除舊 QSS/theme token、主頁面 builders、widget imports、presentation compatibility methods 與 `MainWindow` 相容 alias。個人基線進度改由 desktop state 的 `profile_status` 提供。下一個主要邊界是 parity／效能驗收後繼續縮減僅供 Qt engine runtime 的依賴。此抽取不修改警報條件、音量、fallback、strict validation、錯誤映射、
 metrics 順序、camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI、校準或任何數值行為。
 cleanup 採逐步 best-effort：非 thread step 的例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera 或 analysis
 adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`EngineRuntime.adapter_released`
@@ -151,7 +149,7 @@ engine mode 不建立心跳帶 label、banner、sparkline、calibration bar 或 
 Web metrics 中的 BLE、HRV 與校準狀態。
 engine mode 不再建立任何 `_HeadlessControl` 或 pipeline／recording／camera／profile 的
 button、label、tag 假元件；共用 callback 只更新 controller、runtime 快照、記錄、通知與 Web
-metrics，Qt 文字與按鈕狀態只在非 production legacy 路徑更新。正式 desktop state/command
+metrics，不再保留 Qt 文字、按鈕或狀態列更新分支。正式 desktop state/command
 與 Flutter 控制面板不暴露無實際採樣的示範 benchmark；效能量測只由
 `scripts.desktop_engine_benchmark` 提供。
 

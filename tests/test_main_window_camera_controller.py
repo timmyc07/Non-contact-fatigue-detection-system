@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import gui.main_window as main_window_module  # noqa: E402
 from gui.engine_controller import CameraDevice  # noqa: E402
-from gui.main_window import MainWindow  # noqa: E402
+from gui.main_window import EngineApplication  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -26,7 +26,7 @@ def qt_app() -> QApplication:
 @pytest.fixture
 def camera_window(
     qt_app: QApplication, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> MainWindow:
+) -> EngineApplication:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
         json.dumps(
@@ -42,24 +42,24 @@ def camera_window(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(MainWindow, "_settings_path", lambda self: settings_path)
-    monkeypatch.setattr(MainWindow, "_start_web_server", lambda self: None)
-    monkeypatch.setattr(MainWindow, "_register_global_hotkeys", lambda self: None)
+    monkeypatch.setattr(EngineApplication, "_settings_path", lambda self: settings_path)
+    monkeypatch.setattr(EngineApplication, "_start_web_server", lambda self: None)
+    monkeypatch.setattr(EngineApplication, "_register_global_hotkeys", lambda self: None)
     monkeypatch.setattr(
-        MainWindow,
+        EngineApplication,
         "_start_camera_scan",
         lambda self: self._finish_camera_scan_ui(
             [(0, "Integrated Camera"), (2, "USB Camera")]
         ),
     )
-    window = MainWindow(engine_mode=True)
+    window = EngineApplication(engine_mode=True)
     yield window
     window._engine_runtime.cancel_timer("desktop_command")
     window.close_runtime()
 
 
 def test_camera_settings_commands_state_and_scan_use_controller(
-    camera_window: MainWindow,
+    camera_window: EngineApplication,
 ) -> None:
     window = camera_window
     snapshot = window._engine_controller.camera_snapshot()
@@ -114,11 +114,10 @@ def test_camera_settings_commands_state_and_scan_use_controller(
 
 
 def test_scan_adapter_keeps_unavailable_settings_preference(
-    camera_window: MainWindow,
+    camera_window: EngineApplication,
 ) -> None:
     window = camera_window
     window._engine_controller.restore_camera(9)
-    window._sync_camera_widgets()
     assert window.selected_camera_index == 2
 
     window._finish_camera_scan_ui([(2, "USB Camera"), (9, "Later Camera")])
@@ -186,7 +185,7 @@ class _FakeThread:
 
 
 def test_start_camera_worker_uses_controller_start_spec(
-    camera_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    camera_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window = camera_window
     window._finish_camera_scan_ui([(7, "USB Camera")])

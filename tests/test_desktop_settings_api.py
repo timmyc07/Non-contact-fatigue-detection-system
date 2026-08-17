@@ -12,7 +12,6 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject  # noqa: E402
-from PySide6.QtGui import QAction  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget  # noqa: E402
 
 from gui.alarm_config import AlarmConfig  # noqa: E402
@@ -26,13 +25,13 @@ from gui.desktop_control import (  # noqa: E402
 import gui.main_window as main_window_module  # noqa: E402
 from gui.engine_controller import AnalysisLifecyclePorts, CameraDevice  # noqa: E402
 from gui.global_hotkeys import HotkeyRegistrationFailure  # noqa: E402
-from gui.main_window import EngineApplication, MainWindow, _classify_log_message  # noqa: E402
+from gui.main_window import EngineApplication, _classify_log_message  # noqa: E402
 from gui.video_replay import ReplayVideoSummary  # noqa: E402
 
 
-_REGISTER_GLOBAL_HOTKEYS = MainWindow._register_global_hotkeys
-_SETTINGS_PATH = MainWindow._settings_path
-_RECORDINGS_DIR = MainWindow._recordings_dir
+_REGISTER_GLOBAL_HOTKEYS = EngineApplication._register_global_hotkeys
+_SETTINGS_PATH = EngineApplication._settings_path
+_RECORDINGS_DIR = EngineApplication._recordings_dir
 
 
 @pytest.fixture(scope="module")
@@ -44,26 +43,26 @@ def qt_app() -> QApplication:
 @pytest.fixture
 def settings_window(
     qt_app: QApplication, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> MainWindow:
+) -> EngineApplication:
     settings_path = tmp_path / "settings.json"
-    monkeypatch.setattr(MainWindow, "_settings_path", lambda self: settings_path)
-    monkeypatch.setattr(MainWindow, "_start_web_server", lambda self: None)
-    monkeypatch.setattr(MainWindow, "_register_global_hotkeys", lambda self: None)
-    monkeypatch.setattr(MainWindow, "_start_camera_scan", lambda self: None)
-    window = MainWindow(engine_mode=True)
+    monkeypatch.setattr(EngineApplication, "_settings_path", lambda self: settings_path)
+    monkeypatch.setattr(EngineApplication, "_start_web_server", lambda self: None)
+    monkeypatch.setattr(EngineApplication, "_register_global_hotkeys", lambda self: None)
+    monkeypatch.setattr(EngineApplication, "_start_camera_scan", lambda self: None)
+    window = EngineApplication(engine_mode=True)
     yield window
     window._engine_runtime.cancel_timer("desktop_command")
     window.close_runtime()
 
 
 def _install_runtime_adapter(
-    window: MainWindow, kind: str, worker: object, thread: object
+    window: EngineApplication, kind: str, worker: object, thread: object
 ) -> None:
-    """Install a fake adapter session without restoring MainWindow storage."""
+    """Install a fake adapter session without restoring EngineApplication storage."""
     window._engine_runtime._adapters[kind] = (worker, thread)  # type: ignore[assignment]
 
 
-def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> None:
+def test_state_get_exposes_desktop_settings_v2(settings_window: EngineApplication) -> None:
     state = settings_window._handle_desktop_command("state.get", {})
 
     assert state["desktop_api_version"] == 2
@@ -93,28 +92,29 @@ def test_state_get_exposes_desktop_settings_v2(settings_window: MainWindow) -> N
     assert state["hotkey_registration"]["failures"] == []
     assert state["rppg_enabled"] is False
     assert state["monitor_focus"] is False
+    assert state["profile_status"] == "個人基線：未啟動"
     assert "benchmark_active" not in state
 
 
 def test_engine_runtime_owns_desktop_command_drain_timer(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     assert settings_window._engine_runtime.timer_active("desktop_command") is True
     assert not hasattr(settings_window, "_desktop_control_timer")
 
 
-def test_engine_runtime_owns_belt_tick_timer(settings_window: MainWindow) -> None:
+def test_engine_runtime_owns_belt_tick_timer(settings_window: EngineApplication) -> None:
     assert settings_window._engine_runtime.timer_active("belt_tick") is False
     assert not hasattr(settings_window, "_belt_ui_timer")
 
 
-def test_engine_runtime_owns_auto_capture_timer(settings_window: MainWindow) -> None:
+def test_engine_runtime_owns_auto_capture_timer(settings_window: EngineApplication) -> None:
     assert settings_window._engine_runtime.timer_active("auto_capture") is False
     assert not hasattr(settings_window, "_auto_capture_timer")
 
 
 def test_engine_mode_does_not_construct_legacy_visual_shell(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     assert isinstance(settings_window, QObject)
     assert not isinstance(settings_window, (QWidget, QMainWindow))
@@ -221,7 +221,7 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_tag_rppg",
     ):
         assert not hasattr(settings_window, name)
-    assert settings_window._rec_ui_timer is None
+    assert not hasattr(settings_window, "_rec_ui_timer")
 
 
 def test_engine_application_rejects_legacy_widget_mode(qt_app: QApplication) -> None:
@@ -230,7 +230,7 @@ def test_engine_application_rejects_legacy_widget_mode(qt_app: QApplication) -> 
 
 
 def test_headless_settings_preserve_legacy_window_payload(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     legacy_window = {"geometry": "legacy-geometry", "state": "legacy-state"}
     settings_window._settings_path().write_text(
@@ -246,7 +246,7 @@ def test_headless_settings_preserve_legacy_window_payload(
 
 
 def test_engine_log_messages_use_python_logger(
-    settings_window: MainWindow, caplog: pytest.LogCaptureFixture
+    settings_window: EngineApplication, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.INFO, logger="gui.main_window"):
         settings_window._append_log("pipeline ready")
@@ -277,7 +277,7 @@ def test_log_classification_preserves_legacy_error_color_precedence() -> None:
 
 
 def test_headless_analysis_command_updates_controller_owned_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     state = settings_window._handle_desktop_command(
         "analysis.configure", {"behavior_enabled": False, "rppg_enabled": True}
@@ -291,7 +291,7 @@ def test_headless_analysis_command_updates_controller_owned_state(
 
 
 def test_headless_analysis_state_and_persistence_use_controller_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._handle_desktop_command(
         "analysis.configure",
@@ -309,7 +309,7 @@ def test_headless_analysis_state_and_persistence_use_controller_state(
 
 
 def test_settings_load_restores_controller_owned_analysis_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._settings_path().write_text(
         json.dumps(
@@ -331,7 +331,7 @@ def test_settings_load_restores_controller_owned_analysis_state(
 
 
 def test_capture_preferences_state_and_saved_json_remain_in_sync(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     state = settings_window._handle_desktop_command(
         "preferences.configure",
@@ -357,7 +357,7 @@ def test_capture_preferences_state_and_saved_json_remain_in_sync(
 
 
 def test_settings_load_and_reset_restore_capture_persisted_preferences(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._settings_path().write_text(
         json.dumps(
@@ -393,7 +393,7 @@ def test_settings_load_and_reset_restore_capture_persisted_preferences(
 
 @pytest.mark.parametrize("command", ["auto_capture.configure", "auto_capture.set"])
 def test_auto_capture_commands_reject_non_boolean_include_belt(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     command: str,
 ) -> None:
     args: dict[str, object] = {
@@ -410,7 +410,7 @@ def test_auto_capture_commands_reject_non_boolean_include_belt(
 
 
 def test_auto_capture_command_uses_runtime_timer_without_stopping_existing_recording(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
     settings_window._engine_controller.start_pipeline()
@@ -438,7 +438,7 @@ def test_auto_capture_command_uses_runtime_timer_without_stopping_existing_recor
 
 
 def test_belt_calibration_preference_rolls_back_when_ble_start_fails(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
@@ -461,7 +461,7 @@ def test_belt_calibration_preference_rolls_back_when_ble_start_fails(
 
 
 def test_other_capture_changes_survive_belt_soft_failure_and_mark_dirty(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
@@ -484,7 +484,7 @@ def test_other_capture_changes_survive_belt_soft_failure_and_mark_dirty(
 
 
 def test_capture_preference_rolls_back_when_runtime_adapter_raises(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_dirty = settings_window._settings_dirty
@@ -508,7 +508,7 @@ def test_capture_preference_rolls_back_when_runtime_adapter_raises(
 
 @pytest.mark.parametrize("failure_point", ["calibrator", "timer", "coordinator", "dispatch"])
 def test_belt_calibration_start_failure_cleans_new_runtime_resources(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     failure_point: str,
 ) -> None:
@@ -598,7 +598,7 @@ def test_belt_calibration_start_failure_cleans_new_runtime_resources(
 
 
 def test_belt_calibration_failure_preserves_preexisting_belt_runtime(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
@@ -628,7 +628,7 @@ def test_belt_calibration_failure_preserves_preexisting_belt_runtime(
 
 
 def test_capture_preferences_validate_entire_command_before_applying(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     with pytest.raises(ValueError, match="overlay_locked"):
         settings_window._handle_desktop_command(
@@ -643,7 +643,7 @@ def test_capture_preferences_validate_entire_command_before_applying(
 
 
 def test_session_only_auto_capture_preferences_do_not_mark_settings_dirty(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     state = settings_window._handle_desktop_command(
         "auto_capture.configure",
@@ -656,7 +656,7 @@ def test_session_only_auto_capture_preferences_do_not_mark_settings_dirty(
 
 
 def test_settings_reset_rolls_back_capture_state_when_runtime_adapter_raises(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._capture_preferences.configure(
@@ -683,7 +683,7 @@ def test_settings_reset_rolls_back_capture_state_when_runtime_adapter_raises(
 
 
 def test_overlay_commands_state_and_saved_json_remain_in_sync(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     state = settings_window._handle_desktop_command(
         "preferences.configure",
@@ -719,7 +719,7 @@ def test_overlay_commands_state_and_saved_json_remain_in_sync(
 
 
 def test_overlay_geometry_command_round_trips_through_settings(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     geometry = {"x": -1280, "y": 24, "width": 720, "height": 480}
 
@@ -742,7 +742,7 @@ def test_overlay_geometry_command_round_trips_through_settings(
 
 
 def test_overlay_geometry_unchanged_command_does_not_mark_dirty(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     geometry = {"x": 10, "y": 20, "width": 720, "height": 480}
     settings_window._overlay_state.configure(geometry=geometry)
@@ -763,7 +763,7 @@ def test_overlay_geometry_unchanged_command_does_not_mark_dirty(
     ],
 )
 def test_overlay_geometry_command_rejects_invalid_payload_without_partial_apply(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     geometry: object,
 ) -> None:
     with pytest.raises(ValueError, match="geometry"):
@@ -779,7 +779,7 @@ def test_overlay_geometry_command_rejects_invalid_payload_without_partial_apply(
 
 
 def test_settings_load_and_reset_restore_overlay_runtime_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._settings_path().write_text(
@@ -825,7 +825,7 @@ def test_settings_load_and_reset_restore_overlay_runtime_state(
 
 
 def test_overlay_reset_sections_do_not_change_each_other(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._handle_desktop_command(
         "overlay.configure", {"all": False, "opacity": 81}
@@ -867,7 +867,7 @@ def test_overlay_reset_sections_do_not_change_each_other(
 
 
 def test_running_analysis_command_reconciles_two_changes_once(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
     settings_window._engine_controller.configure_analysis(
@@ -896,7 +896,7 @@ def test_running_analysis_command_reconciles_two_changes_once(
 
 
 def test_running_analysis_command_rolls_back_controller_state_on_reconcile_failure(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
     settings_window._engine_controller.configure_analysis(
@@ -924,7 +924,7 @@ def test_running_analysis_command_rolls_back_controller_state_on_reconcile_failu
 
 
 def test_running_analysis_command_cleans_adapters_after_fail_closed(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
     settings_window._engine_controller.configure_analysis(
@@ -958,7 +958,7 @@ def test_running_analysis_command_cleans_adapters_after_fail_closed(
 
 
 def test_fail_closed_pipeline_cleanup_releases_live_adapter_resources(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[object] = []
 
@@ -1006,7 +1006,7 @@ def test_fail_closed_pipeline_cleanup_releases_live_adapter_resources(
 
 
 def test_fail_closed_pipeline_keeps_camera_ownership_when_thread_times_out(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeCameraWorker:
         def detach_bgr_queue(self) -> None:
@@ -1047,7 +1047,7 @@ def test_fail_closed_pipeline_keeps_camera_ownership_when_thread_times_out(
 
 
 def test_late_camera_finish_releases_pending_cleanup_and_allows_replay(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeCameraWorker:
         def detach_bgr_queue(self) -> None:
@@ -1088,7 +1088,7 @@ def test_late_camera_finish_releases_pending_cleanup_and_allows_replay(
 
 
 def test_headless_hotkeys_update_overlay_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._on_global_hotkey(1)
     state = settings_window._handle_desktop_command("state.get", {})
@@ -1109,7 +1109,7 @@ def test_headless_hotkeys_update_overlay_state(
 
 
 def test_engine_hotkey_bindings_dispatch_all_six_callbacks(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
@@ -1144,39 +1144,8 @@ def test_engine_hotkey_bindings_dispatch_all_six_callbacks(
         assert calls == [*before, callback_name]
 
 
-def test_legacy_hotkeys_update_real_actions_and_dispatch(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-    names = ("metrics", "preview", "pipeline", "locked", "all", "recording")
-    actions = tuple(QAction(settings_window) for _name in names)
-    for action, name in zip(actions, names, strict=True):
-        action.triggered.connect(
-            lambda _checked=False, callback_name=name: calls.append(callback_name)
-        )
-    monkeypatch.setattr(settings_window, "_engine_mode", False)
-    monkeypatch.setattr(settings_window, "_menu_actions_hotkeys", actions, raising=False)
-    monkeypatch.setattr(settings_window, "_register_global_hotkeys", lambda: None)
-
-    settings_window._apply_hotkey_shortcuts()
-
-    assert [action.shortcut().toString() for action in actions] == [
-        "Ctrl+Alt+O",
-        "Ctrl+Alt+P",
-        "Ctrl+Alt+S",
-        "Ctrl+Alt+F8",
-        "Ctrl+Alt+A",
-        "Ctrl+Alt+F9",
-    ]
-    for hotkey_id, name in enumerate(names, start=1):
-        before = list(calls)
-        settings_window._on_global_hotkey(hotkey_id)
-        assert calls == [*before, name]
-    settings_window._engine_mode = True
-
-
 def test_engine_application_does_not_expose_legacy_widget_renderers(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     for name in (
         "_build_central",
@@ -1185,32 +1154,26 @@ def test_engine_application_does_not_expose_legacy_widget_renderers(
         "_build_replay_page",
         "_build_settings_page",
         "_replay_queue_upsert",
+        "_set_legacy_text",
+        "_set_legacy_enabled",
     ):
         assert not hasattr(settings_window, name)
 
 
-def test_engine_belt_renderers_do_not_read_presentation_data(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+def test_engine_application_does_not_expose_belt_renderers(
+    settings_window: EngineApplication,
 ) -> None:
-    monkeypatch.setattr(
-        settings_window._engine_controller,
-        "belt_status",
-        lambda: (_ for _ in ()).throw(AssertionError("belt status must not be rendered")),
-    )
-    monkeypatch.setattr(
-        settings_window._engine_controller,
-        "belt_samples",
-        lambda: (_ for _ in ()).throw(AssertionError("belt samples must not be rendered")),
-    )
-
-    settings_window._refresh_belt_cfg_labels()
-    settings_window._update_belt_status_label()
-    settings_window._reset_belt_panel()
-    settings_window._update_belt_panel()
+    for name in (
+        "_refresh_belt_cfg_labels",
+        "_update_belt_status_label",
+        "_reset_belt_panel",
+        "_update_belt_panel",
+    ):
+        assert not hasattr(settings_window, name)
 
 
 def test_engine_belt_tick_keeps_calibration_and_coordinator_side_effects(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Calibrator:
         def __init__(self) -> None:
@@ -1261,8 +1224,8 @@ def test_engine_belt_tick_keeps_calibration_and_coordinator_side_effects(
     assert coordinator_ticks == [calibrator, calibrator]
 
 
-def test_engine_runtime_callbacks_do_not_require_legacy_status_controls(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+def test_engine_runtime_callbacks_update_headless_state_without_legacy_controls(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     emitted: list[bool] = []
     monkeypatch.setattr(
@@ -1271,11 +1234,6 @@ def test_engine_runtime_callbacks_do_not_require_legacy_status_controls(
         lambda *args, **kwargs: emitted.append(bool(kwargs.get("force", False))),
     )
 
-    settings_window._on_combined_status("ready")
-    settings_window._on_face_detected(True)
-    settings_window._on_rppg_status("running")
-    settings_window._on_fatigue_face_detected(False)
-    settings_window._on_fatigue_status("running")
     settings_window._on_camera_info("MJPG", 1280, 720, 30.0)
     settings_window._on_fps(29.5)
     settings_window._set_profile_status("個人基線：測試")
@@ -1286,11 +1244,12 @@ def test_engine_runtime_callbacks_do_not_require_legacy_status_controls(
         "height": 720,
     }
     assert settings_window._last_fps == 29.5
+    assert settings_window._desktop_control_state()["profile_status"] == "個人基線：測試"
     assert emitted == [True, False]
 
 
 def test_engine_metric_callbacks_keep_non_visual_side_effects(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rppg_metrics = object()
     fatigue_metrics = object()
@@ -1362,7 +1321,7 @@ def test_engine_metric_callbacks_keep_non_visual_side_effects(
     ],
 )
 def test_headless_worker_failure_applies_analysis_cleanup(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     failure_handler: str,
     stop_method: str,
@@ -1373,7 +1332,6 @@ def test_headless_worker_failure_applies_analysis_cleanup(
         fatigue_enabled=behavior,
         rppg_enabled=rppg,
     )
-    settings_window._sync_analysis_controls()
     monkeypatch.setattr(settings_window, stop_method, lambda: None)
     monkeypatch.setattr(settings_window, "_append_log", lambda _message: None)
     monkeypatch.setattr(settings_window, "_notify_user", lambda _title, _message: None)
@@ -1386,7 +1344,7 @@ def test_headless_worker_failure_applies_analysis_cleanup(
 
 
 def test_hotkeys_configure_replaces_all_shortcuts(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registrations = 0
 
@@ -1418,7 +1376,7 @@ def test_hotkeys_configure_replaces_all_shortcuts(
 
 
 def test_hotkeys_configure_rolls_back_when_apply_fails(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     applied_metrics: list[str] = []
 
@@ -1449,7 +1407,7 @@ def test_hotkeys_configure_rolls_back_when_apply_fails(
 
 
 def test_global_hotkey_registration_failures_are_exposed_in_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     class Runtime:
         supported = True
@@ -1516,7 +1474,7 @@ def test_global_hotkey_registration_failures_are_exposed_in_state(
     ],
 )
 def test_hotkeys_configure_rejects_invalid_full_replacement(
-    settings_window: MainWindow, hotkeys: dict[str, object]
+    settings_window: EngineApplication, hotkeys: dict[str, object]
 ) -> None:
     before = settings_window._handle_desktop_command("state.get", {})["hotkeys"]
 
@@ -1529,7 +1487,7 @@ def test_hotkeys_configure_rejects_invalid_full_replacement(
 
 
 def test_user_profile_configure_accepts_boundaries_and_derives_bmi(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     state = settings_window._handle_desktop_command(
         "user_profile.configure",
@@ -1562,7 +1520,7 @@ def test_user_profile_configure_accepts_boundaries_and_derives_bmi(
     ],
 )
 def test_user_profile_configure_rejects_invalid_values(
-    settings_window: MainWindow, user_profile: dict[str, object]
+    settings_window: EngineApplication, user_profile: dict[str, object]
 ) -> None:
     with pytest.raises(ValueError, match="user_profile"):
         settings_window._handle_desktop_command(
@@ -1590,7 +1548,7 @@ def _alarm_payload(**changes: object) -> dict[str, object]:
 
 
 def test_alarm_configure_updates_runtime_controller(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     alarm = _alarm_payload()
 
@@ -1617,7 +1575,7 @@ def test_alarm_configure_updates_runtime_controller(
     ],
 )
 def test_alarm_configure_rejects_invalid_values(
-    settings_window: MainWindow, changes: dict[str, object]
+    settings_window: EngineApplication, changes: dict[str, object]
 ) -> None:
     with pytest.raises(ValueError, match="alarm"):
         settings_window._handle_desktop_command(
@@ -1626,7 +1584,7 @@ def test_alarm_configure_rejects_invalid_values(
 
 
 def test_alarm_configure_rejects_missing_file_without_fallback(
-    settings_window: MainWindow, tmp_path: Path
+    settings_window: EngineApplication, tmp_path: Path
 ) -> None:
     scenarios = _alarm_payload()["scenarios"]
     assert isinstance(scenarios, dict)
@@ -1664,7 +1622,7 @@ class _PlaybackSpy:
 
 
 def test_alarm_test_uses_draft_without_mutating_runtime(
-    settings_window: MainWindow, tmp_path: Path
+    settings_window: EngineApplication, tmp_path: Path
 ) -> None:
     sound_path = tmp_path / "draft.wav"
     sound_path.write_bytes(b"RIFF")
@@ -1698,7 +1656,7 @@ def test_alarm_test_uses_draft_without_mutating_runtime(
     }
 
 
-def test_alarm_test_reports_builtin_source(settings_window: MainWindow) -> None:
+def test_alarm_test_reports_builtin_source(settings_window: EngineApplication) -> None:
     runtime = AlarmConfig.defaults()
     playback = _PlaybackSpy()
     settings_window._alarm_config = runtime
@@ -1715,7 +1673,7 @@ def test_alarm_test_reports_builtin_source(settings_window: MainWindow) -> None:
 
 
 def test_alarm_test_raises_typed_error_when_no_source(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     draft = _alarm_payload(use_builtin_fallback=False)
 
@@ -1728,7 +1686,7 @@ def test_alarm_test_raises_typed_error_when_no_source(
 
 
 def test_settings_reset_only_resets_selected_sections(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._handle_desktop_command(
         "hotkeys.configure",
@@ -1770,7 +1728,7 @@ def test_settings_reset_only_resets_selected_sections(
 
 
 def test_settings_save_persists_atomically_and_clears_dirty(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._handle_desktop_command(
         "user_profile.configure",
@@ -1791,7 +1749,7 @@ def test_settings_save_persists_atomically_and_clears_dirty(
 
 
 def test_settings_and_recordings_use_configured_data_root(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1812,7 +1770,7 @@ def test_settings_and_recordings_use_configured_data_root(
 
 
 def test_settings_save_replace_failure_preserves_old_file_and_dirty_state(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_path = settings_window._settings_path()
     old_content = '{"sentinel":"old"}'
@@ -1840,7 +1798,7 @@ def test_settings_save_replace_failure_preserves_old_file_and_dirty_state(
 
 
 def test_settings_save_logs_temp_cleanup_failure(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1871,7 +1829,7 @@ def test_settings_save_logs_temp_cleanup_failure(
     ],
 )
 def test_persisted_configure_commands_mark_settings_dirty(
-    settings_window: MainWindow, command: str, args: dict[str, object]
+    settings_window: EngineApplication, command: str, args: dict[str, object]
 ) -> None:
     assert settings_window._handle_desktop_command("state.get", {})["settings_dirty"] is False
 
@@ -1881,7 +1839,7 @@ def test_persisted_configure_commands_mark_settings_dirty(
 
 
 def test_web_lan_marks_dirty_and_schedules_nonblocking_restart(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     scheduled: list[bool] = []
     monkeypatch.setattr(
@@ -1901,7 +1859,7 @@ def test_web_lan_marks_dirty_and_schedules_nonblocking_restart(
 
 
 def test_headless_web_preference_round_trip_preserves_bind_contract(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._settings_path().write_text(
         json.dumps({"web": {"allow_lan": True}}),
@@ -1919,36 +1877,6 @@ def test_headless_web_preference_round_trip_preserves_bind_contract(
     assert persisted["web"] == {"allow_lan": True}
 
 
-def test_legacy_web_action_updates_state_saves_and_schedules_restart(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    action = QAction(settings_window)
-    action.setCheckable(True)
-    settings_window._act_web_allow_lan = action
-    action.toggled.connect(settings_window._on_web_allow_lan_toggled)
-    scheduled: list[bool] = []
-    monkeypatch.setattr(
-        settings_window,
-        "_schedule_web_server_restart",
-        lambda: scheduled.append(True),
-    )
-
-    settings_window._engine_mode = False
-    try:
-        action.setChecked(True)
-    finally:
-        settings_window._engine_mode = True
-
-    persisted = json.loads(
-        settings_window._settings_path().read_text(encoding="utf-8")
-    )
-    assert settings_window._web_preferences.snapshot().allow_lan is True
-    assert action.isChecked() is True
-    assert persisted["web"] == {"allow_lan": True}
-    assert settings_window._settings_dirty is False
-    assert scheduled == [True]
-
-
 @pytest.mark.parametrize(
     ("command", "args", "error"),
     [
@@ -1961,7 +1889,7 @@ def test_legacy_web_action_updates_state_saves_and_schedules_restart(
     ],
 )
 def test_engine_rejects_retired_qt_visible_actions(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     command: str,
     args: dict[str, object],
@@ -1979,7 +1907,7 @@ def test_engine_rejects_retired_qt_visible_actions(
 
 @pytest.mark.parametrize("mode", ["single", "parallel"])
 def test_replay_commands_configure_start_and_stop(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     mode: str,
@@ -2018,7 +1946,7 @@ def test_replay_commands_configure_start_and_stop(
 
 
 def test_headless_replay_state_does_not_depend_on_legacy_widget_mirrors(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     tmp_path: Path,
 ) -> None:
     configured = settings_window._handle_desktop_command(
@@ -2034,7 +1962,7 @@ def test_headless_replay_state_does_not_depend_on_legacy_widget_mirrors(
 
 
 def test_replay_configure_is_atomic_when_later_field_is_invalid(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     tmp_path: Path,
 ) -> None:
     before = settings_window._replay_state.snapshot()
@@ -2049,7 +1977,7 @@ def test_replay_configure_is_atomic_when_later_field_is_invalid(
 
 
 def test_headless_replay_progress_projects_without_qt_replay_widgets(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     summary = ReplayVideoSummary(
         subject="01",
@@ -2078,7 +2006,7 @@ def test_headless_replay_progress_projects_without_qt_replay_widgets(
 
 
 def test_replay_runtime_state_supplies_existing_worker_parameters(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2152,7 +2080,7 @@ def test_replay_runtime_state_supplies_existing_worker_parameters(
 
 
 def test_replay_start_failure_rolls_back_controller_and_presentation(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2217,7 +2145,7 @@ def test_replay_start_failure_rolls_back_controller_and_presentation(
 
 
 def test_replay_command_uses_controller_pipeline_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2248,7 +2176,7 @@ def test_replay_command_uses_controller_pipeline_state(
 
 
 def test_replay_start_rechecks_controller_before_creating_adapter(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2287,7 +2215,7 @@ def test_replay_start_rechecks_controller_before_creating_adapter(
 
 
 def test_app_shutdown_command_defers_cleanup_through_engine_runtime(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scheduled: list[tuple[int, object]] = []
@@ -2306,7 +2234,7 @@ def test_app_shutdown_command_defers_cleanup_through_engine_runtime(
 
 
 def test_engine_shutdown_waits_for_active_replay(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
     replay_thread = object()
@@ -2338,7 +2266,7 @@ def test_engine_shutdown_waits_for_active_replay(
 
 
 def test_engine_shutdown_cleans_runtime_before_quit_without_closing_window(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
 
@@ -2371,19 +2299,13 @@ def test_engine_shutdown_cleans_runtime_before_quit_without_closing_window(
 
 
 def test_engine_shutdown_resumes_after_replay_thread_finishes(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
     replay_thread = object()
     _install_runtime_adapter(settings_window, "replay", object(), replay_thread)
     settings_window._engine_controller.start_replay()
     assert settings_window._engine_controller.request_shutdown() == "stop_replay"
-    monkeypatch.setattr(
-        settings_window,
-        "_set_replay_controls_running",
-        lambda running: events.append(f"controls:{running}"),
-    )
-
     def cleanup_runtime() -> bool:
         events.append("cleanup")
         return True
@@ -2411,11 +2333,11 @@ def test_engine_shutdown_resumes_after_replay_thread_finishes(
     assert settings_window._replay_thread is None
     assert settings_window._replay_worker is None
     assert settings_window._engine_controller.replay_snapshot().running is False
-    assert events == ["controls:False", "cleanup", "quit"]
+    assert events == ["cleanup", "quit"]
 
 
 def test_engine_shutdown_resumes_only_after_adapter_thread_finishes(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
     cleanup_results = [False, True]
@@ -2460,7 +2382,7 @@ def test_engine_shutdown_resumes_only_after_adapter_thread_finishes(
 
 
 def test_engine_shutdown_retries_cleanup_error_before_quit(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
     cleanup_results = [False, True]
@@ -2498,7 +2420,7 @@ def test_engine_shutdown_retries_cleanup_error_before_quit(
 
 
 def test_runtime_cleanup_is_ordered_and_idempotent(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
 
@@ -2579,7 +2501,7 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
 
 
 def test_runtime_cleanup_guard_allows_retry_after_failure(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original_unregister = settings_window._unregister_global_hotkeys
     attempts = 0
@@ -2609,7 +2531,7 @@ def test_runtime_cleanup_guard_allows_retry_after_failure(
 
 
 def test_camera_failure_stops_active_recording_runtime(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     events: list[object] = []
 
@@ -2665,7 +2587,7 @@ def test_camera_failure_stops_active_recording_runtime(
 
 
 def test_camera_failure_timeout_blocks_replay_until_adapter_release(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeCameraWorker:
@@ -2703,7 +2625,7 @@ def test_camera_failure_timeout_blocks_replay_until_adapter_release(
 
 
 def test_pipeline_command_rolls_back_when_replay_is_active(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
@@ -2739,7 +2661,7 @@ def test_pipeline_command_rolls_back_when_replay_is_active(
 
 
 def test_pipeline_command_uses_controller_snapshot_for_success_and_stop(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
@@ -2775,7 +2697,7 @@ def test_pipeline_command_uses_controller_snapshot_for_success_and_stop(
 
 @pytest.mark.parametrize("failure_stage", ["camera", "analysis"])
 def test_pipeline_command_rolls_back_adapter_start_failure(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
     failure_stage: str,
 ) -> None:
@@ -2813,7 +2735,7 @@ def test_pipeline_command_rolls_back_adapter_start_failure(
 
 
 def test_state_get_uses_controller_lifecycle_snapshot(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._pipeline_running = True
     settings_window._recording = True
@@ -2825,7 +2747,7 @@ def test_state_get_uses_controller_lifecycle_snapshot(
 
 
 def test_recording_command_rolls_back_partial_writer_failure(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -2882,7 +2804,7 @@ def test_recording_command_rolls_back_partial_writer_failure(
 
 
 def test_recording_command_uses_controller_pipeline_state(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     settings_window._pipeline_running = True
 
@@ -2897,7 +2819,7 @@ def test_recording_command_uses_controller_pipeline_state(
 
 
 def test_video_failure_stops_all_recording_resources(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
@@ -2924,7 +2846,7 @@ def test_video_failure_stops_all_recording_resources(
 
 
 def test_video_warning_keeps_recording_active(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
@@ -2946,7 +2868,7 @@ def test_video_warning_keeps_recording_active(
 
 
 def test_recording_stop_keeps_video_ownership_when_thread_times_out(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeVideoWorker:
@@ -2990,7 +2912,7 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
 
 
 def test_recording_start_rejects_previous_video_cleanup(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     thread = object()
     _install_runtime_adapter(settings_window, "video", object(), thread)
@@ -3002,7 +2924,7 @@ def test_recording_start_rejects_previous_video_cleanup(
 
 
 def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeCameraWorker:
         def detach_bgr_queue(self) -> None:
@@ -3039,7 +2961,7 @@ def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(
 
 
 def test_analysis_command_allows_raw_camera_mode(
-    settings_window: MainWindow,
+    settings_window: EngineApplication,
 ) -> None:
     state = settings_window._handle_desktop_command(
         "analysis.configure",
@@ -3051,7 +2973,7 @@ def test_analysis_command_allows_raw_camera_mode(
 
 
 def test_web_reset_updates_state_and_schedules_nonblocking_restart(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings_window._web_preferences.configure(allow_lan=True)
     scheduled: list[bool] = []
@@ -3071,7 +2993,7 @@ def test_web_reset_updates_state_and_schedules_nonblocking_restart(
 
 
 def test_web_restart_is_background_and_coalesced(
-    settings_window: MainWindow, qt_app: QApplication, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, qt_app: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     main_thread = __import__("threading").get_ident()
     stop_threads: list[int] = []
@@ -3105,7 +3027,7 @@ def test_web_restart_is_background_and_coalesced(
 
 
 def test_web_restart_does_not_rebind_while_old_server_is_alive(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Server:
         @staticmethod
@@ -3135,7 +3057,7 @@ def test_web_restart_does_not_rebind_while_old_server_is_alive(
 
 
 def test_web_restart_callback_does_not_start_server_during_shutdown(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     starts: list[bool] = []
     settings_window._web_restart_shutdown = True
@@ -3156,7 +3078,7 @@ def test_web_restart_callback_does_not_start_server_during_shutdown(
 
 
 def test_web_restart_starts_when_server_exits_just_after_stop_timeout(
-    settings_window: MainWindow, monkeypatch: pytest.MonkeyPatch
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     starts: list[bool] = []
     settings_window._web_restart_in_progress = True

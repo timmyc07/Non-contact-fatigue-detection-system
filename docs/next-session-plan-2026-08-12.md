@@ -6,9 +6,9 @@
 
 目前狀態：live camera、analysis、錄影與 Replay QThread／worker、production runtime QTimer，以及
 alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；production adapter 已改為
-`EngineApplication(QObject)`，不再建立 `QMainWindow`／QWidget。本次收尾已移除舊 QSS/theme token、主頁面 builders
-與不可達的 dashboard/monitor/belt/replay/settings renderer；保留的 QtWidgets 只屬於 legacy 相容方法與測試契約，
-明日再分批移除，避免一次改動擴大到 runtime 行為。
+`EngineApplication(QObject)`，不再建立 `QMainWindow`／QWidget。本次已移除舊 QSS/theme token、主頁面 builders、
+dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentation compatibility methods；
+個人基線顯示狀態改由 desktop state 的 `profile_status` 提供。
 
 ## 本階段完成狀態
 
@@ -18,9 +18,8 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
   monitor、心跳帶、camera、recording、profile 等 Qt 假控件。
 - `EngineController` 與 Qt-free runtime state 已承接 camera、analysis topology、pipeline、
   recording、replay、shutdown、BLE、overlay、capture 及 Web preference 的正式狀態。
-- Python/Qt production 路徑只保留 `QApplication`、`QThread`、`QTimer`、signal/slot 與
-  `EngineApplication(QObject)` runtime adapter；`gui/main_window.py` 的舊 widget imports/compatibility methods
-  尚未完全移除，但 engine mode 不會建立或渲染它們。
+- Python/Qt production 路徑只保留 `QApplication`、`QThread`、`QTimer`、signal/slot、image transport 與
+  `EngineApplication(QObject)` runtime adapter；`gui/main_window.py` 已無 widget imports 或 widget 欄位存取。
   Windows native hotkey 已由
   application-level `GlobalHotkeyRuntime` 承接，不再需要原生主視窗。
 - engine `app.shutdown` 已先保留 active replay 的停止／延後結束 gate；其餘 engine 路徑直接以可重入
@@ -32,31 +31,32 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
   Tauri 只在等待 6 秒後仍未結束時才作最後的 child-process kill fallback。
 - live camera 與 combined／rPPG／fatigue adapter 已改由 application-owned `EngineRuntime(QObject)` 建立並
   保存 QThread／worker；共同 signal wiring、原 timeout、join-before-release 與 stale-finish 保護集中於 runtime。`EngineApplication`
-  僅保留 worker-specific callback、queue／routing 與 legacy presentation side effect。
+  僅保留 worker-specific callback、queue／routing 與 headless state side effect。
 - 錄影與 Replay QThread／worker ownership 也已移入 `EngineRuntime`。錄影維持原 request-stop、2000ms wait
   timeout 與 late-finish cleanup；Replay 維持非同步 cooperative stop、deterministic timestamp、報表輸出與
   shutdown deferral，完成後由 adapter release callback 重入 controller／shutdown。
 - desktop command drain、心跳帶 1 秒 tick、自動採集 one-shot 與 shutdown defer/retry 的 QTimer ownership
-  已移入 `EngineRuntime`。`EngineApplication` 只保留既有 callback；legacy REC presentation timer、Web restart 與
+  已移入 `EngineRuntime`。`EngineApplication` 只保留既有 callback；REC presentation timer 已移除，Web restart 與
   Overlay 自有排程維持各自既有 owner。
 - `EngineRuntime` 已承接 `FatigueAlarmController` 與 `QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput`；
   `EngineApplication` 只路由 configure、preview 與 metrics。shutdown 在 camera／analysis producer 停止後冪等 close alarm。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證（本次 cleanup 後）：Python `743 passed, 2 skipped`、
-  alarm controller + engine runtime + desktop settings focused slice 通過、
+- 最近一次完整驗證（本次 cleanup 後）：Python `741 passed, 2 skipped`、
+  相關 focused slice `212 passed`、
   Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
   PyInstaller、Tauri release/NSIS、source/bundled engine shutdown、`compileall` 與 `pip check` 均通過。
-- 本切片最近兩次重複 benchmark：RSS `256.172/256.113 MiB`、API ready
-  `1839.081/2453.306 ms`、`state.get` p50 `20.302/20.048 ms`、synthetic JPEG p50
-  `1.173/1.163 ms`；第二次 readiness 視為環境噪聲，不宣稱改善。原始結果見
+- 完整 pytest 第一次在 Windows Qt offscreen 的既有 `test_preview_overlay_window.py` 發生 access violation；
+  隔離重跑 `2 passed`，完整重跑通過。此環境處置已寫入 `CLAUDE.md`。
+- 本切片最近兩次重複 benchmark：RSS `254.062/253.805 MiB`、API ready
+  `1846.225/1843.543 ms`、`state.get` p50 `20.610/20.327 ms`、synthetic JPEG p50
+  `1.166/1.263 ms`。相較前一個 QMainWindow removal 切片，RSS 約降低 `2.1-2.3 MiB`；
+  啟動、IPC 與 JPEG 差異仍屬噪聲，不宣稱改善。原始結果見
+  `docs/benchmarks/desktop-engine-legacy-ui-cleanup-2026-08-17-run1.json` 與 `run2.json`。
+  前一切片原始結果見
   `docs/benchmarks/desktop-engine-qmainwindow-removal-2026-08-17-run1.json` 與 `run2.json`。
-  前一切片 benchmark：RSS `256.434/256.199 MiB`、API ready
-  `1845.500/1850.936 ms`、`state.get` p50 `20.121/20.207 ms`、synthetic JPEG p50
-  `1.157/1.146 ms`；原始結果見
-  `docs/benchmarks/desktop-engine-runtime-alarm-ownership-2026-08-17-run1.json` 與 `run2.json`。
-  本切片 packaged smoke 見
-  `docs/benchmarks/packaged-engine-qmainwindow-removal-2026-08-17.json`；installed shell 正常關閉已通過。
+- 完整 PyInstaller、Tauri release/NSIS 與 isolated installed smoke 已通過：install exit `0`、
+  desktop API v2、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除。
 
 以上變更未修改 camera frame routing、worker topology、錄影、警報條件／音量／fallback／strict validation／
 錯誤映射／metrics 順序、BLE 樣本、回放、rPPG、疲勞分數、ROI、校準或任何數值閾值。
@@ -64,15 +64,16 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
 ## 已知剩餘缺口
 
 1. Python engine 已使用 `QApplication + EngineApplication(QObject)` 作 runtime 容器，正式路徑沒有 QWidget。
-   本次已刪除舊主頁面 builders 與 QSS；`gui/main_window.py` 仍保留 QtWidgets imports、legacy compatibility methods
-   與 `MainWindow = EngineApplication` alias。下一切片應逐組確認呼叫者後移除，並保持 engine adapter API 與數值契約。
+   舊主頁面 builders、QSS、QtWidgets imports、presentation compatibility methods 與
+   `MainWindow = EngineApplication` alias 已移除；測試與 benchmark 已改用正式類名。
 2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
+3. 本機沒有 UTA-RLDD 資料集，因此本切片無法執行 golden/replay；演算法與數值路徑未修改。
 
 ## 下一階段執行順序
 
 1. **已完成：移除正式面板的假 benchmark（中量）**
    - Flutter、desktop API state/command 與 legacy Qt code 不再包含示範 benchmark。
-   - `scripts/desktop_engine_benchmark.py`、其測試、文件與基準資料維持不變。
+   - `scripts/desktop_engine_benchmark.py` 已改用正式 `EngineApplication` 類名，仍是唯一效能量測入口。
    - contract/UI 測試防止示範功能再次進入正式面板。
 
 2. **進行 Qt runtime adapter 抽離（重量）**
@@ -90,14 +91,16 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
      configure／preview／metrics，cleanup 在 producer 停止後冪等 close。
    - **已完成：** 移除 production `QMainWindow` inheritance，改為 `EngineApplication(QObject)`，加入
      `close_runtime()` 與 legacy window payload round-trip。
-   - **下一步：** 先清理可證明不可達的 renderer helper/import，再以全量測試確認後移除 `MainWindow` compatibility alias。
+   - **已完成：** 清理 renderer helper/import 與 widget callsites，個人基線狀態改由 headless state 提供。
+   - **已完成：** 移除 `MainWindow` compatibility alias，測試與 benchmark 改用 `EngineApplication`。
+   - **已完成：** cleanup 後全量跨端測試、packaged smoke 與兩次效能 benchmark。
    - 每個切片維持 desktop API v2、worker topology 與數值輸出不變。
 
-3. **完成 parity 與效能驗收**
-   - 驗證主 WebView、engine child、overlay、視窗控制、設定、camera、recording、replay、BLE、
-     notification、alarm 與正常 shutdown。
-   - 使用固定 benchmark 參數比較 API ready、process-tree RSS、IPC 與 preview latency。
-   - 有 UTA-RLDD 資料集時執行 golden/replay 零漂移檢查。
+3. **繼續 parity 與效能驗收**
+   - **明日續作：** 使用實體 camera 與 BLE 裝置驗證主 WebView、engine child、overlay、視窗控制、
+     設定、recording、replay、notification、alarm 與正常 shutdown。
+   - **已完成：** 使用固定 benchmark 參數比較 API ready、process-tree RSS、IPC 與 synthetic preview latency。
+   - **待資料集：** 有 UTA-RLDD 資料集時執行 golden/replay 零漂移檢查。
    - isolated NSIS smoke 已固化為 `scripts.installed_desktop_smoke`：只向 class=`Tauri Window`
      的主視窗送 WM_CLOSE，不得關閉 `Tao Thread Event Target` 等事件泵 helper HWND。
 

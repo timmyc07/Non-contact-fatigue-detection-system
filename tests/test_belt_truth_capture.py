@@ -12,7 +12,7 @@
    ``_maybe_capture_belt_truth``：OFF（預設 None）時逐位元不變（不呼叫 writer），
    ON 時把本幀 per-ROI 均值轉送給 writer.record()；run() 原始碼守衛確認兩條
    worker 的呼叫點都在 push_roi_means 之後、per_roi_means 存在時才觸發。
-5. ``gui.main_window.MainWindow._dispatch_belt_truth_capture``：轉發給兩個 worker、
+5. ``gui.main_window.EngineApplication._dispatch_belt_truth_capture``：轉發給兩個 worker、
    容忍兩者皆為 None。
 """
 
@@ -342,7 +342,7 @@ def test_combined_worker_run_source_calls_maybe_capture_after_push_roi_means():
 # ── gui.main_window._dispatch_belt_truth_capture（fake self）─────────────────
 
 def test_dispatch_belt_truth_capture_forwards_to_both_workers():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     calls = {"combined": [], "rppg": []}
     fake = SimpleNamespace(
@@ -351,14 +351,14 @@ def test_dispatch_belt_truth_capture_forwards_to_both_workers():
     )
     writer = _FakeWriter()
 
-    MainWindow._dispatch_belt_truth_capture(fake, writer)  # type: ignore[arg-type]
+    EngineApplication._dispatch_belt_truth_capture(fake, writer)  # type: ignore[arg-type]
 
     assert calls["combined"] == [writer]
     assert calls["rppg"] == [writer]
 
 
 def test_dispatch_belt_truth_capture_tolerates_no_active_worker():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     fake = SimpleNamespace(_combined_worker=None, _rppg_worker=None)
-    MainWindow._dispatch_belt_truth_capture(fake, None)  # 不應丟例外
+    EngineApplication._dispatch_belt_truth_capture(fake, None)  # 不應丟例外

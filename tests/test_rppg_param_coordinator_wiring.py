@@ -3,13 +3,13 @@
 涵蓋三層接線（皆須在 OFF／無候選時逐位元不變）：
 1. ``RppgWorker`` / ``CombinedWorker`` 的 ``set_candidate_roi_weights`` pending-flag
    與 ``_maybe_emit_candidate_bpm`` 低頻重算分支（OFF 早退、ON 才發射訊號）。
-2. ``gui.main_window.MainWindow._tick_rppg_param_coordinator`` GUI 薄接線
+2. ``gui.main_window.EngineApplication._tick_rppg_param_coordinator`` GUI 薄接線
    （協調層為 None 時整段不動作）。
 3. ``_on_candidate_bpm_ready`` / ``_adopt_rppg_param_candidate`` /
    ``_dispatch_candidate_roi_weights`` / ``_resolve_current_roi_weights`` 的判斷邏輯。
 
-測試策略：以 ``SimpleNamespace`` 充當 ``MainWindow`` 的 fake self，把未綁定方法
-（``MainWindow._method``）直接餵 fake self 呼叫——只測真正的接線程式碼，不建構
+測試策略：以 ``SimpleNamespace`` 充當 ``EngineApplication`` 的 fake self，把未綁定方法
+（``EngineApplication._method``）直接餵 fake self 呼叫——只測真正的接線程式碼，不建構
 完整 QApplication / 真實 GUI（過重且非必要）。
 """
 
@@ -243,20 +243,20 @@ def _fake_main_window(**overrides) -> SimpleNamespace:
 
 
 def test_tick_rppg_param_coordinator_off_when_coordinator_none():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     dispatched = []
     fake = _fake_main_window(_dispatch_candidate_roi_weights=lambda w: dispatched.append(w))
     cal = _FakeCal(AdaptiveCalibState(confidence=CONF_HIGH))
 
-    MainWindow._tick_rppg_param_coordinator(fake, cal)
+    EngineApplication._tick_rppg_param_coordinator(fake, cal)
 
     assert dispatched == []
     assert fake._logs == []
 
 
 def test_tick_rppg_param_coordinator_off_when_cal_none():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     dispatched = []
     fake = _fake_main_window(
@@ -264,13 +264,13 @@ def test_tick_rppg_param_coordinator_off_when_cal_none():
         _dispatch_candidate_roi_weights=lambda w: dispatched.append(w),
     )
 
-    MainWindow._tick_rppg_param_coordinator(fake, None)
+    EngineApplication._tick_rppg_param_coordinator(fake, None)
 
     assert dispatched == []
 
 
 def test_tick_rppg_param_coordinator_gated_does_not_dispatch():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     coord = RppgParamCoordinator()
     dispatched = []
@@ -280,14 +280,14 @@ def test_tick_rppg_param_coordinator_gated_does_not_dispatch():
     )
     cal = _FakeCal(AdaptiveCalibState(confidence=CONF_LOW))
 
-    MainWindow._tick_rppg_param_coordinator(fake, cal)
+    EngineApplication._tick_rppg_param_coordinator(fake, cal)
 
     assert dispatched == []
     assert coord.phase == COORD_GATED
 
 
 def test_tick_rppg_param_coordinator_on_dispatches_when_triggered():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     coord = RppgParamCoordinator()
     dispatched = []
@@ -297,7 +297,7 @@ def test_tick_rppg_param_coordinator_on_dispatches_when_triggered():
     )
     cal = _FakeCal(AdaptiveCalibState(confidence=CONF_HIGH))
 
-    MainWindow._tick_rppg_param_coordinator(fake, cal)
+    EngineApplication._tick_rppg_param_coordinator(fake, cal)
 
     assert len(dispatched) == 1
     assert coord.phase == COORD_EVALUATING
@@ -305,7 +305,7 @@ def test_tick_rppg_param_coordinator_on_dispatches_when_triggered():
 
 
 def test_dispatch_candidate_roi_weights_forwards_to_both_workers():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     calls = {"combined": [], "rppg": []}
     fake = _fake_main_window(
@@ -314,28 +314,28 @@ def test_dispatch_candidate_roi_weights_forwards_to_both_workers():
     )
     weights = {"forehead": 0.4}
 
-    MainWindow._dispatch_candidate_roi_weights(fake, weights)
+    EngineApplication._dispatch_candidate_roi_weights(fake, weights)
 
     assert calls["combined"] == [weights]
     assert calls["rppg"] == [weights]
 
 
 def test_dispatch_candidate_roi_weights_tolerates_no_active_worker():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     fake = _fake_main_window()  # _combined_worker / _rppg_worker 皆 None
-    MainWindow._dispatch_candidate_roi_weights(fake, {"forehead": 0.4})  # 不應丟例外
+    EngineApplication._dispatch_candidate_roi_weights(fake, {"forehead": 0.4})  # 不應丟例外
 
 
 def test_on_candidate_bpm_ready_noop_when_coordinator_none():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     fake = _fake_main_window(_rppg_param_coordinator=None)
-    MainWindow._on_candidate_bpm_ready(fake, 1.0, 70.0, 71.0)  # 不應丟例外，靜默返回
+    EngineApplication._on_candidate_bpm_ready(fake, 1.0, 70.0, 71.0)  # 不應丟例外，靜默返回
 
 
 def test_on_candidate_bpm_ready_skips_nan_samples():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     coord = RppgParamCoordinator()
     coord.tick(0.0, AdaptiveCalibState(confidence=CONF_HIGH), dict(ROI_BASE_WEIGHTS))
@@ -346,14 +346,14 @@ def test_on_candidate_bpm_ready_skips_nan_samples():
         _engine_controller=SimpleNamespace(belt_status=lambda: belt_status),
     )
 
-    MainWindow._on_candidate_bpm_ready(fake, 1.0, float("nan"), 71.0)
+    EngineApplication._on_candidate_bpm_ready(fake, 1.0, float("nan"), 71.0)
 
     # NaN 樣本應被跳過，evaluator 內不應累積任何配對。
     assert coord.evaluator.evaluate().pairs_used == 0
 
 
 def test_on_candidate_bpm_ready_adopt_calls_adopt_helper(monkeypatch):
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     coord = RppgParamCoordinator()
     coord.tick(0.0, AdaptiveCalibState(confidence=CONF_HIGH), dict(ROI_BASE_WEIGHTS))
@@ -368,7 +368,7 @@ def test_on_candidate_bpm_ready_adopt_calls_adopt_helper(monkeypatch):
     )
 
     for i in range(8):
-        MainWindow._on_candidate_bpm_ready(fake, float(i), 70.0, 80.0)  # cur=70 (殘差0) 候選=80 (殘差10)：候選較差
+        EngineApplication._on_candidate_bpm_ready(fake, float(i), 70.0, 80.0)  # cur=70 (殘差0) 候選=80 (殘差10)：候選較差
     # 上面刻意construct current 更好、candidate 更差 → 先驗證 rollback 分支不誤觸發 adopt
     assert adopt_calls == []
 
@@ -382,24 +382,24 @@ def test_on_candidate_bpm_ready_adopt_calls_adopt_helper(monkeypatch):
         _adopt_rppg_param_candidate=lambda: adopt_calls2.append(True),
     )
     for i in range(8):
-        MainWindow._on_candidate_bpm_ready(fake2, float(i), 80.0, 71.0)  # belt=70：現行殘差10、候選殘差1
+        EngineApplication._on_candidate_bpm_ready(fake2, float(i), 80.0, 71.0)  # belt=70：現行殘差10、候選殘差1
     assert adopt_calls2 == [True]
 
 
 def test_resolve_current_roi_weights_falls_back_on_exception():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     class _RaisingStore:
         def get_active_version(self):
             raise RuntimeError("no active version")
 
     fake = _fake_main_window(_rppg_calibration_store=_RaisingStore())
-    weights = MainWindow._resolve_current_roi_weights(fake)
+    weights = EngineApplication._resolve_current_roi_weights(fake)
     assert weights == dict(ROI_BASE_WEIGHTS)
 
 
 def test_resolve_current_roi_weights_uses_override_when_present():
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     override = {"forehead": 0.5, "L_cheek": 0.2, "R_cheek": 0.2, "glabella": 0.1}
     version = SimpleNamespace(params=SimpleNamespace(rppg_params={"roi_weights": override}))
@@ -409,7 +409,7 @@ def test_resolve_current_roi_weights_uses_override_when_present():
             return version
 
     fake = _fake_main_window(_rppg_calibration_store=_Store())
-    weights = MainWindow._resolve_current_roi_weights(fake)
+    weights = EngineApplication._resolve_current_roi_weights(fake)
     assert weights == pytest.approx(override)
 
 
@@ -453,13 +453,13 @@ def _persist_fake(store) -> SimpleNamespace:
 def test_persist_carries_forward_rppg_params_from_active_version():
     """裁決 2：active 版本帶 rppg_params 時，offset-only 停止存檔仍保留該 rppg_params，
     避免同 session 先 adopt ROI 權重後停止校準被覆蓋遺失。"""
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     adopted = {"roi_weights": {"forehead": 0.5, "L_cheek": 0.2, "R_cheek": 0.2, "glabella": 0.1}}
     store = _CapturingStore(active_rppg_params=adopted)
     fake = _persist_fake(store)
 
-    MainWindow._persist_belt_calibration(fake)
+    EngineApplication._persist_belt_calibration(fake)
 
     assert store.saved_kwargs is not None
     assert store.saved_kwargs["rppg_params"] == adopted
@@ -469,12 +469,12 @@ def test_persist_carries_forward_rppg_params_from_active_version():
 def test_persist_offset_only_when_active_has_no_rppg_params():
     """裁決 2 邊界：active 版本無 rppg_params（OFF 路徑常態）時，行為與現況一致——
     仍傳 rppg_params=None，只存 offset。"""
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     store = _CapturingStore(active_rppg_params=None)
     fake = _persist_fake(store)
 
-    MainWindow._persist_belt_calibration(fake)
+    EngineApplication._persist_belt_calibration(fake)
 
     assert store.saved_kwargs is not None
     assert store.saved_kwargs["rppg_params"] is None
@@ -482,7 +482,7 @@ def test_persist_offset_only_when_active_has_no_rppg_params():
 
 def test_persist_offset_only_when_active_lookup_raises():
     """裁決 2 容錯：讀 active 版本失敗時不阻斷存檔，退回只存 offset（rppg_params=None）。"""
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
 
     class _RaisingActiveStore(_CapturingStore):
         def get_active_version(self):
@@ -491,7 +491,7 @@ def test_persist_offset_only_when_active_lookup_raises():
     store = _RaisingActiveStore(active_rppg_params=None)
     fake = _persist_fake(store)
 
-    MainWindow._persist_belt_calibration(fake)
+    EngineApplication._persist_belt_calibration(fake)
 
     assert store.saved_kwargs is not None
     assert store.saved_kwargs["rppg_params"] is None

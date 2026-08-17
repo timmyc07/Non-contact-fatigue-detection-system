@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class EngineRuntime(QObject):
-    """Own engine Qt adapters and timers independently of MainWindow."""
+    """Own engine Qt adapters and timers independently of the application adapter."""
 
     adapter_released = Signal(str, object)
     _adapter_finished = Signal(str, object)

@@ -1,64 +1,26 @@
 from __future__ import annotations
 
-import html
 import json
 import logging
 import os
 import queue
-import sys
 import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from string import Template
 from typing import Any, Callable, cast
 
-import ctypes
-from ctypes import wintypes
-
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (
-    QAction,
-    QColor,
     QDesktopServices,
-    QFont,
     QImage,
     QImageWriter,
     QKeySequence,
-    QPainter,
-    QPen,
-    QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QComboBox,
-    QFrame,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QHeaderView,
-    QInputDialog,
-    QLabel,
-    QListWidget,
-    QListWidgetItem,
-    QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QSlider,
-    QSpinBox,
-    QStackedWidget,
-    QStyle,
-    QStyledItemDelegate,
-    QTableWidget,
-    QTableWidgetItem,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
 )
 
 from gui.alarm_config import (
@@ -85,9 +47,6 @@ from gui.desktop_settings_contract import (
 )
 from gui.engine_controller import (
     AnalysisLifecyclePorts,
-    CAMERA_BACKENDS,
-    CAMERA_FPS_OPTIONS,
-    CAMERA_RESOLUTIONS,
     CameraDevice,
     EngineController,
 )
@@ -104,7 +63,6 @@ from gui.personal_profile import (
 )
 from gui.replay_runtime_state import ReplayRuntimeState
 from gui.runtime_paths import data_path
-from gui.preview_overlay_window import PreviewOverlayWindow
 from gui.video_replay import ReplayBatchResult, VideoReplayWorker, ReplayVideoSummary
 from gui.web_preferences_state import WebPreferencesState
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
@@ -173,11 +131,6 @@ class EngineApplication(QObject):
         self._engine_mode = True
         self._engine_controller = EngineController(belt_runtime=BeltRuntime())
 
-        # 本次啟動的 session 識別（真實識別碼，非設計稿假資料）：以啟動日期+時分生成一次。
-        self._session_id = "S-" + time.strftime("%m%d")
-
-        # 視覺主題（僅影響 QSS 外觀）：預設深色，偏好僅 in-session（不落設定檔）。
-        self._theme = "dark"
         self._pipeline_running = False
         self._recording = False
         self._hotkeys = HotkeyConfig()
@@ -252,6 +205,7 @@ class EngineApplication(QObject):
         # 個人清醒基線：跨 session 載入上次的 manual profile（無則 None → 行為門檻走預設）。
         self._personal_profile_store = PersonalProfileStore()
         self._personal_profile = self._personal_profile_store.load()
+        self._profile_status = "個人基線：未啟動"
         # 啟動自動蒐集（暫定基線）與手動「記錄清醒基線」按鈕各自的蒐集器。
         self._auto_baseline_collector: PersonalBaselineCollector | None = None
         self._manual_baseline_collector: PersonalBaselineCollector | None = None
@@ -272,7 +226,6 @@ class EngineApplication(QObject):
         self._belt_truth_capture: BeltTruthCaptureWriter | None = None
         self._rppg_param_coordinator: RppgParamCoordinator | None = None
         self._rppg_param_current_weights: dict[str, float] = dict(ROI_BASE_WEIGHTS)
-        self._rec_ui_timer: QTimer | None = None
         # 自動採集：一鍵串接既有「開始」/「開始記錄」/「心跳帶真值校準」觸發點，
         # 不重寫任何 worker 啟停或記錄/校準邏輯本身（見 _on_auto_capture_clicked）。
         self._auto_capture_belt_path: Path | None = None
@@ -286,10 +239,6 @@ class EngineApplication(QObject):
         # 避免誤停使用者在倒數期間另行啟動的、與本次自動採集無關的新錄製。
         self._auto_capture_expected_db_path: Path | None = None
         self._monitor_focus = False
-        self._monitor_rail = None
-        self._monitor_controls_panel = None
-        self._preview_panel = None
-        self._replay_queue_table = None
 
         self._start_camera_scan()
 
@@ -352,127 +301,28 @@ class EngineApplication(QObject):
     def _replay_worker(self) -> VideoReplayWorker | None:
         return cast(VideoReplayWorker | None, self._engine_runtime.worker("replay"))
 
-    def _set_legacy_text(self, name: str, text: object) -> None:
-        """Update a real Qt label/button without creating an engine-mode mirror."""
-        if not self._engine_mode:
-            getattr(self, name).setText(str(text))
-
-    def _set_legacy_enabled(self, name: str, enabled: bool) -> None:
-        """Update a real Qt control without creating an engine-mode mirror."""
-        if not self._engine_mode:
-            getattr(self, name).setEnabled(enabled)
-
     def _toggle_overlay_preference(self, field: str) -> None:
         state = self._overlay_state.snapshot()
         current = getattr(state, field)
         self._configure_overlay(**{field: not current})
 
-    def _sync_analysis_controls(self) -> None:
-        if self._engine_mode:
-            return
-        plan = self._engine_controller.analysis_snapshot()
-        for control, checked in (
-            (self._chk_behavior, plan.fatigue_enabled),
-            (self._chk_stress, plan.rppg_enabled),
-        ):
-            control.blockSignals(True)
-            try:
-                control.setChecked(checked)
-            finally:
-                control.blockSignals(False)
-
     def _set_monitor_layout(self, focus: bool) -> None:
         """Store the Flutter dashboard layout preference in engine state."""
         self._monitor_focus = bool(focus)
-
-    def _sync_overlay_controls(self) -> None:
-        if self._engine_mode:
-            return
-        state = self._overlay_state.snapshot()
-        for control, value in (
-            (self._chk_all, state.all_enabled),
-            (self._chk_preview, state.preview),
-            (self._chk_metrics, state.metrics),
-            (self._chk_lock, state.locked),
-        ):
-            control.blockSignals(True)
-            try:
-                control.setChecked(value)
-            finally:
-                control.blockSignals(False)
-        self._sld_opacity.blockSignals(True)
-        try:
-            self._sld_opacity.setValue(state.opacity)
-        finally:
-            self._sld_opacity.blockSignals(False)
-        self._lbl_opacity.setText(f"{state.opacity}%")
 
     def _configure_overlay(self, **changes: object) -> None:
         previous = self._overlay_state.snapshot()
         current = self._overlay_state.configure(**changes)
         if current == previous:
             return
-        self._sync_overlay_controls()
         self._apply_overlay_state()
         self._settings_dirty = True
 
-    def _sync_replay_controls(self) -> None:
-        if self._engine_mode:
-            return
-        state = self._replay_state.snapshot()
-        self._spn_replay_jobs.blockSignals(True)
-        self._chk_replay_annotated.blockSignals(True)
-        try:
-            self._spn_replay_jobs.setValue(state.jobs)
-            self._chk_replay_annotated.setChecked(state.annotated)
-        finally:
-            self._spn_replay_jobs.blockSignals(False)
-            self._chk_replay_annotated.blockSignals(False)
-        self._lbl_replay_dir.setText(
-            str(state.dataset_dir) if state.dataset_dir is not None else "尚未選擇資料夾"
-        )
-        self._lbl_replay_current.setText(state.current_text)
-        self._lbl_replay_result.setText(state.result_text)
-        self._lbl_replay_parallel_status.setText(state.parallel_status_text)
-
     def _configure_replay(self, **changes: object) -> None:
         self._replay_state.configure(**changes)
-        self._sync_replay_controls()
 
     def _update_replay_presentation(self, **changes: object) -> None:
         self._replay_state.update_presentation(**changes)
-        self._sync_replay_controls()
-
-    def _sync_capture_preference_controls(self) -> None:
-        if self._engine_mode:
-            return
-        state = self._capture_preferences.snapshot()
-        for control, value in (
-            (self._chk_auto_record, state.auto_record),
-            (self._chk_belt_calib, state.belt_calibration),
-            (self._chk_auto_capture_belt, state.auto_capture_include_belt),
-        ):
-            control.blockSignals(True)
-            try:
-                control.setChecked(value)
-            finally:
-                control.blockSignals(False)
-        self._spn_auto_capture_seconds.blockSignals(True)
-        try:
-            self._spn_auto_capture_seconds.setValue(state.auto_capture_seconds)
-        finally:
-            self._spn_auto_capture_seconds.blockSignals(False)
-
-    def _sync_web_preference_control(self) -> None:
-        if self._engine_mode:
-            return
-        self._act_web_allow_lan.blockSignals(True)
-        try:
-            self._act_web_allow_lan.setChecked(
-                self._web_preferences.snapshot().allow_lan
-            )
-        finally:
-            self._act_web_allow_lan.blockSignals(False)
 
     def _configure_web_preferences(
         self,
@@ -482,7 +332,6 @@ class EngineApplication(QObject):
         restart_server: bool = True,
     ) -> None:
         self._web_preferences.configure(allow_lan=allow_lan)
-        self._sync_web_preference_control()
         if mark_dirty:
             self._settings_dirty = True
         if restart_server:
@@ -498,7 +347,6 @@ class EngineApplication(QObject):
         current = self._capture_preferences.configure(**changes)
         if current == previous:
             return
-        self._sync_capture_preference_controls()
         if current.belt_calibration != previous.belt_calibration:
             belt_was_running = self._engine_controller.belt_running
             try:
@@ -509,7 +357,6 @@ class EngineApplication(QObject):
                         stop_belt=not belt_was_running
                     )
                 self._capture_preferences.restore(previous)
-                self._sync_capture_preference_controls()
                 raise
             current = self._capture_preferences.snapshot()
         if current.auto_record != previous.auto_record:
@@ -546,11 +393,9 @@ class EngineApplication(QObject):
                 ports=self._analysis_lifecycle_ports() if running else None,
             )
         except Exception:
-            self._sync_analysis_controls()
             if not self._engine_controller.pipeline_snapshot().running:
                 self._fail_closed_pipeline_adapters()
             raise
-        self._sync_analysis_controls()
         if previous.fatigue_enabled != behavior_enabled:
             self._append_log(
                 f"[UI] 行為警覺 → {'開啟' if behavior_enabled else '關閉'}"
@@ -562,202 +407,6 @@ class EngineApplication(QObject):
         if running:
             self._ensure_belt_calibration()
             self._emit_web_metrics(force=True)
-
-    def _update_monitor_preview(self, image) -> None:
-        lbl = getattr(self, "_lbl_monitor_preview", None)
-        if lbl is None:
-            return
-        try:
-            pm = QPixmap.fromImage(image)
-        except Exception:
-            return
-        if pm.isNull():
-            return
-        lbl.setPixmap(pm.scaled(
-            lbl.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        ))
-
-    def _reset_monitor_view(self) -> None:
-        lbl = getattr(self, "_lbl_monitor_preview", None)
-        if lbl is not None:
-            lbl.setPixmap(QPixmap())
-            lbl.setText("鏡頭預覽（按「開始」啟動）")
-        self._update_rec_pill()
-        self._refresh_monitor_metrics()
-
-    @staticmethod
-    def _clamp01(x: float) -> float:
-        return max(0.0, min(1.0, x))
-
-    def _refresh_monitor_metrics(self) -> None:
-        """把最新一筆 rPPG / 疲勞 / 融合快照渲染到監測頁卡片（唯讀，不改任何數值）。"""
-        if self._engine_mode:
-            return
-        if not hasattr(self, "_mon_fused_level"):
-            return
-        r = self._latest_rppg_metrics
-        f = self._latest_fatigue_metrics
-        z = self._latest_fused_score
-        bars = getattr(self, "_mon_contrib_bars", {})
-
-        # 綜合疲勞融合：大分數（0–100）+ 等級徽章（資料驅動語意色）+ 趨勢 + 0–100 進度條
-        if z is not None:
-            level = str(getattr(z, "level", "") or "—")
-            score01 = float(getattr(z, "score", 0.0) or 0.0)
-            try:
-                b, g, rr = z.color_bgr
-                col = QColor(int(rr), int(g), int(b)).name()
-            except Exception:
-                col = "#30363d"
-            self._mon_score_big.setText(f"{round(score01 * 100)}")
-            self._mon_fused_level.setText(level)
-            self._mon_fused_level.setStyleSheet(
-                f"background-color: {col}; color: #ffffff; border-radius: 999px;"
-                " padding: 3px 12px; font-size: 15px; font-weight: 700;"
-            )
-            # 趨勢：trend 為分數（0–1）/30s 增量，*100 換算成與大分數同尺度的 pts。
-            trend = float(getattr(z, "trend", 0.0) or 0.0)
-            sym = str(getattr(z, "trend_symbol", "→") or "→")
-            self._mon_trend.setText(f"{sym} {abs(trend) * 100:.0f} pts / 30s")
-            self._mon_score_bar.setValue(int(round(self._clamp01(score01) * 100)))
-            self._mon_score_bar.setStyleSheet(
-                f"QProgressBar::chunk {{ background-color: {col}; border-radius: 999px; }}"
-            )
-            # 疲勞分數貢獻列（沿用 _mon_fused_score 屬性）
-            self._mon_fused_score.setText(f"{score01 * 100:.0f}%")
-            if "score" in bars:
-                bars["score"].set_fraction(self._clamp01(score01))
-        else:
-            self._mon_score_big.setText("—")
-            self._mon_fused_level.setText("—")
-            self._mon_fused_level.setStyleSheet("")
-            self._mon_trend.setText("—")
-            self._mon_score_bar.setValue(0)
-            self._mon_score_bar.setStyleSheet("")
-            self._mon_fused_score.setText("—")
-            if "score" in bars:
-                bars["score"].set_fraction(None)
-
-        # 行為疲勞（貢獻列數值沿用現行格式；迷你條為顯示層正規化，clamp 範圍見下，無語意權重）
-        if f is not None:
-            fd = bool(getattr(f, "face_detected", False))
-            ear = float(getattr(f, "ear", 0.0) or 0.0)
-            perclos = float(getattr(f, "perclos", 0.0) or 0.0)
-            blink = int(getattr(f, "blink_count", 0) or 0)
-            self._mon_ear.setText(f"{ear:.3f}" if fd else "—")
-            self._mon_perclos.setText(f"{perclos * 100:.0f}%")
-            self._mon_blink.setText(str(blink))
-            expr = []
-            if getattr(f, "is_squinting", False):
-                expr.append("瞇眼")
-            if getattr(f, "is_frowning", False):
-                expr.append("皺眉")
-            self._mon_expr.setText("／".join(expr) if expr else "正常")
-            fixation = float(getattr(f, "fixation_duration", 0.0) or 0.0)
-            self._mon_gaze.setText(
-                f"固視 {fixation:.1f}s"
-                f"／掃視 {float(getattr(f, 'saccade_freq_pm', 0.0) or 0.0):.0f}/min"
-            )
-            pitch = float(getattr(f, "head_pitch", 0.0) or 0.0)
-            yaw = float(getattr(f, "head_yaw", 0.0) or 0.0)
-            roll = float(getattr(f, "head_roll", 0.0) or 0.0)
-            self._mon_head.setText(f"P {pitch:.0f}° Y {yaw:.0f}° R {roll:.0f}°")
-            if bars:
-                # EAR: 眼開合度映射到 0–1（0.10–0.40 clamp）；其餘同理，純視覺。
-                bars["ear"].set_fraction(self._clamp01((ear - 0.10) / 0.30) if fd else None)
-                bars["perclos"].set_fraction(self._clamp01(perclos))
-                bars["blink"].set_fraction(self._clamp01(blink / 40.0))
-                bars["expr"].set_fraction(0.5 * len(expr))
-                bars["gaze"].set_fraction(self._clamp01(fixation / 3.0))
-                bars["head"].set_fraction(self._clamp01(max(abs(pitch), abs(yaw), abs(roll)) / 30.0))
-        else:
-            for lbl in (self._mon_ear, self._mon_perclos, self._mon_blink,
-                        self._mon_expr, self._mon_gaze, self._mon_head):
-                lbl.setText("—")
-            for key in ("ear", "perclos", "blink", "expr", "gaze", "head"):
-                if key in bars:
-                    bars[key].set_fraction(None)
-
-        # rPPG + HRV
-        if r is not None:
-            bpm = effective_bpm(r)
-            self._mon_bpm.setText(f"{bpm:.0f}" if bpm and bpm > 0 else "—")
-            self._mon_warmup.setText(f"{float(getattr(r, 'warmup_progress', 0.0) or 0.0) * 100:.0f}%")
-            sqi = float(getattr(r, "sqi", 0.0) or 0.0)
-            q = float(getattr(r, "quality_score", 0.0) or 0.0)
-            self._mon_sqi.setText(f"SQI {sqi:.2f}／Q {q:.2f}")
-            self._mon_rmssd.setText(f"{float(getattr(r, 'rmssd', 0.0) or 0.0):.1f} ms")
-            self._mon_sdnn.setText(f"{float(getattr(r, 'sdnn', 0.0) or 0.0):.1f} ms")
-            self._mon_lfhf.setText(f"{float(getattr(r, 'lf_hf', 0.0) or 0.0):.2f}")
-            self._mon_hrv_conf.setText(str(getattr(r, "hrv_confidence", "") or "—"))
-            if hasattr(self, "_mon_wave"):
-                self._mon_wave.set_data(list(getattr(r, "waveform", []) or []))
-            self._update_bpm_delta(bpm)
-        else:
-            for lbl in (self._mon_bpm, self._mon_warmup, self._mon_sqi,
-                        self._mon_rmssd, self._mon_sdnn, self._mon_lfhf, self._mon_hrv_conf):
-                lbl.setText("—")
-            if hasattr(self, "_mon_wave"):
-                self._mon_wave.set_data([])
-            self._update_bpm_delta(0.0)
-
-    def _update_bpm_delta(self, rppg_bpm: float) -> None:
-        """rPPG vs 心跳帶真值差值（Δ）：僅心跳帶連線且雙方 BPM 有效時顯示，否則隱藏。"""
-        if self._engine_mode:
-            return
-        if not hasattr(self, "_mon_bpm_delta"):
-            return
-        belt_bpm = 0.0
-        belt_name = "belt"
-        try:
-            if self._engine_controller.belt_running:
-                st = self._engine_controller.belt_status()
-                if st is not None and st.state == "connected" and st.bpm > 0 and not hr_is_stale(st):
-                    belt_bpm = float(st.bpm)
-                    belt_name = (st.device_name or "belt").split()[0][:6]
-        except Exception:
-            belt_bpm = 0.0
-        if rppg_bpm and rppg_bpm > 0 and belt_bpm > 0:
-            diff = rppg_bpm - belt_bpm
-            arrow = "↑" if diff > 0 else ("↓" if diff < 0 else "→")
-            self._mon_bpm_delta.setText(f"Δ {arrow} {abs(diff):.1f} vs {belt_name}")
-            self._mon_bpm_delta.setVisible(True)
-        else:
-            self._mon_bpm_delta.setVisible(False)
-
-    def _update_rec_pill(self) -> None:
-        """REC 錄影指示 pill：錄製中顯示 ● REC mm:ss（elapsed 來自 _recording_started_at）。"""
-        if self._engine_mode:
-            return
-        if not hasattr(self, "_mon_rec_pill"):
-            return
-        if self._recording and self._recording_started_at is not None:
-            elapsed = max(0, int(time.time() - self._recording_started_at))
-            m, s = divmod(elapsed, 60)
-            self._mon_rec_pill.setText(f"● REC {m:02d}:{s:02d}")
-            self._mon_rec_pill.setVisible(True)
-        else:
-            self._mon_rec_pill.setVisible(False)
-
-    def _refresh_belt_cfg_labels(self) -> None:
-        """把 config/hr_belt.json 載入結果（self._belt_cfg）唯讀顯示到設備設定卡。"""
-        if self._engine_mode:
-            return
-        if not hasattr(self, "_lbl_belt_cfg_name_prefix"):
-            return
-        cfg = self._belt_cfg
-        if cfg is None:
-            self._lbl_belt_cfg_name_prefix.setText("—")
-            self._lbl_belt_cfg_address.setText("—")
-            self._lbl_belt_cfg_tuning.setText("—")
-            self._lbl_belt_cfg_capture.setText("—")
-            return
-        self._lbl_belt_cfg_name_prefix.setText(cfg.name_prefix or "（未指定）")
-        self._lbl_belt_cfg_address.setText(cfg.address or "（自動掃描）")
-        self._lbl_belt_cfg_tuning.setText("開啟" if cfg.rppg_param_tuning_enabled else "關閉")
-        self._lbl_belt_cfg_capture.setText("開啟" if cfg.capture_enabled else "關閉")
 
     def _qt_key_to_vk(self, qt_key: int) -> int | None:
         if Qt.Key.Key_A <= qt_key <= Qt.Key.Key_Z:
@@ -896,64 +545,6 @@ class EngineApplication(QObject):
     def _decode_bytes(text: str) -> QByteArray:
         return QByteArray.fromBase64(text.encode("ascii"))
 
-    def _select_combo_by_data(self, combo: QComboBox, value: str) -> bool:
-        for i in range(combo.count()):
-            if combo.itemData(i) == value:
-                combo.setCurrentIndex(i)
-                return True
-        return False
-
-    def _select_camera_by_index(self, cam_idx: int) -> bool:
-        if self._engine_mode:
-            raise RuntimeError("Camera widgets are unavailable in engine mode")
-        for i in range(self._cmb_camera.count()):
-            if self._cmb_camera.itemData(i) == cam_idx:
-                try:
-                    self._engine_controller.select_camera(cam_idx)
-                except ValueError:
-                    return False
-                self._cmb_camera.setCurrentIndex(i)
-                return True
-        return False
-
-    def _sync_camera_widgets(self) -> None:
-        """Mirror controller-owned camera state into the legacy widgets."""
-        if self._engine_mode:
-            return
-        camera = self._engine_controller.camera_snapshot()
-        for widget in (
-            self._cmb_resolution,
-            self._cmb_fps,
-            self._cmb_backend,
-            self._chk_horizontal_flip,
-        ):
-            widget.blockSignals(True)
-        try:
-            self._cmb_resolution.setCurrentText(camera.resolution)
-            self._cmb_fps.setCurrentText(camera.fps)
-            self._select_combo_by_data(self._cmb_backend, camera.backend)
-            self._chk_horizontal_flip.setChecked(camera.horizontal_flip)
-        finally:
-            for widget in (
-                self._cmb_resolution,
-                self._cmb_fps,
-                self._cmb_backend,
-                self._chk_horizontal_flip,
-            ):
-                widget.blockSignals(False)
-
-        self._cmb_camera.blockSignals(True)
-        try:
-            target = 0
-            for i in range(self._cmb_camera.count()):
-                if self._cmb_camera.itemData(i) == camera.selected_index:
-                    target = i
-                    break
-            self._cmb_camera.setCurrentIndex(target)
-        finally:
-            self._cmb_camera.blockSignals(False)
-        self._on_camera_combo_changed(self._cmb_camera.currentIndex())
-
     def _on_camera_config_changed(self, **changes: object) -> None:
         self._engine_controller.configure_camera(**changes)
 
@@ -1048,12 +639,10 @@ class EngineApplication(QObject):
                 self._engine_controller.configure_camera(horizontal_flip=horizontal_flip)
             if isinstance(cam_idx, int):
                 self._engine_controller.restore_camera(cam_idx)
-            self._sync_camera_widgets()
 
         toggles = data.get("toggles", {})
         if isinstance(toggles, dict):
             self._capture_preferences.load(toggles=toggles)
-            self._sync_capture_preference_controls()
             current_analysis = self._engine_controller.analysis_snapshot()
             behavior_enabled = toggles.get("behavior")
             rppg_enabled = toggles.get("stress")
@@ -1069,7 +658,6 @@ class EngineApplication(QObject):
                     else current_analysis.rppg_enabled
                 ),
             )
-            self._sync_analysis_controls()
 
         self._overlay_state.load(toggles=toggles, overlay=overlay)
         loaded_overlay_geometry = self._overlay_state.snapshot().geometry
@@ -1080,10 +668,8 @@ class EngineApplication(QObject):
                 loaded_overlay_geometry.width,
                 loaded_overlay_geometry.height,
             )
-        self._sync_overlay_controls()
 
         self._web_preferences.load(web=data.get("web", {}))
-        self._sync_web_preference_control()
 
         alarm = data.get("alarm", {})
         if isinstance(alarm, dict):
@@ -1178,9 +764,6 @@ class EngineApplication(QObject):
 
     def _start_camera_scan(self) -> None:
         """Refresh camera list (same strategy as V1: DirectShow names first, no OpenCV open)."""
-        if not self._engine_mode:
-            self._lbl_cam_hint.setText("載入中…")
-            self._cmb_camera.setEnabled(False)
         dev_list: list[tuple[int, str]] = []
         try:
             from gui.camera_devices import list_camera_devices
@@ -1188,50 +771,17 @@ class EngineApplication(QObject):
             dev_list = list_camera_devices(max_index=20, warmup_read=True)
         except Exception as exc:
             message = f"攝影機列舉失敗：{exc}"
-            if self._engine_mode:
-                logger.warning(message)
-            else:
-                self._append_log(message)
+            logger.warning(message)
         self._finish_camera_scan_ui(dev_list)
 
     def _finish_camera_scan_ui(self, dev_list: list[tuple[int, str]]) -> None:
-        """Update the controller catalog and mirror it to legacy widgets."""
         self._engine_controller.replace_cameras(
             CameraDevice(index, f"[{index}] {name}") for index, name in dev_list
         )
-        if self._engine_mode:
-            if dev_list:
-                logger.info("攝影機清單已更新：%d 個項目。", len(dev_list))
-            else:
-                logger.warning(
-                    "未取得攝影機清單。Linux 請檢查 /dev/video*、video 群組權限，"
-                    "或執行 scripts/diagnose_camera.py。"
-                )
-            return
-        camera = self._engine_controller.camera_snapshot()
-        self._cmb_camera.blockSignals(True)
-        try:
-            self._cmb_camera.clear()
-            self._cmb_camera.addItem("── 請選擇攝影機 ──", None)
-            for device in camera.devices:
-                self._cmb_camera.addItem(device.label, device.index)
-            self._lbl_cam_hint.setText(f"偵測：{len(camera.devices)} 台")
-            self._cmb_camera.setEnabled(True)
-            if camera.selected_index is None:
-                self._cmb_camera.setCurrentIndex(0)
-            else:
-                self._select_camera_by_index(camera.selected_index)
-        finally:
-            self._cmb_camera.blockSignals(False)
-        self._on_camera_combo_changed(self._cmb_camera.currentIndex())
-
         if dev_list:
-            self._append_log(f"攝影機清單已更新：{len(dev_list)} 個項目。")
+            logger.info("Camera list updated: %d device(s)", len(dev_list))
         else:
-            self._append_log(
-                "未取得攝影機清單。Linux 請檢查 /dev/video*、video 群組權限，"
-                "或執行 scripts/diagnose_camera.py。"
-            )
+            logger.warning("No camera devices detected")
 
     def _apply_hotkey_shortcuts(self) -> None:
         hk = self._hotkeys
@@ -1251,20 +801,14 @@ class EngineApplication(QObject):
             hk.toggle_all,
             hk.toggle_recording,
         )
-        if self._engine_mode:
-            callbacks = (
-                lambda: self._toggle_overlay_preference("metrics"),
-                lambda: self._toggle_overlay_preference("preview"),
-                self._toggle_pipeline,
-                lambda: self._toggle_overlay_preference("locked"),
-                lambda: self._toggle_overlay_preference("all_enabled"),
-                self._toggle_recording,
-            )
-        else:
-            actions = self._menu_actions_hotkeys
-            for action, key in zip(actions, keys, strict=True):
-                action.setShortcut(QKeySequence(key))
-            callbacks = tuple(action.trigger for action in actions)
+        callbacks = (
+            lambda: self._toggle_overlay_preference("metrics"),
+            lambda: self._toggle_overlay_preference("preview"),
+            self._toggle_pipeline,
+            lambda: self._toggle_overlay_preference("locked"),
+            lambda: self._toggle_overlay_preference("all_enabled"),
+            self._toggle_recording,
+        )
         self._global_hotkey_bindings = {
             index: _GlobalHotkeyBinding(field, sequence, callback)
             for index, (field, sequence, callback) in enumerate(
@@ -1639,7 +1183,6 @@ class EngineApplication(QObject):
             self._engine_runtime.configure_alarm(self._alarm_config)
         if "camera" in selected:
             self._engine_controller.reset_camera_settings()
-            self._sync_camera_widgets()
         overlay_changes: dict[str, object] = {}
         if "toggles" in selected:
             self._configure_capture_preferences(
@@ -1666,7 +1209,6 @@ class EngineApplication(QObject):
             self._configure_web_preferences(allow_lan=False, mark_dirty=False)
         if "replay" in selected:
             self._replay_state.reset_configuration()
-            self._sync_replay_controls()
         self._settings_dirty = True
 
     def _desktop_control_state(self) -> dict[str, Any]:
@@ -1723,6 +1265,7 @@ class EngineApplication(QObject):
             "settings_dirty": bool(self._settings_dirty),
             "desktop_notice": self._desktop_notice,
             "profile_loaded": self._personal_profile is not None,
+            "profile_status": self._profile_status,
             "replay_running": replay.running,
             "replay_stopping": replay.stopping,
             "belt_config": {
@@ -1736,15 +1279,6 @@ class EngineApplication(QObject):
         state.update(self._replay_state.to_desktop_state())
         state.update(self._capture_preferences.to_desktop_state())
         return state
-
-    def _set_combo_value(self, combo: QComboBox, value: object, *, by_data: bool = False) -> None:
-        wanted = str(value)
-        for index in range(combo.count()):
-            current = combo.itemData(index) if by_data else combo.itemText(index)
-            if str(current) == wanted:
-                combo.setCurrentIndex(index)
-                return
-        raise ValueError(f"Unsupported option: {wanted}")
 
     def _handle_desktop_command(self, command: str, args: dict[str, Any]) -> dict[str, Any]:
         if command == "state.get":
@@ -1783,7 +1317,6 @@ class EngineApplication(QObject):
             if isinstance(raw_index, bool) or not isinstance(raw_index, int):
                 raise ValueError("index must be an integer")
             self._engine_controller.select_camera(raw_index)
-            self._sync_camera_widgets()
             self._settings_dirty = True
 
         elif command == "camera.refresh":
@@ -1802,7 +1335,6 @@ class EngineApplication(QObject):
             if "horizontal_flip" in args:
                 camera_args["horizontal_flip"] = self._require_bool(args, "horizontal_flip")
             self._engine_controller.configure_camera(**camera_args)
-            self._sync_camera_widgets()
             self._settings_dirty = True
 
         elif command == "analysis.configure":
@@ -2172,9 +1704,6 @@ class EngineApplication(QObject):
         self._recording_db_path = db_path
         self._recording_started_at = time.time()
         self._recording_count = 0
-        if self._rec_ui_timer is not None:
-            self._rec_ui_timer.start()
-            self._update_rec_pill()
 
         self._video_queue = queue.Queue(maxsize=8)
         video_path = rec_dir / f"video_{stamp}.mp4"
@@ -2193,10 +1722,6 @@ class EngineApplication(QObject):
 
     def _stop_recording(self) -> bool:
         self._engine_controller.stop_recording()
-        if self._rec_ui_timer is not None:
-            self._rec_ui_timer.stop()
-        if hasattr(self, "_mon_rec_pill"):
-            self._mon_rec_pill.setVisible(False)
         if self._metrics_recorder is not None:
             try:
                 self._metrics_recorder.close()
@@ -2343,10 +1868,6 @@ class EngineApplication(QObject):
         payload = self._build_record_payload()
         self._metrics_recorder.record(payload)
         self._recording_count += 1
-        if self._recording_count % 60 == 0:
-            self._set_legacy_text(
-                "_lbl_record", f"記錄狀態：進行中（{self._recording_count} 筆）"
-            )
 
     def _on_video_recording_started(self, path: str) -> None:
         try:
@@ -2363,50 +1884,17 @@ class EngineApplication(QObject):
     def _on_video_recording_failed(self, msg: str) -> None:
         self._append_log(f"✗ 影片錄製失敗：{msg}")
         self._recording = False
-        self._set_legacy_text("_btn_record", "開始記錄")
-        self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
         self._stop_recording()
         self._notify_user("影片錄製", msg)
 
     def _append_log(self, msg: str) -> None:
-        if self._engine_mode:
-            severity = _classify_log_message(msg, warning_priority=True)
-            if severity == "error":
-                logger.error("%s", msg)
-            elif severity == "warning":
-                logger.warning("%s", msg)
-            else:
-                logger.info("%s", msg)
-            return
-        self._append_log_html(msg)
-        self.statusBar().showMessage(msg, 4000)
-
-    def _append_log_html(self, msg: str) -> None:
-        """把訊息以 rich text 顯示到 Log console：前綴 HH:MM:SS 時間戳，依既有符號著色。
-
-        純顯示層加工（不改任何呼叫端傳入的訊息內容）；console 底色恆為深色（VIDEO），
-        故著色一律取深色 palette 語意色以確保對比。訊息文字先 html escape 再嵌入。
-        """
-        if not hasattr(self, "_log"):
-            return
-        d = _PALETTES["dark"]
-        severity = _classify_log_message(msg)
+        severity = _classify_log_message(msg, warning_priority=True)
         if severity == "error":
-            color = d["BAD"]
+            logger.error("%s", msg)
         elif severity == "warning":
-            color = d["STATUS_WARN"]
-        elif severity == "success":
-            color = d["STATUS_OK"]
-        elif severity == "link":
-            color = d["ACCENT"]
+            logger.warning("%s", msg)
         else:
-            color = d["TEXT_ON_VIDEO"]
-        ts = time.strftime("%H:%M:%S")
-        line = (
-            f'<span style="color:rgba(255,255,255,0.45)">{ts}</span> '
-            f'<span style="color:{color}">{html.escape(msg)}</span>'
-        )
-        self._log.append(line)
+            logger.info("%s", msg)
 
     def _publish_desktop_notice(self, message: str, *, level: str = "error") -> None:
         """Publish a one-shot UI notice for the Flutter/Tauri shell."""
@@ -2418,13 +1906,7 @@ class EngineApplication(QObject):
         }
 
     def _notify_user(self, title: str, message: str, *, level: str = "error") -> None:
-        if self._engine_mode:
-            self._publish_desktop_notice(f"{title}：{message}", level=level)
-            return
-        if level == "info":
-            QMessageBox.information(self, title, message)
-        else:
-            QMessageBox.warning(self, title, message)
+        self._publish_desktop_notice(f"{title}：{message}", level=level)
 
     def _start_replay(self) -> None:
         self._start_replay_run(jobs=1, preview_enabled=True, mode_label="回放中")
@@ -2480,18 +1962,6 @@ class EngineApplication(QObject):
             )
             self._replay_active_videos.clear()
             self._replay_recent_done.clear()
-            if not self._engine_mode:
-                self._bar_replay_progress.setRange(0, 0)
-                self._lbl_replay_preview.clear()
-                if preview_enabled:
-                    self._lbl_replay_preview.setText("影片預覽載入中")
-                else:
-                    self._lbl_replay_preview.setText("平行驗證中：預覽停用，以提升批次速度")
-            self._set_legacy_text("_lbl_pipeline", f"管線：影片回測 {mode_label}")
-            self._set_legacy_text("_lbl_camera", "影片：準備中")
-            self._set_legacy_text("_lbl_face", "臉部：統計中")
-            self._set_legacy_text("_lbl_fps", "FPS：—")
-            self._set_legacy_text("_lbl_codec", "解析度：—")
             self._append_log(
                 f"[影片回測] 開始{mode_label}：{replay_state.dataset_dir} "
                 f"(jobs={jobs}, preview={'on' if preview_enabled else 'off'})"
@@ -2501,9 +1971,6 @@ class EngineApplication(QObject):
                 worker,
                 connect=lambda current: (
                     current.progress.connect(self._on_replay_progress),
-                    current.preview_frame.connect(self._on_replay_preview_frame)
-                    if preview_enabled
-                    else None,
                     current.finished_ok.connect(self._on_replay_finished_ok),
                     current.failed.connect(self._on_replay_failed),
                 ),
@@ -2523,21 +1990,7 @@ class EngineApplication(QObject):
             current_text="目前影片：正在停止，請稍候",
             parallel_status_text="處理清單：正在停止，已派發的影片會安全收尾",
         )
-        if not self._engine_mode:
-            self._btn_replay_stop.setEnabled(False)
-            self._btn_replay_stop.setText("停止中")
-        self._set_legacy_text("_lbl_pipeline", "管線：影片回測 停止中")
         self._append_log("[影片回測] 已送出停止請求，等待目前 frame 安全收尾")
-
-    def _set_replay_controls_running(self, running: bool) -> None:
-        if self._engine_mode:
-            return
-        self._btn_replay_start.setEnabled(not running)
-        self._btn_replay_parallel.setEnabled(not running)
-        self._btn_replay_stop.setEnabled(running)
-        self._btn_replay_stop.setText("停止")
-        self._spn_replay_jobs.setEnabled(not running)
-        self._chk_replay_annotated.setEnabled(not running)
 
     def _on_replay_progress(
         self,
@@ -2599,10 +2052,6 @@ class EngineApplication(QObject):
                     f"{summary.frames} frames"
                 )
             self._update_replay_presentation(current_text=current_text)
-            self._update_replay_status_strip(
-                summary,
-                prefix=f"影片回測 {self._replay_state.snapshot().mode_label}",
-            )
             self._refresh_replay_parallel_status()
 
     def _replay_video_key(self, summary: ReplayVideoSummary) -> str:
@@ -2639,43 +2088,6 @@ class EngineApplication(QObject):
             )
         )
 
-    def _update_replay_status_strip(self, summary: ReplayVideoSummary, *, prefix: str) -> None:
-        if self._engine_mode:
-            return
-        self._lbl_pipeline.setText(f"管線：{prefix}")
-        self._lbl_camera.setText(f"影片：S{summary.subject} / L{summary.label} {summary.label_name}")
-        if summary.frames > 0:
-            face_rate = summary.face_frames / max(summary.frames, 1)
-            self._lbl_face.setText(f"臉部：{face_rate:.0%} ({summary.face_frames}/{summary.frames})")
-        else:
-            self._lbl_face.setText("臉部：統計中")
-        if summary.fps > 0:
-            self._lbl_fps.setText(f"FPS：影片 {summary.fps:.1f}")
-        else:
-            self._lbl_fps.setText("FPS：—")
-        if summary.width > 0 and summary.height > 0:
-            self._lbl_codec.setText(f"解析度：{summary.width}x{summary.height}")
-        else:
-            self._lbl_codec.setText("解析度：—")
-
-    def _on_replay_preview_frame(self, image: QImage) -> None:
-        if self._engine_mode or image.isNull():
-            return
-        pix = QPixmap.fromImage(image)
-        target = self._frame_replay_preview.contentsRect().size()
-        if target.width() <= 0 or target.height() <= 0:
-            target = QSize(640, 360)
-        target = QSize(
-            min(target.width(), 960),
-            min(target.height(), 440),
-        )
-        scaled = pix.scaled(
-            target,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation,
-        )
-        self._lbl_replay_preview.setPixmap(scaled)
-
     def _on_replay_finished_ok(self, result: ReplayBatchResult) -> None:
         stopped = any(summary.status == "stopped" for summary in result.summaries)
         if stopped or self._replay_stopping:
@@ -2701,8 +2113,6 @@ class EngineApplication(QObject):
                 for summary in reversed(result.summaries[-3:])
             ]
         self._refresh_replay_parallel_status()
-        if not result.summaries:
-            self._set_legacy_text("_lbl_pipeline", f"管線：影片回測 {state}")
         self._append_log(
             f"[影片回測] {state}，完成 {result.videos_done} 支，失敗 {result.videos_failed} 支，"
             f"摘要：{result.summary_csv}"
@@ -2717,15 +2127,12 @@ class EngineApplication(QObject):
                 f"處理清單：批次失敗；已完成 {replay_state.done_count}/{total_text}"
             ),
         )
-        self._set_legacy_text("_lbl_pipeline", "管線：影片回測 失敗")
         self._append_log(f"[影片回測] 批次失敗：{msg}")
         self._notify_user("影片回測", msg)
 
     def _on_replay_thread_finished(self) -> None:
         self._replay_stopping = False
         self._replay_state.finish_thread()
-        self._sync_replay_controls()
-        self._set_replay_controls_running(False)
         if self._engine_controller.finish_replay():
             self._shutdown_engine()
 
@@ -2769,8 +2176,6 @@ class EngineApplication(QObject):
             self._append_log("⚠ 請先選擇攝影機再開始。")
             self._pipeline_running = False
             self._engine_controller.stop_pipeline()
-            self._set_legacy_text("_btn_start", "開始")
-            self._set_legacy_text("_lbl_pipeline", "管線：停止")
             return
 
         spec = self._engine_controller.camera_start_spec()
@@ -2865,13 +2270,9 @@ class EngineApplication(QObject):
             self._engine_controller.finish_pipeline_cleanup()
         else:
             self._engine_controller.mark_pipeline_cleanup_pending()
-        self._set_legacy_text("_btn_start", "開始")
-        self._set_legacy_text("_lbl_pipeline", "管線：停止")
-        self._set_legacy_text("_btn_record", "開始記錄")
-        self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
 
     def _on_adapter_released(self, kind: str, _thread: object) -> None:
-        """Apply MainWindow-only queue and shutdown side effects after runtime release."""
+        """Apply adapter queue and shutdown side effects after runtime release."""
         if kind == "camera":
             pass
         elif kind == "combined":
@@ -3012,10 +2413,7 @@ class EngineApplication(QObject):
             err = self._engine_controller.start_belt(belt_cfg)
             if err:
                 self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
-                if not self._engine_mode:
-                    self._lbl_belt_status.setText("心跳帶校準：啟動失敗")
                 self._capture_preferences.configure(belt_calibration=False)
-                self._sync_capture_preference_controls()
                 return
             target = (
                 f"位址 {belt_cfg.address}" if belt_cfg.address
@@ -3063,7 +2461,6 @@ class EngineApplication(QObject):
                 self._append_log(f"▶ belt-truth 同步錄製已啟用 → {writer.path}")
         else:
             self._belt_truth_capture = None
-        self._update_belt_status_label()
 
     def _dispatch_belt_truth_capture(self, writer: BeltTruthCaptureWriter | None) -> None:
         """把 belt-truth 錄製 writer（或 None＝停用）下發給目前運行中的 worker。"""
@@ -3132,9 +2529,6 @@ class EngineApplication(QObject):
         if self._engine_controller.belt_running:
             self._engine_controller.stop_belt()
         self._append_log("■ 心跳帶真值校準停止。")
-        if not self._engine_mode:
-            self._lbl_belt_status.setText("未啟用")
-        self._reset_belt_panel()
 
     def _persist_belt_calibration(self) -> None:
         """把本次收斂的 offset 存成新的自適應校準版本（信心足夠時）。"""
@@ -3284,182 +2678,6 @@ class EngineApplication(QObject):
             self._append_log(f"⚠ 儲存 rPPG 參數候選失敗：{exc}")
         self._clear_candidate_roi_weights()
 
-    def _update_belt_status_label(self) -> None:
-        """輪詢心跳帶連線與校準狀態並更新狀態列（QTimer 每秒觸發）。"""
-        if self._engine_mode:
-            return
-        self._update_belt_panel()
-        st = self._engine_controller.belt_status()
-        cal = self._belt_calibrator
-        if st is None:
-            self._lbl_belt_status.setText("心跳帶校準：停止")
-            return
-        if st.state != "connected":
-            state_text = {
-                "idle": "待命",
-                "scanning": "掃描中…",
-                "connecting": f"連線中…（{st.device_name or st.device_address}）",
-                "reconnecting": "斷線，重新連線中…",
-                "error": f"錯誤：{st.last_error}" if st.last_error else "錯誤",
-                "stopped": "停止",
-            }.get(st.state, st.state)
-            self._lbl_belt_status.setText(f"心跳帶校準：{state_text}")
-            return
-        name = st.device_name or st.device_address or "未知裝置"
-        parts = [f"心跳帶 {name}"]
-        if hr_is_stale(st):
-            age = time.time() - (st.last_sample_at or 0.0)
-            parts.append(f"⚠ {age:.0f} 秒無心率")
-        else:
-            parts.append(f"{st.bpm} BPM" if st.bpm > 0 else "等待心率…")
-        if st.rr_count > 0:
-            parts.append(f"RR×{st.rr_count}")
-        if st.battery_level is not None:
-            parts.append(f"電量 {st.battery_level}%")
-        if st.sensor_contact_supported and not st.sensor_contact_detected:
-            parts.append("⚠ 接觸不良")
-        if cal is not None:
-            cs = cal.state()
-            parts.append(f"校正 {cs.offset_bpm:+.1f} BPM")
-            if cs.diverged:
-                parts.append("⚠ rPPG 偏差大，校正中")
-            elif cs.converged:
-                parts.append(f"已收斂（信心 {cs.confidence}）")
-            else:
-                parts.append(f"收斂中 {cs.pairs_used} 配對")
-        self._lbl_belt_status.setText("｜".join(parts))
-
-    def _reset_belt_panel(self) -> None:
-        """把心跳帶專屬區塊所有欄位重置為「—」（未啟用／停止時呼叫）。"""
-        if self._engine_mode:
-            return
-        for lbl in (
-            self._lbl_belt_bpm, self._lbl_belt_rr, self._lbl_belt_contact,
-            self._lbl_belt_battery, self._lbl_belt_rssi, self._lbl_belt_stale,
-            self._lbl_belt_device, self._lbl_belt_address, self._lbl_belt_location,
-            self._lbl_belt_connected_since, self._lbl_belt_notifications, self._lbl_belt_last_error,
-            self._lbl_belt_hrv_rmssd, self._lbl_belt_hrv_sdnn, self._lbl_belt_hrv_lfhf,
-            self._lbl_belt_hrv_conf, self._lbl_belt_hrv_warmup,
-            self._lbl_belt_calib_offset, self._lbl_belt_calib_raw_resid, self._lbl_belt_calib_corr_resid,
-            self._lbl_belt_calib_confidence, self._lbl_belt_calib_status, self._lbl_belt_calib_pairs,
-            self._lbl_belt_banner_device, self._lbl_belt_banner_bpm,
-            self._lbl_belt_banner_battery, self._lbl_belt_banner_rssi,
-            self._lbl_belt_calib_resid,
-        ):
-            lbl.setText("—")
-        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
-        self._set_status_dot(self._belt_banner_dot, pal["STATUS_OFF"])
-        self._belt_bpm_spark.set_data([])
-        self._belt_calib_bar.set_fraction(None)
-
-    def _update_belt_panel(self) -> None:
-        """更新「心跳帶」專屬區塊的所有數值（即時／連線／HRV／rPPG 校準）。
-
-        唯讀輪詢既有狀態物件，不改動任何校準/worker/BLE 邏輯與數值行為；
-        HRV 僅供顯示，絕不寫回任何會被疲勞融合分數讀取的欄位。
-        """
-        if self._engine_mode:
-            return
-        self._refresh_belt_cfg_labels()
-        st = self._engine_controller.belt_status()
-        cal = self._belt_calibrator
-        if st is None:
-            self._reset_belt_panel()
-            return
-
-        # 橫幅卡（裝置名／連線狀態圓點／BPM 真值／電量／RSSI）
-        pal = _PALETTES.get(self._theme, _PALETTES["dark"])
-        self._lbl_belt_banner_device.setText(st.device_name or st.device_address or "—")
-        connected = st.state == "connected" and not hr_is_stale(st)
-        self._set_status_dot(
-            self._belt_banner_dot,
-            pal["STATUS_OK"] if connected else (pal["STATUS_WARN"] if st.state == "connected" else pal["STATUS_OFF"]),
-        )
-        self._lbl_belt_banner_bpm.setText(f"{st.bpm}" if st.bpm > 0 and not hr_is_stale(st) else "—")
-        self._lbl_belt_banner_battery.setText(f"{st.battery_level}%" if st.battery_level is not None else "—")
-        self._lbl_belt_banner_rssi.setText(f"{st.rssi:.0f} dBm" if st.rssi else "—")
-
-        # 即時
-        self._lbl_belt_bpm.setText(f"{st.bpm} BPM" if st.bpm > 0 else "—")
-        self._lbl_belt_rr.setText(str(st.rr_count) if st.rr_count > 0 else "—")
-        if st.sensor_contact_supported:
-            self._lbl_belt_contact.setText("良好" if st.sensor_contact_detected else "⚠ 接觸不良")
-        else:
-            self._lbl_belt_contact.setText("不支援回報")
-        self._lbl_belt_battery.setText(f"{st.battery_level}%" if st.battery_level is not None else "—")
-        self._lbl_belt_rssi.setText(f"{st.rssi:.0f} dBm" if st.rssi else "—")
-        if st.state == "connected" and hr_is_stale(st):
-            age = time.time() - (st.last_sample_at or 0.0)
-            self._lbl_belt_stale.setText(f"⚠ {age:.0f} 秒無心率")
-        elif st.state == "connected":
-            self._lbl_belt_stale.setText("正常")
-        else:
-            self._lbl_belt_stale.setText("—")
-
-        # 連線
-        self._lbl_belt_device.setText(st.device_name or "—")
-        self._lbl_belt_address.setText(st.device_address or "—")
-        self._lbl_belt_location.setText(st.sensor_location or "—")
-        if st.connected_since is not None:
-            self._lbl_belt_connected_since.setText(f"{time.time() - st.connected_since:.0f} 秒")
-        else:
-            self._lbl_belt_connected_since.setText("—")
-        self._lbl_belt_notifications.setText(str(st.notifications) if st.notifications else "—")
-        self._lbl_belt_last_error.setText(st.last_error or "—")
-
-        # HRV（rppg.watch_physio.compute_watch_physio，唯讀顯示、不進疲勞融合分數）
-        try:
-            samples = self._engine_controller.belt_samples()
-            physio = compute_watch_physio(samples)
-        except Exception:
-            samples = []
-            physio = None
-        # 即時卡 BPM 趨勢 sparkline（復用既有 hub 樣本，不新增採樣機制）
-        bpm_hist = [float(s.bpm) for s in samples if getattr(s, "bpm", 0) and s.bpm > 0]
-        self._belt_bpm_spark.set_data(bpm_hist[-120:])
-        if physio is not None and physio.sample_count >= 2:
-            self._lbl_belt_hrv_rmssd.setText(f"{physio.rmssd:.1f} ms" if physio.rmssd > 0 else "暖機中")
-            self._lbl_belt_hrv_sdnn.setText(f"{physio.sdnn:.1f} ms" if physio.sdnn > 0 else "暖機中")
-            self._lbl_belt_hrv_lfhf.setText(f"{physio.lf_hf:.2f}" if physio.lf_hf > 0 else "暖機中")
-            self._lbl_belt_hrv_conf.setText(physio.hrv_confidence)
-            self._lbl_belt_hrv_warmup.setText(f"{physio.warmup_progress * 100:.0f}%")
-        else:
-            for lbl in (self._lbl_belt_hrv_rmssd, self._lbl_belt_hrv_sdnn, self._lbl_belt_hrv_lfhf, self._lbl_belt_hrv_conf):
-                lbl.setText("暖機中")
-            self._lbl_belt_hrv_warmup.setText(f"{physio.warmup_progress * 100:.0f}%" if physio is not None else "0%")
-
-        # rPPG 校準（沿用現有 OnlineBpmCalibrator，不新建校準器）
-        if cal is not None:
-            cs = cal.state()
-            self._lbl_belt_calib_offset.setText(f"{cs.offset_bpm:+.1f} BPM")
-            self._lbl_belt_calib_raw_resid.setText(f"{cs.raw_residual_bpm:.1f} BPM")
-            self._lbl_belt_calib_corr_resid.setText(f"{cs.corrected_residual_bpm:.1f} BPM")
-            self._lbl_belt_calib_confidence.setText(cs.confidence)
-            if cs.diverged:
-                self._lbl_belt_calib_status.setText("⚠ 偏差大，校正中")
-            elif cs.converged:
-                self._lbl_belt_calib_status.setText("已收斂")
-            else:
-                self._lbl_belt_calib_status.setText("收斂中")
-            self._lbl_belt_calib_pairs.setText(f"{cs.pairs_used} / {cs.total_observations}")
-            # 殘差橫條：校正後殘差相對原始殘差的比例（越短代表校正後越接近真值）
-            raw = float(cs.raw_residual_bpm or 0.0)
-            corr = float(cs.corrected_residual_bpm or 0.0)
-            if raw > 0.0:
-                self._belt_calib_bar.set_fraction(self._clamp01(corr / raw))
-                self._lbl_belt_calib_resid.setText(f"{raw:.1f} → {corr:.1f}")
-            else:
-                self._belt_calib_bar.set_fraction(None)
-                self._lbl_belt_calib_resid.setText("—")
-        else:
-            for lbl in (
-                self._lbl_belt_calib_offset, self._lbl_belt_calib_raw_resid, self._lbl_belt_calib_corr_resid,
-                self._lbl_belt_calib_confidence, self._lbl_belt_calib_status, self._lbl_belt_calib_pairs,
-                self._lbl_belt_calib_resid,
-            ):
-                lbl.setText("—")
-            self._belt_calib_bar.set_fraction(None)
-
     def _analysis_lifecycle_ports(self) -> AnalysisLifecyclePorts:
         return AnalysisLifecyclePorts(
             stop_all=self._stop_analysis_workers,
@@ -3513,8 +2731,6 @@ class EngineApplication(QObject):
                 current.rppg_metrics_ready.connect(self._on_rppg_metrics),
                 current.fatigue_metrics_ready.connect(self._on_fatigue_metrics),
                 current.fused_score_ready.connect(self._on_fused_score),
-                current.face_detected.connect(self._on_face_detected),
-                current.status_changed.connect(self._on_combined_status),
                 current.failed.connect(self._on_combined_failed),
                 current.candidate_bpm_ready.connect(self._on_candidate_bpm_ready),
             ),
@@ -3549,12 +2765,8 @@ class EngineApplication(QObject):
         if self._preview_overlay is not None:
             self._preview_overlay.update_fused_score(score)  # type: ignore[arg-type]
         self._latest_fused_score = score
-        self._refresh_monitor_metrics()
         self._record_metrics()
         self._emit_web_metrics()
-
-    def _on_combined_status(self, msg: str) -> None:
-        self._set_legacy_text("_lbl_pipeline", f"引擎：{msg}")
 
     def _on_combined_failed(self, msg: str) -> None:
         self._append_log(f"✗ 合併引擎錯誤：{msg}")
@@ -3586,8 +2798,6 @@ class EngineApplication(QObject):
             worker,
             connect=lambda current: (
                 current.metrics_ready.connect(self._on_rppg_metrics),
-                current.face_detected.connect(self._on_face_detected),
-                current.status_changed.connect(self._on_rppg_status),
                 current.failed.connect(self._on_rppg_failed),
                 current.candidate_bpm_ready.connect(self._on_candidate_bpm_ready),
             ),
@@ -3610,7 +2820,6 @@ class EngineApplication(QObject):
         self._update_frame_routing()
         if self._preview_overlay is not None:
             self._preview_overlay.show_rppg_panel(False)
-        self._set_legacy_text("_lbl_face", "臉部：—")
         return True
 
     def _on_stress_toggled(self, checked: bool) -> None:
@@ -3642,17 +2851,8 @@ class EngineApplication(QObject):
         if self._preview_overlay is not None:
             self._preview_overlay.update_rppg_metrics(metrics)  # type: ignore[arg-type]
         self._latest_rppg_metrics = metrics
-        self._refresh_monitor_metrics()
         self._record_metrics()
         self._emit_web_metrics()
-
-    def _on_face_detected(self, detected: bool) -> None:
-        self._set_legacy_text(
-            "_lbl_face", "臉部：偵測中 ✓" if detected else "臉部：未偵測到"
-        )
-
-    def _on_rppg_status(self, msg: str) -> None:
-        self._set_legacy_text("_lbl_pipeline", f"rPPG：{msg}")
 
     def _on_rppg_failed(self, msg: str) -> None:
         self._append_log(f"✗ rPPG 錯誤：{msg}")
@@ -3683,8 +2883,6 @@ class EngineApplication(QObject):
             worker,
             connect=lambda current: (
                 current.metrics_ready.connect(self._on_fatigue_metrics),
-                current.face_detected.connect(self._on_fatigue_face_detected),
-                current.status_changed.connect(self._on_fatigue_status),
                 current.failed.connect(self._on_fatigue_failed),
             ),
         )
@@ -3721,7 +2919,6 @@ class EngineApplication(QObject):
         if self._preview_overlay is not None:
             self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
         self._latest_fatigue_metrics = metrics
-        self._refresh_monitor_metrics()
         self._engine_runtime.handle_alarm_metrics(metrics)
         self._feed_baseline_collectors(metrics)
         self._record_metrics()
@@ -3786,7 +2983,6 @@ class EngineApplication(QObject):
 
     def _finalize_manual_baseline(self, collector: PersonalBaselineCollector) -> None:
         prof = collector.finalize(source="manual")
-        self._set_legacy_enabled("_btn_record_baseline", True)
         if not prof.valid:
             self._set_profile_status("個人基線：樣本不足，請保持臉部在畫面內重試")
             self._append_log("[基線] 手動記錄樣本不足，未儲存")
@@ -3803,8 +2999,7 @@ class EngineApplication(QObject):
             worker.set_personal_profile(prof)  # type: ignore[attr-defined]
 
     def _set_profile_status(self, text: str) -> None:
-        if hasattr(self, "_lbl_profile_status"):
-            self._lbl_profile_status.setText(text)
+        self._profile_status = str(text)
 
     def _on_record_baseline_clicked(self) -> None:
         if self._active_fatigue_worker() is None:
@@ -3812,18 +3007,8 @@ class EngineApplication(QObject):
             return
         self._manual_baseline_collector = PersonalBaselineCollector(
             window_sec=60.0, now_iso=time.strftime("%Y-%m-%dT%H:%M:%S"))
-        self._set_legacy_enabled("_btn_record_baseline", False)
         self._set_profile_status("記錄清醒基線中… 0%")
         self._append_log("[基線] 開始手動記錄清醒基線（約 60 秒，請保持清醒自然狀態）")
-
-    def _on_fatigue_face_detected(self, detected: bool) -> None:
-        if self._rppg_worker is None:
-            self._set_legacy_text(
-                "_lbl_face", "臉部：偵測中 ✓" if detected else "臉部：未偵測到"
-            )
-
-    def _on_fatigue_status(self, msg: str) -> None:
-        self._set_legacy_text("_lbl_pipeline", f"警覺：{msg}")
 
     def _on_fatigue_failed(self, msg: str) -> None:
         self._append_log(f"✗ 行為警覺錯誤：{msg}")
@@ -3838,8 +3023,6 @@ class EngineApplication(QObject):
     def _on_camera_info(self, codec: str, w: int, h: int, fps: float) -> None:
         """Called once after camera opens — shows actual driver-reported settings."""
         fps_str = f"{fps:.0f}" if fps > 0 else "—"
-        self._set_legacy_text("_lbl_codec", f"編碼：{codec}")
-        self._set_legacy_text("_lbl_fps", f"FPS：{fps_str}")
         self._last_camera_info = {"codec": codec, "width": w, "height": h}
         cam_text = self._engine_controller.selected_camera_label()
         self._append_log(
@@ -3852,7 +3035,6 @@ class EngineApplication(QObject):
     def _on_frame(self, image) -> None:
         if self._preview_overlay is not None:
             self._preview_overlay.update_frame(image)
-        self._update_monitor_preview(image)
         self._emit_web_frame(image)
 
     def _on_record_frame(self, image) -> None:
@@ -3866,7 +3048,6 @@ class EngineApplication(QObject):
     def _on_fps(self, fps: float) -> None:
         if self._preview_overlay is not None:
             self._preview_overlay.update_fps(fps)
-        self._set_legacy_text("_lbl_fps", f"FPS：{fps:.1f}")
         self._last_fps = float(fps)
         self._emit_web_metrics()
 
@@ -3883,8 +3064,6 @@ class EngineApplication(QObject):
             or self._video_worker is not None
         ):
             self._recording = False
-            self._set_legacy_text("_btn_record", "開始記錄")
-            self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
             self._stop_recording()
             self._append_log("○ 相機中斷，已一併結束記錄。")
         self._set_record_source(None)
@@ -3900,25 +3079,9 @@ class EngineApplication(QObject):
         self._latest_fused_score = None
         self._last_fps = 0.0
         self._last_camera_info = {"codec": "", "width": 0, "height": 0}
-        self._reset_monitor_view()
-        self._set_legacy_text("_btn_start", "開始")
-        self._set_legacy_text("_lbl_pipeline", "管線：停止")
-        self._set_legacy_text("_lbl_fps", "FPS：—")
         self._sync_overlay_visibility()
         self._emit_web_metrics(force=True)
-        if self._engine_mode:
-            self._publish_desktop_notice(f"攝影機錯誤：{msg}")
-            return
-        dlg = QMessageBox(self)
-        dlg.setWindowTitle("攝影機錯誤")
-        dlg.setIcon(QMessageBox.Icon.Warning)
-        dlg.setText(msg)
-        dlg.setInformativeText(
-            "請確認：\n"
-            "• 相機未被其他程式（OBS、Teams 等）佔用\n"
-            "• USB 連接穩定，嘗試重新插拔後再按「開始」"
-        )
-        dlg.exec()
+        self._publish_desktop_notice(f"攝影機錯誤：{msg}")
 
     # ── Pipeline toggle ───────────────────────────────────────────────────────
 
@@ -3928,17 +3091,10 @@ class EngineApplication(QObject):
             self._latest_rppg_metrics = None
             self._latest_fatigue_metrics = None
             self._latest_fused_score = None
-            self._reset_monitor_view()
-            self._set_legacy_text("_btn_start", "停止")
-            self._set_legacy_text("_lbl_pipeline", "管線：運作中")
-            self._set_legacy_text("_lbl_fps", "FPS：—")
-            self._set_legacy_text("_lbl_face", "臉部：—")
             try:
                 self._engine_controller.start_pipeline()
             except (ValueError, RuntimeError):
                 self._pipeline_running = False
-                self._set_legacy_text("_btn_start", "開始")
-                self._set_legacy_text("_lbl_pipeline", "管線：停止")
                 self._engine_controller.stop_pipeline()
                 self._sync_overlay_visibility()
                 self._emit_web_metrics(force=True)
@@ -3957,8 +3113,6 @@ class EngineApplication(QObject):
                     logger.warning("管線啟動失敗後清理資源失敗：%s", cleanup_exc)
                 self._engine_controller.stop_pipeline()
                 self._pipeline_running = False
-                self._set_legacy_text("_btn_start", "開始")
-                self._set_legacy_text("_lbl_pipeline", "管線：停止")
                 self._notify_user("管線", f"無法啟動分析管線：{exc}")
                 self._sync_overlay_visibility()
                 self._emit_web_metrics(force=True)
@@ -3978,11 +3132,6 @@ class EngineApplication(QObject):
             self._latest_fused_score = None
             self._last_fps = 0.0
             self._last_camera_info = {"codec": "", "width": 0, "height": 0}
-            self._reset_monitor_view()
-            self._set_legacy_text("_btn_start", "開始")
-            self._set_legacy_text("_lbl_pipeline", "管線：停止")
-            self._set_legacy_text("_lbl_fps", "FPS：—")
-            self._set_legacy_text("_lbl_codec", "編碼：—")
             if self._belt_calibrator is not None:
                 self._stop_belt_calibration()   # 停止前先存本次 session 校準版本
             self._stop_camera_worker()
@@ -3990,8 +3139,6 @@ class EngineApplication(QObject):
             self._append_log("■ 管線停止。")
             if self._recording:
                 self._recording = False
-                self._set_legacy_text("_btn_record", "開始記錄")
-                self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
                 self._stop_recording()
                 self._append_log("○ 管線停止，已一併結束記錄。")
             self._emit_web_metrics(force=True)
@@ -4015,8 +3162,6 @@ class EngineApplication(QObject):
                     logger.warning("記錄啟動失敗後清理資源失敗：%s", cleanup_exc)
                 self._notify_user("記錄", f"無法啟動記錄：{exc}")
                 return
-            self._set_legacy_text("_btn_record", "停止記錄")
-            self._set_legacy_text("_lbl_record", "記錄狀態：進行中")
             if self._recording_db_path is not None:
                 self._append_log(f"● 記錄開始 → {self._recording_db_path}")
             else:
@@ -4027,8 +3172,6 @@ class EngineApplication(QObject):
             self._engine_controller.stop_recording()
             self._cancel_pending_auto_capture_timer()
             self._rollback_auto_capture_toggles()
-            self._set_legacy_text("_btn_record", "開始記錄")
-            self._set_legacy_text("_lbl_record", "記錄狀態：未啟動")
             if not self._stop_recording():
                 self._engine_controller.mark_pipeline_cleanup_pending()
                 self._fail_closed_pipeline_adapters()
@@ -4036,16 +3179,8 @@ class EngineApplication(QObject):
             self._emit_web_metrics(force=True)
 
     def _cancel_pending_auto_capture_timer(self) -> None:
-        """停止自動採集倒數計時器（若有）並還原其 UI 狀態：按鈕文字、時長 spinbox
-        啟用狀態。刻意不動錄製／心跳帶／壓力勾選狀態——那些由呼叫端依情境決定是否
-        一併回滾（見 `_rollback_auto_capture_toggles`）。供所有既有「停止」入口
-        （手動停止記錄／停止管線／相機失敗／關閉視窗）呼叫，避免自動採集計時器在
-        它所依附的錄製已被其他操作結束後，仍在背景倒數並於稍後誤停一段不相關的新錄製。"""
-        if not self._engine_runtime.cancel_timer("auto_capture"):
-            return
-        if not self._engine_mode:
-            self._btn_auto_capture.setText("自動採集")
-            self._spn_auto_capture_seconds.setEnabled(True)
+        """停止自動採集倒數，避免後續誤停不相關的新錄製。"""
+        self._engine_runtime.cancel_timer("auto_capture")
 
     def _rollback_auto_capture_toggles(self) -> None:
         """回滾本次自動採集自己強制勾選的核取方塊，且只在目前仍是勾選狀態才動，
@@ -4129,9 +3264,6 @@ class EngineApplication(QObject):
         self._auto_capture_expected_db_path = self._recording_db_path
 
         duration_s = self._capture_preferences.snapshot().auto_capture_seconds
-        if not self._engine_mode:
-            self._btn_auto_capture.setText("停止自動採集")
-            self._spn_auto_capture_seconds.setEnabled(False)
         self._append_log(
             f"▶ 自動採集開始（{duration_s}s，{'含心跳帶' if include_belt else '僅記錄'}）"
         )
@@ -4195,22 +3327,6 @@ class EngineApplication(QObject):
         self._append_log("● " + "  ".join(lines))
         self._notify_user("自動採集完成", "\n".join(lines), level="info")
 
-    def _on_camera_combo_changed(self, _index: int) -> None:
-        data = self._cmb_camera.currentData()
-        text = self._cmb_camera.currentText()
-        if data is None:
-            self._engine_controller.select_camera(None)
-            self._lbl_camera.setText("相機：未選擇")
-        else:
-            try:
-                selected = self._engine_controller.camera_snapshot().selected_index
-                if int(data) != selected:
-                    self._engine_controller.select_camera(int(data))
-            except (TypeError, ValueError):
-                self._lbl_camera.setText("相機：未選擇")
-                return
-            self._lbl_camera.setText(f"相機：{text}")
-
     @property
     def selected_camera_index(self) -> int | None:
         """OpenCV device index owned by the headless engine controller."""
@@ -4221,34 +3337,8 @@ class EngineApplication(QObject):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(rec)))
 
     def _on_save_layout(self) -> None:
-        try:
-            path = self._save_settings()
-        except OSError as exc:
-            QMessageBox.warning(self, "保存失敗", f"無法寫入設定檔：{exc}")
-            self._append_log(f"✗ 保存配置失敗：{exc}")
-            return
-        QMessageBox.information(self, "保存", f"配置與布局已保存：\n{path}")
+        path = self._save_settings()
         self._append_log(f"💾 已保存配置與布局 → {path}")
-
-    def _on_web_allow_lan_toggled(self, checked: bool) -> None:
-        self._configure_web_preferences(allow_lan=checked)
-        try:
-            self._save_settings()
-        except OSError as exc:
-            self._append_log(f"⚠ 區域網設定已套用，但保存 settings.json 失敗：{exc}")
-        state = "已啟用" if checked else "已關閉"
-        self._append_log(
-            f"🌐 Web 儀表板區域網存取{state}：{self._format_web_dashboard_message()}"
-        )
-        self._append_log("提示：請重新整理已開啟的 Web 儀表板頁面，以重新連線 Socket.IO。")
-        if checked:
-            self._append_log(
-                f"提示：其他裝置若無法連線，請檢查防火牆是否放行 TCP {WEB_DASHBOARD_DEFAULT_PORT}。"
-            )
-            self._append_log(
-                "⚠ 警告：LAN 模式將以未加密 HTTP 廣播人臉影像與生理數據，僅限受信任網路使用；"
-                "存取需附帶網址中的 token。"
-            )
 
     def _web_dashboard_url_labels(self) -> list[tuple[str, str]]:
         """回傳 (顯示標籤, 網址) 清單。"""
@@ -4264,64 +3354,14 @@ class EngineApplication(QObject):
         options = self._web_dashboard_url_labels()
         if not options:
             return None
-        if not self._web_allow_lan_enabled() or len(options) == 1:
-            return options[0][1]
-        if self._engine_mode:
-            return options[0][1]
-
-        display_labels = [label for label, _url in options]
-        default_index = 0
-        for index, (_label, url) in enumerate(options):
-            if not url.startswith("http://127.0.0.1"):
-                default_index = index
-                break
-
-        choice, ok = QInputDialog.getItem(
-            self,
-            "開啟 Web 儀表板",
-            "已啟用區域網存取，請選擇要開啟的網址：",
-            display_labels,
-            default_index,
-            False,
-        )
-        if not ok:
-            return None
-        for label, url in options:
-            if label == choice:
-                return url
-        return options[default_index][1]
+        return options[0][1]
 
     def _on_web_info(self) -> None:
         if self._web_server is None:
             self._start_web_server()
         if self._web_server is None:
-            if self._engine_mode:
-                raise RuntimeError("Web dashboard failed to start")
-            QMessageBox.warning(
-                self,
-                "Web 儀表板",
-                "Web 儀表板啟動失敗，請確認已安裝 Flask/Socket.IO 相依套件。",
-            )
-            return
+            raise RuntimeError("Web dashboard failed to start")
         url_str = self._pick_web_dashboard_url()
         if url_str is None:
             return
         QDesktopServices.openUrl(QUrl(url_str))
-        if self._engine_mode:
-            return
-        all_urls = "\n".join(self._web_dashboard_urls())
-        QMessageBox.information(
-            self,
-            "Web 儀表板",
-            f"已開啟 Web 儀表板：\n{url_str}\n\n"
-            f"可用網址：\n{all_urls}\n"
-            f"\n若瀏覽器無法連線，請確認防火牆或埠 {WEB_DASHBOARD_DEFAULT_PORT} 未被佔用。"
-            + (
-                "\n\n其他裝置請使用「區域網」網址，不要用 127.0.0.1。"
-                if self._web_allow_lan_enabled()
-                else ""
-            ),
-        )
-
-
-MainWindow = EngineApplication

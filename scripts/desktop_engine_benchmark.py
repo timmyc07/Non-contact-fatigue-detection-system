@@ -304,18 +304,18 @@ def _synthetic_image(width: int = 640, height: int = 360):
 
 
 def _benchmark_synthetic_preview(*, warmup: int, samples: int) -> dict[str, Any]:
-    from gui.main_window import MainWindow
+    from gui.main_window import EngineApplication
     from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread
 
     image = _synthetic_image()
     for _ in range(warmup):
-        MainWindow._encode_frame_jpeg(image, max_width=640, quality=70)
+        EngineApplication._encode_frame_jpeg(image, max_width=640, quality=70)
     gc.collect()
     encode_latencies: list[float] = []
     payloads: list[str] = []
     for _ in range(samples):
         started = time.perf_counter_ns()
-        payload = MainWindow._encode_frame_jpeg(image, max_width=640, quality=70)
+        payload = EngineApplication._encode_frame_jpeg(image, max_width=640, quality=70)
         encode_latencies.append((time.perf_counter_ns() - started) / 1_000_000.0)
         if payload is None:
             raise RuntimeError("synthetic preview JPEG encode failed")
