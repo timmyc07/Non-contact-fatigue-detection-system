@@ -6,7 +6,9 @@
 
 目前狀態：live camera、analysis、錄影與 Replay QThread／worker、production runtime QTimer，以及
 alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；production adapter 已改為
-`EngineApplication(QObject)`，不再建立 `QMainWindow`／QWidget。下一切片移除不可達的 widget-only source。
+`EngineApplication(QObject)`，不再建立 `QMainWindow`／QWidget。本次收尾已移除舊 QSS/theme token、主頁面 builders
+與不可達的 dashboard/monitor/belt/replay/settings renderer；保留的 QtWidgets 只屬於 legacy 相容方法與測試契約，
+明日再分批移除，避免一次改動擴大到 runtime 行為。
 
 ## 本階段完成狀態
 
@@ -16,8 +18,9 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
   monitor、心跳帶、camera、recording、profile 等 Qt 假控件。
 - `EngineController` 與 Qt-free runtime state 已承接 camera、analysis topology、pipeline、
   recording、replay、shutdown、BLE、overlay、capture 及 Web preference 的正式狀態。
-- Python/Qt 目前只保留 `QApplication`、`QThread`、`QTimer`、signal/slot 與
-  `EngineApplication(QObject)` runtime adapter；同檔仍留有尚未抽離的不可達 QtWidgets source。
+- Python/Qt production 路徑只保留 `QApplication`、`QThread`、`QTimer`、signal/slot 與
+  `EngineApplication(QObject)` runtime adapter；`gui/main_window.py` 的舊 widget imports/compatibility methods
+  尚未完全移除，但 engine mode 不會建立或渲染它們。
   Windows native hotkey 已由
   application-level `GlobalHotkeyRuntime` 承接，不再需要原生主視窗。
 - engine `app.shutdown` 已先保留 active replay 的停止／延後結束 gate；其餘 engine 路徑直接以可重入
@@ -40,7 +43,7 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
   `EngineApplication` 只路由 configure、preview 與 metrics。shutdown 在 camera／analysis producer 停止後冪等 close alarm。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證：Python `739 passed, 2 skipped`、
+- 最近一次完整驗證（本次 cleanup 後）：Python `743 passed, 2 skipped`、
   alarm controller + engine runtime + desktop settings focused slice 通過、
   Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
   PyInstaller、Tauri release/NSIS、source/bundled engine shutdown、`compileall` 與 `pip check` 均通過。
@@ -61,8 +64,8 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
 ## 已知剩餘缺口
 
 1. Python engine 已使用 `QApplication + EngineApplication(QObject)` 作 runtime 容器，正式路徑沒有 QWidget。
-   `gui/main_window.py` 仍含約 5k 行不可達 legacy widget builders/imports，且 `MainWindow` 相容 alias 尚在；
-   下一切片應分離／刪除這些 source，並保持 engine adapter API 與數值契約。
+   本次已刪除舊主頁面 builders 與 QSS；`gui/main_window.py` 仍保留 QtWidgets imports、legacy compatibility methods
+   與 `MainWindow = EngineApplication` alias。下一切片應逐組確認呼叫者後移除，並保持 engine adapter API 與數值契約。
 2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
 
 ## 下一階段執行順序
@@ -87,7 +90,7 @@ alarm/Qt multimedia ownership 已由 application-owned `EngineRuntime` 保存；
      configure／preview／metrics，cleanup 在 producer 停止後冪等 close。
    - **已完成：** 移除 production `QMainWindow` inheritance，改為 `EngineApplication(QObject)`，加入
      `close_runtime()` 與 legacy window payload round-trip。
-   - **下一步：** 分離不可達 widget-only builders/imports，最後移除 `MainWindow` compatibility alias。
+   - **下一步：** 先清理可證明不可達的 renderer helper/import，再以全量測試確認後移除 `MainWindow` compatibility alias。
    - 每個切片維持 desktop API v2、worker topology 與數值輸出不變。
 
 3. **完成 parity 與效能驗收**

@@ -137,7 +137,7 @@ shutdown deferral。production runtime QTimer ownership 也已移入 `EngineRunt
 Web restart 與 Overlay 自有排程留在各自既有 owner。`EngineRuntime` 亦已承接 `FatigueAlarmController` 與
 `QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput` ownership；`EngineApplication` 只路由 configure、preview 與
 metrics，shutdown 在 camera／analysis producer 停止後冪等關閉 alarm。production adapter 已移除
-`QMainWindow` inheritance；下一個主要邊界是刪除同檔內不可達的 widget-only builders、imports 與相容 alias。此抽取不修改警報條件、音量、fallback、strict validation、錯誤映射、
+`QMainWindow` inheritance；2026-08-17 cleanup 已刪除舊 QSS/theme token 與主頁面 builders，下一個主要邊界是逐組刪除仍保留的不可達 widget imports、compatibility methods 與相容 alias。此抽取不修改警報條件、音量、fallback、strict validation、錯誤映射、
 metrics 順序、camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI、校準或任何數值行為。
 cleanup 採逐步 best-effort：非 thread step 的例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera 或 analysis
 adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`EngineRuntime.adapter_released`

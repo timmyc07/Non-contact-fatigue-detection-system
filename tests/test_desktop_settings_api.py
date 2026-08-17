@@ -12,7 +12,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject  # noqa: E402
-from PySide6.QtGui import QAction, QImage  # noqa: E402
+from PySide6.QtGui import QAction  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget  # noqa: E402
 
 from gui.alarm_config import AlarmConfig  # noqa: E402
@@ -1175,21 +1175,18 @@ def test_legacy_hotkeys_update_real_actions_and_dispatch(
     settings_window._engine_mode = True
 
 
-def test_headless_replay_preview_and_queue_are_engine_safe(
+def test_engine_application_does_not_expose_legacy_widget_renderers(
     settings_window: MainWindow,
 ) -> None:
-    summary = ReplayVideoSummary(
-        subject="01",
-        label="0",
-        label_name="Alert",
-        video_path="sample.mp4",
-    )
-    settings_window._replay_queue_upsert(summary, done=False)
-    settings_window._on_replay_preview_frame(
-        QImage(2, 2, QImage.Format.Format_RGB32)
-    )
-    settings_window._update_belt_panel()
-    settings_window._refresh_monitor_metrics()
+    for name in (
+        "_build_central",
+        "_build_monitor_page",
+        "_build_belt_page",
+        "_build_replay_page",
+        "_build_settings_page",
+        "_replay_queue_upsert",
+    ):
+        assert not hasattr(settings_window, name)
 
 
 def test_engine_belt_renderers_do_not_read_presentation_data(
