@@ -75,7 +75,7 @@ def _print_linux_qt_runtime_help(missing_packages: list[str]) -> None:
 
 _prefer_pyside6_qt_plugins()
 
-from gui.main_window import MainWindow, application_stylesheet
+from gui.main_window import EngineApplication
 
 
 def _legacy_ui_requested() -> bool:
@@ -119,19 +119,14 @@ def main() -> int:
         _print_linux_qt_runtime_help(missing_packages)
         return 78
 
-    engine_mode = "--engine" in sys.argv
     qt_args = [arg for arg in sys.argv if arg != "--engine"]
     app = QApplication(qt_args)
-    app.setQuitOnLastWindowClosed(not engine_mode)
-    if not engine_mode:
-        app.setStyle("Fusion")
-        app.setStyleSheet(application_stylesheet())
-    win = MainWindow(engine_mode=engine_mode)
-    if not engine_mode:
-        win.show()
-    else:
-        print("[Engine] Desktop control backend listening on http://127.0.0.1:5000")
-    return app.exec()
+    app.setQuitOnLastWindowClosed(False)
+    engine = EngineApplication()
+    print("[Engine] Desktop control backend listening on http://127.0.0.1:5000")
+    exit_code = app.exec()
+    engine.close_runtime()
+    return exit_code
 
 
 if __name__ == "__main__":

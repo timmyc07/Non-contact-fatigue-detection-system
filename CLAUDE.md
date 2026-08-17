@@ -73,8 +73,8 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 `EngineController` 管理 camera config、pipeline/analysis topology、recording/replay/shutdown
 state 與 BLE runtime ownership；analysis desired state 在 pipeline 停止時仍由 controller
 保存，engine mode 不建立 analysis checkbox 假元件，legacy Qt checkbox 僅為非 production presentation mirror；camera scan/settings/desktop
-commands 在 engine mode 直接使用 controller，不建立 camera combo/checkbox 假元件；`MainWindow` 僅作
-QThread/signal routing 與 legacy presentation adapter；Qt multimedia alarm 由 application-owned
+commands 在 engine mode 直接使用 controller，不建立 camera combo/checkbox 假元件；
+`EngineApplication(QObject)` 作 QThread/signal routing 與 runtime adapter，`MainWindow` 僅為暫時相容 alias；Qt multimedia alarm 由 application-owned
 `EngineRuntime` 保存；Overlay 偏好由 Qt-free `OverlayRuntimeState` 保存，
 engine mode 不建立 Qt Overlay 或其 checkbox/slider/no-op adapter；replay 的資料夾、jobs、
 annotated 與進度投影由 Qt-free `ReplayRuntimeState` 保存，engine mode 不建立 replay
@@ -83,7 +83,7 @@ spinbox/checkbox/label 假元件；自動記錄、心跳帶校準與自動採集
 偏好由 Qt-free `WebPreferencesState` 保存，engine mode 不建立 QAction 假元件）：
 
 ```
-CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  →  MainWindow adapter
+CameraStreamWorker  →  BGR frame queue  →  分析 worker  →  Qt Signals  →  EngineApplication adapter
              ↑                  EngineController lifecycle ports                  ↑
                                                           ├→ Overlay（標註預覽）
                                                           ├→ MetricsRecorder（SQLite .db）
@@ -107,38 +107,37 @@ presentation mirror。`overlay.geometry` 使用平台中立 physical pixel
 Python runtime，`settings.save` 才持久化。
 Replay lifecycle 仍由 `EngineController` 管理；Flutter/Tauri 所需的 replay configuration 與
 progress payload 由 `ReplayRuntimeState` 提供，legacy Qt widgets 僅為 mirror，實際 QThread 與
-`VideoReplayWorker` ownership 已由 application-owned `EngineRuntime` 承接；`MainWindow` 只保留
+`VideoReplayWorker` ownership 已由 application-owned `EngineRuntime` 承接；`EngineApplication` 只保留
 worker-specific progress／preview／完成 callback 與 shutdown 重入。此狀態目前不寫入 settings JSON，
 維持既有當次執行設定契約。
 採集偏好由 `CapturePreferencesState` 提供 desktop state：`auto_record` 與
 `belt_calibration` 仍沿用 settings JSON `toggles` 持久化；自動採集秒數與是否包含心跳帶仍為
 session-only，不新增 schema。application-owned `EngineRuntime` 已承接 desktop command drain、
 心跳帶 1 秒 tick、自動採集 one-shot 與 shutdown defer/retry 的 `QTimer` ownership；BLE 啟停、
-校準、錄影與 callback side effect 仍由 `MainWindow` adapter 執行。狀態層只保存意圖，adapter
+校準、錄影與 callback side effect 仍由 `EngineApplication` adapter 執行。狀態層只保存意圖，adapter
 失敗時回滾狀態。此抽取不修改 BLE 樣本、校準器、錄影
 worker、相機／分析 worker topology 或任何 rPPG／疲勞數值路徑。
 Web LAN 偏好由 `WebPreferencesState` 提供 runtime、desktop state 與 settings JSON `web.allow_lan`
 投影；engine mode 不建立 legacy QAction。Web server 建立、shared-token URL 與非阻塞 restart
-仍由 `MainWindow` adapter 執行，預設維持 localhost-only。
+仍由 `EngineApplication` adapter 執行，預設維持 localhost-only。
 engine mode 的 runtime 訊息直接寫入 Python logger，不建立 QTextEdit 日誌假元件；legacy
 QTextEdit 與 status bar 僅保留在非 production Qt 路徑。
 engine mode 的全域快捷鍵以 `sequence + callback` binding 註冊與分派，不建立 QAction 假元件；
 Windows 原生註冊、thread message dispatch 與清理由 application-level `GlobalHotkeyRuntime` 負責，
-不再依賴 `MainWindow.winId()` 或 `MainWindow.nativeEvent()`；legacy 選單 QAction 只存在於非 production 路徑。
+不再依賴 QWidget HWND 或 `nativeEvent()`；legacy 選單 QAction 原始碼不在 production 路徑建立。
 engine `app.shutdown` 先請 `EngineController` 判斷；回放進行中仍只停止回放並延後結束，待 replay thread
 完成後再重入 shutdown。其他 engine 路徑直接執行具 in-progress／complete guard 的 `_cleanup_runtime()`，再呼叫
-`QApplication.quit()`，不再依賴隱藏 `MainWindow.closeEvent()`。cleanup 順序固定為快捷鍵、待處理自動採集、
-心跳帶校準／timer／BLE、Web restart／server、錄影、相機 worker、Overlay，且失敗後可重試；`closeEvent()`
-只保留 legacy replay gate／adapter。live camera 與 combined／rPPG／fatigue adapter 的 QThread／worker reference、
+`QApplication.quit()`；production 不再建立 QWidget，也沒有 `closeEvent()`。cleanup 順序固定為快捷鍵、待處理自動採集、
+心跳帶校準／timer／BLE、Web restart／server、錄影、相機 worker、Overlay，且失敗後可重試。live camera 與 combined／rPPG／fatigue adapter 的 QThread／worker reference、
 共同 signal wiring、停止 timeout、join-before-release 與 stale-finish 保護已由 application-owned `EngineRuntime(QObject)` 負責；
-`MainWindow` 只保留 worker-specific callback、queue／routing 與 legacy presentation side effect。錄影與回放
+`EngineApplication` 只保留 worker-specific callback、queue／routing 與尚待抽離的 legacy presentation side effect。錄影與回放
 worker 的 QThread／worker reference 也已移入 `EngineRuntime`：錄影維持 request-stop + 2000ms join timeout，
 timeout 時保留 ownership；回放只送 cooperative stop request，待 thread finished 後完成 controller state 與
 shutdown deferral。production runtime QTimer ownership 也已移入 `EngineRuntime`；legacy REC presentation timer、
 Web restart 與 Overlay 自有排程留在各自既有 owner。`EngineRuntime` 亦已承接 `FatigueAlarmController` 與
-`QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput` ownership；`MainWindow` 只路由 configure、preview 與
-metrics，shutdown 在 camera／analysis producer 停止後冪等關閉 alarm。下一個主要邊界是移除
-`QMainWindow` inheritance；此 ownership 抽取不修改警報條件、音量、fallback、strict validation、錯誤映射、
+`QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput` ownership；`EngineApplication` 只路由 configure、preview 與
+metrics，shutdown 在 camera／analysis producer 停止後冪等關閉 alarm。production adapter 已移除
+`QMainWindow` inheritance；下一個主要邊界是刪除同檔內不可達的 widget-only builders、imports 與相容 alias。此抽取不修改警報條件、音量、fallback、strict validation、錯誤映射、
 metrics 順序、camera、worker topology、recording、BLE、replay、rPPG、疲勞、ROI、校準或任何數值行為。
 cleanup 採逐步 best-effort：非 thread step 的例外只記錄並繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。若 video、camera 或 analysis
 adapter thread wait timeout 而 ownership 仍存在，engine 不呼叫 quit；`EngineRuntime.adapter_released`

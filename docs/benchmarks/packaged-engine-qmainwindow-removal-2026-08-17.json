@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-17",
+  "bundle_input": "dist/ncfd-engine/ncfd-engine.exe",
+  "bundle_input_sha256": "F5C518C09BF8B139976C46EB51536195680E760F8B6375D4E5EF40D54F56C93B",
+  "installer": "src-tauri/target/release/bundle/nsis/疲勞監測操作台_0.1.0_x64-setup.exe",
+  "installer_sha256": "CD279806CFA3C21EDEC6A3BA91431F6D41D502222D382FB39CE60B400D42F5A2",
+  "bundle_input_smoke": {
+    "desktop_api_version": 2,
+    "shutdown_success": true,
+    "engine_exit_code": 0
+  },
+  "installed_smoke": {
+    "install_exit_code": 0,
+    "desktop_api_version": 2,
+    "shutdown_success": true,
+    "normal_shell_close_verified": false,
+    "failure": "The shell did not exit within 10 seconds after WM_CLOSE from the smoke harness."
+  },
+  "notes": [
+    "PyInstaller sidecar and Tauri release/NSIS builds completed successfully.",
+    "The failed harness attempt terminated the exact shell process and removed its isolated temporary installation.",
+    "No physical camera, BLE sensor, Flutter WebView interaction, or UTA-RLDD dataset was used."
+  ]
+}

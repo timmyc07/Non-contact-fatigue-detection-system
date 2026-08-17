@@ -55,7 +55,7 @@ def camera_window(
     window = MainWindow(engine_mode=True)
     yield window
     window._engine_runtime.cancel_timer("desktop_command")
-    window.close()
+    window.close_runtime()
 
 
 def test_camera_settings_commands_state_and_scan_use_controller(

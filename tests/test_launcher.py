@@ -29,7 +29,7 @@ def test_legacy_panel_flag_is_rejected_without_starting_qt() -> None:
     assert "npm run desktop" in result.stdout
 
 
-def test_engine_mode_skips_visual_application_styling_and_show(
+def test_engine_entry_creates_only_headless_application_adapter(
     monkeypatch,
 ) -> None:
     events: list[object] = []
@@ -50,15 +50,15 @@ def test_engine_mode_skips_visual_application_styling_and_show(
         def exec(self) -> int:
             return 0
 
-    class FakeWindow:
-        def __init__(self, *, engine_mode: bool) -> None:
-            events.append(("window", engine_mode))
+    class FakeEngineApplication:
+        def __init__(self) -> None:
+            events.append("engine_application")
 
-        def show(self) -> None:
-            raise AssertionError("engine mode must not show a Qt window")
+        def close_runtime(self) -> None:
+            events.append("engine_close")
 
     monkeypatch.setattr(launcher, "QApplication", FakeApplication)
-    monkeypatch.setattr(launcher, "MainWindow", FakeWindow)
+    monkeypatch.setattr(launcher, "EngineApplication", FakeEngineApplication)
     monkeypatch.setattr(launcher, "_missing_linux_qt_runtime_libraries", lambda: [])
     monkeypatch.setattr(sys, "argv", ["main.py", "--engine"])
 
@@ -66,5 +66,6 @@ def test_engine_mode_skips_visual_application_styling_and_show(
     assert events == [
         ("app", ["main.py"]),
         ("quit_on_last_window", False),
-        ("window", True),
+        "engine_application",
+        "engine_close",
     ]

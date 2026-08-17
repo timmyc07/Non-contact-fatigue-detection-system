@@ -37,10 +37,10 @@ This boundary is deliberately additive. The numeric paths in `rppg/`, `gui/fatig
 
 ## Headless engine status
 
-The production path starts `main.py --engine`. In this mode `MainWindow` no
-longer constructs the legacy Qt menu, central dashboard, or Qt overlay, and the
-engine path does not apply the visual QSS, window size, title bar, or status bar.
-The remaining Qt `MainWindow` is an internal event-loop/runtime adapter. The
+The production path starts `main.py --engine`. It creates an internal
+`EngineApplication(QObject)` runtime adapter, not a `QMainWindow` or QWidget,
+and does not apply the legacy QSS, window size, title bar, or status bar.
+`MainWindow` remains only as a temporary compatibility alias. The
 Qt-free `EngineController` is the product-state authority for camera
 configuration, the desired analysis mode, active pipeline state, the
 Combined/RPPG/Fatigue worker topology, recording and replay/shutdown lifecycle
@@ -65,12 +65,12 @@ Qt-free `CapturePreferencesState`. Engine mode no longer constructs their
 legacy checkboxes, duration spinbox, or auto-capture button. Auto-record and
 belt-calibration retain the existing settings JSON toggle contract; duration
 and include-belt remain session-scoped. `EngineRuntime` owns the belt tick and
-auto-capture timers, while `MainWindow` still performs BLE, calibration,
+auto-capture timers, while `EngineApplication` still performs BLE, calibration,
 recording, and callback side effects and rolls preference state back when an
 adapter fails.
 `EngineRuntime` constructs and owns the concrete QThreads and workers, plus the
 `FatigueAlarmController` and Qt multimedia `QtAlarmPlaybackBackend`/
-`QMediaPlayer`/`QAudioOutput`. `MainWindow` still constructs recording writers,
+`QMediaPlayer`/`QAudioOutput`. `EngineApplication` still constructs recording writers,
 calibration adapters, and worker-specific signal callbacks, and only routes alarm
 configure, preview, and metrics calls. Its
 `_pipeline_running` and `_recording` fields are transitional mirrors of concrete
@@ -82,14 +82,14 @@ Web LAN access now lives in the Qt-free `WebPreferencesState`. Engine mode does
 not construct a QAction stand-in; settings load/save, desktop state, bind-host
 selection, and dashboard URL formatting read the state directly. The existing
 web-server thread, shared-token URL, and non-blocking restart coordination stay
-in the `MainWindow` runtime adapter, with localhost-only remaining the default.
+in the `EngineApplication` runtime adapter, with localhost-only remaining the default.
 Engine-mode runtime messages now go directly to the Python logger instead of a
 QTextEdit-shaped no-op sink. The rich-text log console and status-bar projection
 remain limited to the non-production legacy Qt path.
 Engine-mode global hotkeys now use sequence-and-callback bindings instead of
 QAction-shaped stand-ins. The application-level `GlobalHotkeyRuntime` registers
 Windows thread-queue hotkeys, dispatches native events, and cleans up successful
-registrations without a `MainWindow` HWND or `MainWindow.nativeEvent()`.
+registrations without a QWidget HWND or `nativeEvent()`.
 Legacy menu shortcuts still use real QActions. Engine mode also no longer
 overrides `statusBar()` with a fake sink.
 Engine mode no longer creates hidden monitor labels, progress bars, sparklines,
@@ -115,8 +115,9 @@ it creates the overlay or when Python's authoritative value explicitly changes.
 Normal polling only reports actual native geometry, so manual movement is not
 reset. Flutter updates Python runtime state only when the native value changes.
 Persisting still occurs through the existing explicit `settings.save`
-transaction. Legacy Qt base64 geometry is tolerated on load but is not written
-by the production engine path.
+transaction. Legacy Qt base64 geometry/state is retained as an opaque payload
+and round-trips unchanged; the production engine no longer calls QWidget
+save/restore APIs.
 Replay configuration remains session-scoped as before; this extraction does
 not add a settings JSON schema. Worker parameters, deterministic timestamps,
 annotated output, UTA-RLDD validation reports, and analysis values are unchanged.
@@ -126,15 +127,15 @@ fatigue scores unchanged.
 Engine `app.shutdown` preserves the active-replay stop/defer gate; once the
 replay thread finishes, shutdown re-enters. Every other engine shutdown calls
 the re-entrant `_cleanup_runtime()` directly, then `QApplication.quit()`, rather
-than requiring hidden `MainWindow.closeEvent()`. Cleanup is ordered: hotkeys,
+than requiring a widget close event. Cleanup is ordered: hotkeys,
 pending auto-capture, belt calibration/timer/BLE, Web restart/server, recording,
 camera/analysis producers, alarm, then overlay; failed cleanup can be retried.
 Alarm close is idempotent and releases the runtime controller before best-effort
-player stop. `closeEvent()` now
-serves only as the legacy replay-gate adapter. An application-owned
+player stop. The production adapter exposes explicit `close_runtime()` teardown
+and has no `closeEvent()`. An application-owned
 `EngineRuntime(QObject)` now owns the live camera and combined/rPPG/fatigue
 adapter threads and workers, including common signal wiring, the existing stop
-timeouts, join-before-release, and stale-finish protection. `MainWindow` retains only worker-specific
+timeouts, join-before-release, and stale-finish protection. `EngineApplication` retains only worker-specific
 callbacks, queue/routing work, and legacy presentation side effects. Recording
 and replay QThread/worker ownership is also held by `EngineRuntime`: recording
 retains cooperative stop plus the existing 2000 ms join timeout and late-finish
@@ -143,7 +144,8 @@ controller/shutdown deferral from the released-adapter callback. `EngineRuntime`
 also owns desktop-command drain, belt tick, auto-capture, and shutdown defer/retry
 timers; the legacy REC presentation timer, Web restart, and Overlay scheduling
 remain with their existing owners. Alarm/multimedia ownership is now application-owned;
-the next major boundary is removing `QMainWindow` inheritance. This ownership
+the production adapter no longer inherits `QMainWindow`. The next major boundary
+is removing unreachable widget-only builders/imports and the compatibility alias. This ownership
 change does not alter alarm conditions, volume, fallback, strict validation, error
 mapping, metrics ordering, camera, worker topology, recording, BLE, replay, rPPG,
 fatigue, ROI, calibration, or any measurement values.
@@ -251,6 +253,23 @@ and smoke details are retained in
 `docs/benchmarks/packaged-engine-runtime-alarm-ownership-2026-08-17.json`.
 Golden/replay was not run because no UTA-RLDD dataset path was available. The
 benchmarks do not cover a physical camera, BLE device, or Flutter WebView rendering.
+
+After replacing the hidden `QMainWindow` instance with `EngineApplication(QObject)`,
+two 2026-08-17 runs measured 256.172/256.113 MiB RSS,
+1839.081/2453.306 ms startup, `state.get` p50 20.302/20.048 ms, and synthetic
+JPEG encode p50 1.173/1.163 ms. RSS, IPC, and JPEG encode remained within the
+previous ownership slice range. The second startup sample is retained as
+environment-sensitive variance, not claimed as an improvement or regression.
+Raw captures are in
+`docs/benchmarks/desktop-engine-qmainwindow-removal-2026-08-17-run1.json` and
+`docs/benchmarks/desktop-engine-qmainwindow-removal-2026-08-17-run2.json`.
+Python completed `739 passed, 2 skipped`; Flutter completed 28 tests, analyze,
+and release Web build; Rust completed 8 tests; compileall, pip check,
+PyInstaller, Tauri release/NSIS, and bundle-input API/shutdown smoke passed.
+The isolated installer exposed API v2 and accepted `app.shutdown`, but the
+smoke harness could not make the Tauri shell exit normally within 10 seconds,
+so installed-shell close verification remains open. Evidence and hashes are in
+`docs/benchmarks/packaged-engine-qmainwindow-removal-2026-08-17.json`.
 
 ## Build prerequisites
 

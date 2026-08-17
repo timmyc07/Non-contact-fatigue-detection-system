@@ -11,8 +11,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QObject  # noqa: E402
 from PySide6.QtGui import QAction, QImage  # noqa: E402
-from PySide6.QtWidgets import QApplication, QStatusBar  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget  # noqa: E402
 
 from gui.alarm_config import AlarmConfig  # noqa: E402
 from gui.alarm_player import FatigueAlarmController  # noqa: E402
@@ -25,7 +26,7 @@ from gui.desktop_control import (  # noqa: E402
 import gui.main_window as main_window_module  # noqa: E402
 from gui.engine_controller import AnalysisLifecyclePorts, CameraDevice  # noqa: E402
 from gui.global_hotkeys import HotkeyRegistrationFailure  # noqa: E402
-from gui.main_window import MainWindow, _classify_log_message  # noqa: E402
+from gui.main_window import EngineApplication, MainWindow, _classify_log_message  # noqa: E402
 from gui.video_replay import ReplayVideoSummary  # noqa: E402
 
 
@@ -52,7 +53,7 @@ def settings_window(
     window = MainWindow(engine_mode=True)
     yield window
     window._engine_runtime.cancel_timer("desktop_command")
-    window.close()
+    window.close_runtime()
 
 
 def _install_runtime_adapter(
@@ -115,7 +116,8 @@ def test_engine_runtime_owns_auto_capture_timer(settings_window: MainWindow) -> 
 def test_engine_mode_does_not_construct_legacy_visual_shell(
     settings_window: MainWindow,
 ) -> None:
-    assert settings_window.centralWidget() is None
+    assert isinstance(settings_window, QObject)
+    assert not isinstance(settings_window, (QWidget, QMainWindow))
     assert settings_window._preview_overlay is None
     for name in (
         "_chk_all",
@@ -219,11 +221,28 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
         "_tag_rppg",
     ):
         assert not hasattr(settings_window, name)
-    assert settings_window.windowTitle() == ""
-    assert settings_window.minimumWidth() == 0
-    assert settings_window.minimumHeight() == 0
-    assert settings_window.findChildren(QStatusBar) == []
     assert settings_window._rec_ui_timer is None
+
+
+def test_engine_application_rejects_legacy_widget_mode(qt_app: QApplication) -> None:
+    with pytest.raises(ValueError, match="engine-only"):
+        EngineApplication(engine_mode=False)
+
+
+def test_headless_settings_preserve_legacy_window_payload(
+    settings_window: MainWindow,
+) -> None:
+    legacy_window = {"geometry": "legacy-geometry", "state": "legacy-state"}
+    settings_window._settings_path().write_text(
+        json.dumps({"window": legacy_window}),
+        encoding="utf-8",
+    )
+
+    settings_window._load_settings()
+    settings_window._save_settings()
+
+    saved = json.loads(settings_window._settings_path().read_text(encoding="utf-8"))
+    assert saved["window"] == legacy_window
 
 
 def test_engine_log_messages_use_python_logger(
@@ -2336,11 +2355,7 @@ def test_engine_shutdown_cleans_runtime_before_quit_without_closing_window(
         cleanup_runtime,
         raising=False,
     )
-    monkeypatch.setattr(
-        settings_window,
-        "close",
-        lambda: events.append("close"),
-    )
+    assert not hasattr(settings_window, "close")
 
     class FakeApp:
         def quit(self) -> None:

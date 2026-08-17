@@ -44,7 +44,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -987,10 +986,14 @@ class _PreviewPanel(QFrame):
         p.end()
 
 
-class MainWindow(QMainWindow):
-    def __init__(self, *, engine_mode: bool = False) -> None:
+class EngineApplication(QObject):
+    """Headless Qt application adapter for the production Python engine."""
+
+    def __init__(self, *, engine_mode: bool = True) -> None:
+        if engine_mode is not True:
+            raise ValueError("EngineApplication is engine-only")
         super().__init__()
-        self._engine_mode = bool(engine_mode)
+        self._engine_mode = True
         self._engine_controller = EngineController(belt_runtime=BeltRuntime())
         if not self._engine_mode:
             self.setWindowTitle("NCFD System — 非接觸式疲勞監測系統 V2")
@@ -1016,7 +1019,7 @@ class MainWindow(QMainWindow):
             self._preview_overlay.move(100, 100)
         app = QApplication.instance()
         if app is None:
-            raise RuntimeError("MainWindow requires a QApplication instance")
+            raise RuntimeError("EngineApplication requires a QApplication instance")
         self._engine_runtime = EngineRuntime(app)
         self._engine_runtime.adapter_released.connect(self._on_adapter_released)
         self._bgr_queue: "queue.Queue | None" = None
@@ -1042,6 +1045,7 @@ class MainWindow(QMainWindow):
         self._global_hotkey_bindings: dict[int, _GlobalHotkeyBinding] = {}
         self._hotkey_failed_once: set[str] = set()
         self._hotkey_registration_failures: list[dict[str, Any]] = []
+        self._legacy_window_settings: dict[str, str] = {}
         self._settings_dirty = False
         self._desktop_notice_seq = 0
         self._desktop_notice: dict[str, Any] | None = None
@@ -3258,12 +3262,12 @@ class MainWindow(QMainWindow):
             return
 
         win = data.get("window", {})
-        geo = win.get("geometry")
-        state = win.get("state")
-        if isinstance(geo, str):
-            self.restoreGeometry(self._decode_bytes(geo))
-        if isinstance(state, str):
-            self.restoreState(self._decode_bytes(state))
+        if isinstance(win, dict):
+            self._legacy_window_settings = {
+                key: value
+                for key, value in win.items()
+                if key in {"geometry", "state"} and isinstance(value, str)
+            }
 
         overlay = data.get("overlay", {})
         overlay_geo = overlay.get("geometry")
@@ -3385,10 +3389,7 @@ class MainWindow(QMainWindow):
         overlay_state = self._overlay_state.to_settings()
         capture_toggles = self._capture_preferences.to_settings_toggles()
         data = {
-            "window": {
-                "geometry": self._encode_bytes(self.saveGeometry()),
-                "state": self._encode_bytes(self.saveState()),
-            },
+            "window": dict(self._legacy_window_settings),
             "overlay": {
                 "geometry": overlay_state["overlay"]["geometry"],
                 "opacity": overlay_state["overlay"]["opacity"],
@@ -4316,9 +4317,6 @@ class MainWindow(QMainWindow):
         if self._engine_controller.request_shutdown() == "stop_replay":
             self._stop_replay()
             return
-        if not self._engine_mode:
-            self.close()
-            return
         if self._runtime_cleanup_retry_scheduled:
             return
         if not self._cleanup_runtime():
@@ -4339,6 +4337,10 @@ class MainWindow(QMainWindow):
     def _retry_runtime_shutdown(self) -> None:
         self._runtime_cleanup_retry_scheduled = False
         self._shutdown_engine()
+
+    def close_runtime(self) -> bool:
+        """Release engine resources without requiring a QWidget close event."""
+        return self._cleanup_runtime()
 
     def _cleanup_runtime(self) -> bool:
         if self._runtime_cleanup_complete:
@@ -6644,10 +6646,5 @@ class MainWindow(QMainWindow):
             ),
         )
 
-    def closeEvent(self, event) -> None:  # noqa: N802
-        if self._engine_controller.request_shutdown() == "stop_replay":
-            self._stop_replay()
-            event.ignore()
-            return
-        self._cleanup_runtime()
-        super().closeEvent(event)
+
+MainWindow = EngineApplication

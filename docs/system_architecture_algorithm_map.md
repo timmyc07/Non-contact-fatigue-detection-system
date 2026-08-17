@@ -1,6 +1,6 @@
 # 系統架構與演算法用途總覽
 
-更新日期：2026-08-15
+更新日期：2026-08-17
 
 本文件以「用途名稱」描述專案結構與資料流，不以實際程式檔名作為架構節點。需要回到程式時，請依「所屬區域」對照專案資料夾責任。
 
@@ -9,7 +9,7 @@
 - 「所屬區域」只標示資料夾或資源類型，避免把架構圖寫成檔名清單。
 - 本文件描述目前程式碼實作，不代表臨床醫療等級量測；rPPG 與疲勞分數仍需搭配資料集與真實裝置驗證。
 - 既有部分中文文件與註解有編碼損壞，本文件改以可讀程式邏輯、測試與設定檔為準。
-- 正式產品唯一可見主面板與 Overlay 為 Tauri v2 + Flutter Web；PySide6 `MainWindow` 僅保留隱藏的 engine runtime、Qt worker 與 adapter 責任，不是使用者操作入口。
+- 正式產品唯一可見主面板與 Overlay 為 Tauri v2 + Flutter Web；Python production runtime 是 `EngineApplication(QObject)`，不再建立 `QMainWindow`／QWidget。`MainWindow` 僅為暫時相容 alias，不是使用者操作入口。
 - 相機裝置清單、選擇、解析度、FPS、後端與水平翻轉由 Qt-free controller 保存；engine mode 的掃描與 desktop commands 直接更新 controller，不建立相機 combo/checkbox 假元件。
 - 分析模式的期望狀態由 Qt-free controller 保存；管線停止後仍保留，設定讀寫、desktop state、worker failure 與下一次啟動不再以隱藏 Qt checkbox 作為狀態來源，engine mode 也不建立分析 checkbox 假元件。
 - Overlay 的顯示、數值、鎖定、總開關、透明度與 Tauri 視窗 geometry 由 Qt-free presentation state 保存；engine mode 不建立 Qt Overlay、假 checkbox/slider 或 no-op adapter。Geometry 使用 physical pixel `{x,y,width,height}`，支援多螢幕負座標，原生視窗回報實際值後由 Flutter 同步回 Python runtime。
@@ -17,11 +17,11 @@
 - 自動記錄、心跳帶校準與自動採集偏好由 Qt-free capture preference state 保存；engine mode 不建立對應 checkbox、spinbox 或按鈕。belt tick 與自動採集倒數 timer 由 application-owned `EngineRuntime` 保存，BLE、錄影、校準與 callback side effect 仍留在 Qt adapter；失敗時回滾偏好狀態，自動採集秒數與 include-belt 維持 session-only。
 - Web LAN 存取偏好由 Qt-free web preference state 保存；engine mode 不建立 QAction 假元件。設定讀寫、desktop state、bind host 與 URL 投影直接讀取該狀態；Web server thread、shared token 與非阻塞 restart 仍留在 Qt adapter，預設僅綁定 localhost。
 - engine mode 的 runtime 訊息直接送入 Python logger，不建立 QTextEdit 日誌假元件；rich-text console 與 status bar 只存在於非 production legacy Qt 路徑。
-- engine mode 的全域快捷鍵使用 sequence/callback binding，不建立 QAction 假元件；application-level `GlobalHotkeyRuntime` 以 thread message queue 註冊 Windows hotkey、分派 native event 並清理成功註冊的 ID，不依賴 `MainWindow` 的 HWND 或 `nativeEvent()`。legacy 選單捷徑仍使用真實 QAction；engine mode 不再提供假的 status bar sink。
+- engine mode 的全域快捷鍵使用 sequence/callback binding，不建立 QAction 假元件；application-level `GlobalHotkeyRuntime` 以 thread message queue 註冊 Windows hotkey、分派 native event 並清理成功註冊的 ID，不依賴 QWidget HWND 或 `nativeEvent()`。legacy 選單捷徑原始碼不在 production 路徑建立；engine mode 不再提供假的 status bar sink。
 - engine mode 不建立監測頁 `_mon_*` label、progress bar、sparkline 或 legacy REC pill timer；rPPG、行為與融合 callback 仍依原順序更新 `_latest_*` 快照、觸發警報／基線採集／記錄並推播 Web metrics，監測視覺只由 Flutter 消費同一份 metrics payload。
 - engine mode 不建立心跳帶 label、banner、device-status、sparkline 或 calibration bar 假元件；Flutter 直接使用 Web metrics 的 BLE、HRV 與校準欄位。`EngineRuntime` 的每秒 belt timer 仍驅動新 rPPG／心跳帶配對觀測與 ROI 參數協調器，並非 presentation timer，不得因移除 Qt 面板而停用。
 - engine mode 不建立通用 `_HeadlessControl`，也不保留 pipeline、recording、camera、profile 的 button／label／tag 假投影。共用 lifecycle callback 仍更新 controller 快照、錄影資源、相機 telemetry、基線 collector、通知與 Web metrics；只有 legacy Qt 路徑接收文字與按鈕狀態。正式 desktop state/command 與 Flutter 面板不再暴露僅切換文字的示範 benchmark；可重複效能量測仍由 `scripts.desktop_engine_benchmark` 提供。
-- engine `app.shutdown` 先保留進行中 replay 的停止／延後結束 gate；其餘 engine 路徑直接以可重入 `_cleanup_runtime()` 依序清理 desktop command timer、快捷鍵、待處理採集、校準／timer／BLE、Web、錄影、相機／analysis producer、alarm 與 Overlay，然後呼叫 `QApplication.quit()`。隱藏 `MainWindow.closeEvent()` 僅為 legacy replay gate／adapter，不是 engine 必要路徑。application-owned `EngineRuntime(QObject)` 已承接 live camera、combined／rPPG／fatigue、錄影與 Replay adapter 的 QThread／worker，desktop command、belt tick、auto-capture、shutdown defer/retry timer，以及 `FatigueAlarmController` 與 `QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput` ownership。錄影維持同步 timeout stop，Replay 維持非同步 stop 與 shutdown deferral；`MainWindow` 只保留 worker-specific callback、queue／routing、alarm configure／preview／metrics routing 與 legacy presentation side effect。alarm close 在 producer 停止後執行且可重入；警報條件、音量、fallback、strict validation、錯誤映射、metrics 順序與所有測量數值行為不變。下一個主要邊界是移除 `QMainWindow` inheritance。
+- engine `app.shutdown` 先保留進行中 replay 的停止／延後結束 gate；其餘 engine 路徑直接以可重入 `_cleanup_runtime()` 依序清理 desktop command timer、快捷鍵、待處理採集、校準／timer／BLE、Web、錄影、相機／analysis producer、alarm 與 Overlay，然後呼叫 `QApplication.quit()`。production adapter 不再建立 QWidget，也沒有 `closeEvent()`；application-owned `EngineRuntime(QObject)` 已承接 live camera、combined／rPPG／fatigue、錄影與 Replay adapter 的 QThread／worker，desktop command、belt tick、auto-capture、shutdown defer/retry timer，以及 `FatigueAlarmController` 與 `QtAlarmPlaybackBackend`／`QMediaPlayer`／`QAudioOutput` ownership。錄影維持同步 timeout stop，Replay 維持非同步 stop 與 shutdown deferral；`EngineApplication(QObject)` 只保留 worker-specific callback、queue／routing、alarm configure／preview／metrics routing 與尚待抽離的 legacy presentation side effect。alarm close 在 producer 停止後執行且可重入；警報條件、音量、fallback、strict validation、錯誤映射、metrics 順序與所有測量數值行為不變。下一個主要邊界是移除不可達的 widget-only builders、imports 與 `MainWindow` 相容 alias。
 - cleanup 為逐步 best-effort：非 thread step 例外記錄後仍繼續，主事件迴圈 100ms 後自動重試一次；第二次仍失敗則記錄並 best-effort quit。video、camera、analysis adapter thread wait timeout 而 ownership 尚存時，engine 不 quit，待 `EngineRuntime.adapter_released` callback 排程重入 shutdown。Tauri 僅在 6 秒仍未結束後才作最後的 child-process kill fallback。
 
 ## 整體資料流
