@@ -14,7 +14,7 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
-from scripts.desktop_engine_benchmark import _control_state, _port_in_use, _request_json
+from scripts.desktop_engine_client import control_state, port_in_use, request_json
 
 
 CREATE_NO_WINDOW = 0x08000000
@@ -29,7 +29,7 @@ def _wait_for_state(
         if process.poll() is not None:
             raise RuntimeError(f"shell exited before API readiness: {process.returncode}")
         try:
-            return _control_state(host="127.0.0.1", port=port, timeout=0.5)
+            return control_state(host="127.0.0.1", port=port, timeout=0.5)
         except Exception:
             time.sleep(0.1)
     raise TimeoutError(f"desktop API did not become ready within {timeout:.1f}s")
@@ -145,7 +145,7 @@ def run_smoke(
         try:
             state = _wait_for_state(port=port, process=shell, timeout=timeout)
             time.sleep(2.0)
-            shutdown = _request_json(
+            shutdown = request_json(
                 "POST",
                 "/api/control/command",
                 host="127.0.0.1",
@@ -166,11 +166,11 @@ def run_smoke(
                 ) from exc
             deadline = time.monotonic() + timeout
             while (
-                _port_in_use(host="127.0.0.1", port=port)
+                port_in_use(host="127.0.0.1", port=port)
                 and time.monotonic() < deadline
             ):
                 time.sleep(0.1)
-            if _port_in_use(host="127.0.0.1", port=port):
+            if port_in_use(host="127.0.0.1", port=port):
                 raise TimeoutError("engine port remained open after shell exit")
         finally:
             if shell.poll() is None:

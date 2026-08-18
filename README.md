@@ -83,6 +83,17 @@ Socket.IO server dispatch rate。Preview 數字是無相機、in-process 微基�
 實際網路、Tauri WebView 解碼或 Flutter 繪製；比較重構前後結果時應使用相同機器、
 Python/套件版本與 `--samples`，並確保 TCP 5000 沒有其他 engine。
 
+實體 camera 的 desktop API／engine／worker lifecycle smoke（不儲存設定或錄影）：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.desktop_hardware_smoke --camera-index 0 --analysis-mode combined
+.\.venv\Scripts\python.exe -m scripts.desktop_hardware_smoke --analysis-mode raw --output docs\benchmarks\desktop-hardware-smoke.json
+```
+
+模式可選 `raw`、`fatigue`、`rppg`、`combined`。腳本會啟動 source engine、選取相機、
+確認 metrics 的 FPS/解析度與 frame source，再停止管線和 engine；它不評估 rPPG 或疲勞數值。
+BLE 裝置請另用下方的 `scripts.hr_belt_monitor` 診斷，因為實際 BPM notification 是硬體條件。
+
 產生 Windows NSIS 安裝包：
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1

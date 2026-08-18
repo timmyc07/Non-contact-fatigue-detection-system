@@ -20,12 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_desktop_api_version_matches_all_consumers() -> None:
     rust_source = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
-    benchmark_source = (ROOT / "scripts" / "desktop_engine_benchmark.py").read_text(
+    client_source = (ROOT / "scripts" / "desktop_engine_client.py").read_text(
         encoding="utf-8"
     )
 
     assert "const DESKTOP_CONTROL_API_VERSION: u64 = 2;" in rust_source
-    assert "API_VERSION = 2" in benchmark_source
+    assert "DESKTOP_API_VERSION = 2" in client_source
 
 
 def test_control_state_uses_registered_handler(tmp_path: Path) -> None:

@@ -57,6 +57,13 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
   `docs/benchmarks/desktop-engine-qmainwindow-removal-2026-08-17-run1.json` 與 `run2.json`。
 - 完整 PyInstaller、Tauri release/NSIS 與 isolated installed smoke 已通過：install exit `0`、
   desktop API v2、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除。
+- 2026-08-18 已新增可重跑的 `scripts.desktop_hardware_smoke`。本機 `WebCamera` 的 combined mode
+  實測通過：desktop API v2、camera select、1280×720／30 FPS、`frame_source=combined`、
+  pipeline start/stop 與 engine shutdown；combined 證據為
+  `docs/benchmarks/desktop-hardware-smoke-2026-08-18.json`，另以相同流程完成 raw
+  camera capture，證據為 `docs/benchmarks/desktop-hardware-smoke-2026-08-18-raw.json`。
+  本機 BLE monitor 可進入掃描，
+  但 4 秒內未收到心跳帶 notification，尚不能宣稱真實 BLE 資料流已驗證。
 
 以上變更未修改 camera frame routing、worker topology、錄影、警報條件／音量／fallback／strict validation／
 錯誤映射／metrics 順序、BLE 樣本、回放、rPPG、疲勞分數、ROI、校準或任何數值閾值。
@@ -68,6 +75,8 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
    `MainWindow = EngineApplication` alias 已移除；測試與 benchmark 已改用正式類名。
 2. 原 Flask dashboard 仍作 localhost 診斷 fallback；它不是正式可見主面板。
 3. 本機沒有 UTA-RLDD 資料集，因此本切片無法執行 golden/replay；演算法與數值路徑未修改。
+4. 需要實際配戴並可送出 notification 的 BLE 心跳帶，才能完成 end-to-end 心率、接觸狀態與
+   rPPG 真值校準的實機驗收；先以 `scripts.hr_belt_monitor --duration 60 --use-config` 確認硬體。
 
 ## 下一階段執行順序
 
@@ -97,8 +106,11 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
    - 每個切片維持 desktop API v2、worker topology 與數值輸出不變。
 
 3. **繼續 parity 與效能驗收**
-   - **明日續作：** 使用實體 camera 與 BLE 裝置驗證主 WebView、engine child、overlay、視窗控制、
-     設定、recording、replay、notification、alarm 與正常 shutdown。
+   - **已完成（source engine）：** 使用 `scripts.desktop_hardware_smoke` 驗證 WebCamera 的 raw/
+     combined camera lifecycle 與 metrics routing；腳本不持久化設定、不改演算法數值。
+   - **下一步：** 使用已配戴 BLE 心跳帶驗證 notification、接觸狀態與 rPPG 真值校準；再以
+     packaged Tauri 主 WebView 驗證 camera、overlay、視窗控制、設定、recording、replay、
+     notification、alarm 與正常 shutdown。
    - **已完成：** 使用固定 benchmark 參數比較 API ready、process-tree RSS、IPC 與 synthetic preview latency。
    - **待資料集：** 有 UTA-RLDD 資料集時執行 golden/replay 零漂移檢查。
    - isolated NSIS smoke 已固化為 `scripts.installed_desktop_smoke`：只向 class=`Tauri Window`
@@ -118,6 +130,7 @@ $env:Path = 'C:\tools\flutter\bin;' + $env:Path
 powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
 .venv\Scripts\python -m scripts.installed_desktop_smoke
 .venv\Scripts\python -m scripts.desktop_engine_benchmark --port 5001 --samples 10
+.venv\Scripts\python -m scripts.desktop_hardware_smoke --camera-index 0 --analysis-mode combined --port 5012
 git diff --check
 ```
 

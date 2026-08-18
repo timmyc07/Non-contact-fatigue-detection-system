@@ -13,11 +13,9 @@ import base64
 import ctypes
 from ctypes import wintypes
 import gc
-import http.client
 import json
 import os
 import statistics
-import socket
 import subprocess
 import sys
 import tempfile
@@ -25,10 +23,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 5000
-API_VERSION = 2
+from scripts.desktop_engine_client import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    request_json,
+    start_source_engine,
+    stop_engine,
+)
 
 
 def _expand_process_tree(root_pid: int, parent_by_pid: dict[int, int]) -> list[int]:
@@ -120,106 +121,6 @@ def _distribution(values: list[float]) -> dict[str, float]:
     }
 
 
-def _request_json(
-    method: str,
-    path: str,
-    *,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-    body: dict[str, Any] | None = None,
-    timeout: float = 2.0,
-) -> dict[str, Any]:
-    encoded = json.dumps(body, separators=(",", ":")).encode("utf-8") if body is not None else None
-    headers = {"Content-Type": "application/json"} if encoded is not None else {}
-    connection = http.client.HTTPConnection(host, port, timeout=timeout)
-    try:
-        connection.request(method, path, body=encoded, headers=headers)
-        response = connection.getresponse()
-        payload = json.loads(response.read().decode("utf-8"))
-        if not 200 <= response.status < 300:
-            raise RuntimeError(f"HTTP {response.status}: {payload}")
-        if not isinstance(payload, dict):
-            raise RuntimeError("API response is not an object")
-        return payload
-    finally:
-        connection.close()
-
-
-def _control_state(*, host: str, port: int, timeout: float = 2.0) -> dict[str, Any]:
-    payload = _request_json("GET", "/api/control/state", host=host, port=port, timeout=timeout)
-    data = payload.get("data")
-    if not payload.get("success") or not isinstance(data, dict):
-        raise RuntimeError(f"Invalid control state: {payload}")
-    if data.get("desktop_api_version") != API_VERSION:
-        raise RuntimeError(f"Unexpected desktop API version: {data.get('desktop_api_version')}")
-    return data
-
-
-def _port_in_use(*, host: str, port: int) -> bool:
-    try:
-        connection = socket.create_connection((host, port), timeout=0.3)
-        connection.close()
-        return True
-    except OSError:
-        return False
-
-
-def _start_engine(*, host: str, port: int, timeout: float) -> tuple[subprocess.Popen[bytes], float]:
-    if _port_in_use(host=host, port=port):
-        raise RuntimeError(
-            f"A compatible engine already owns {host}:{port}; stop it before benchmarking"
-        )
-    environment = os.environ.copy()
-    environment.setdefault("QT_QPA_PLATFORM", "offscreen")
-    environment["NCFD_BACKEND_PORT"] = str(port)
-    started = time.perf_counter()
-    process = subprocess.Popen(
-        [sys.executable, str(ROOT / "main.py"), "--engine"],
-        cwd=ROOT,
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = started + timeout
-    while time.perf_counter() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(
-                f"Engine exited before the API became ready: exit={process.returncode}"
-            )
-        try:
-            _control_state(host=host, port=port, timeout=0.5)
-            return process, (time.perf_counter() - started) * 1000.0
-        except Exception:
-            time.sleep(0.1)
-    process.terminate()
-    try:
-        process.wait(timeout=3.0)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=3.0)
-    raise TimeoutError(f"Engine did not become ready within {timeout:.1f}s")
-
-
-def _stop_engine(process: subprocess.Popen[bytes], *, host: str, port: int) -> None:
-    try:
-        _request_json(
-            "POST", "/api/control/command", host=host, port=port,
-            body={"command": "app.shutdown", "args": {}}, timeout=2.0,
-        )
-    except Exception:
-        pass
-    try:
-        process.wait(timeout=8.0)
-    except subprocess.TimeoutExpired:
-        process.terminate()
-        try:
-            process.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=3.0)
-
-
 def _rss_bytes(pid: int) -> int | None:
     if sys.platform.startswith("linux"):
         try:
@@ -277,11 +178,11 @@ def _process_tree_rss_bytes(root_pid: int) -> tuple[list[int], int | None]:
 def _benchmark_commands(*, host: str, port: int, warmup: int, samples: int) -> dict[str, Any]:
     body = {"command": "state.get", "args": {}}
     for _ in range(warmup):
-        _request_json("POST", "/api/control/command", host=host, port=port, body=body)
+        request_json("POST", "/api/control/command", host=host, port=port, body=body)
     latencies: list[float] = []
     for _ in range(samples):
         started = time.perf_counter_ns()
-        payload = _request_json("POST", "/api/control/command", host=host, port=port, body=body)
+        payload = request_json("POST", "/api/control/command", host=host, port=port, body=body)
         if not payload.get("success"):
             raise RuntimeError(f"state.get failed: {payload}")
         latencies.append((time.perf_counter_ns() - started) / 1_000_000.0)
@@ -375,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     process: subprocess.Popen[bytes] | None = None
     try:
         if not args.synthetic_only:
-            process, startup_ms = _start_engine(
+            process, startup_ms = start_source_engine(
                 host=DEFAULT_HOST, port=port, timeout=max(1.0, args.startup_timeout)
             )
             process_tree_pids, rss = _process_tree_rss_bytes(process.pid)
@@ -392,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         result["preview"] = _benchmark_synthetic_preview(warmup=warmup, samples=samples)
     finally:
         if process is not None:
-            _stop_engine(process, host=DEFAULT_HOST, port=port)
+            stop_engine(process, host=DEFAULT_HOST, port=port)
 
     rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
     print(rendered)
