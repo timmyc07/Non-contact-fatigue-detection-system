@@ -60,6 +60,14 @@ class TauriBridge {
     return value is String && value.isNotEmpty ? value : null;
   }
 
+  Future<void> openExternalPath(String path) async {
+    await invoke('open_external_path', <String, dynamic>{'path': path});
+  }
+
+  Future<void> openExternalUrl(String url) async {
+    await invoke('open_external_url', <String, dynamic>{'url': url});
+  }
+
   Future<void> setOverlayWindow({
     required bool visible,
     required bool locked,

@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Headless shell boundary
+
+The Python engine must not open folders, browsers, or other desktop shell UI.
+Desktop commands return structured `shell_action` intents, and Flutter dispatches
+them through validated Tauri commands. Keep this boundary separate from camera,
+worker, recording, BLE, replay, rPPG, fatigue, ROI, calibration, and numeric
+threshold behavior.
+
 ## 專案定位
 
 無人機駕駛員疲勞狀態監測系統：以一般攝影機做 **非接觸式** 生理與行為監測。結合 MediaPipe 行為疲勞分析與 rPPG（remote photoplethysmography）生理訊號，提供警覺度下降提示。正式桌面主面板與 Overlay 的唯一入口為 Tauri v2 + Flutter Web；Python/MediaPipe/rPPG 為隱藏 engine，PySide6 與 Flask/Socket.IO 僅作隱藏 runtime adapter 與 localhost 診斷／控制 API，不再提供可見主面板或 Qt Overlay。UTA-RLDD replay 為門檻校正與可重現驗證工具，**不是**要把系統改成汽車駕駛分類器。

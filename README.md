@@ -60,6 +60,12 @@ If the virtual environment already exists, reinstall/update Python dependencies 
 npm run desktop
 ```
 
+The Flutter/Tauri shell owns external desktop actions. The Python engine only
+returns a validated intent for opening the recordings directory or diagnostics
+dashboard; Tauri performs the native folder/browser launch. Running Flutter in a
+browser therefore keeps the backend command successful and displays a clear
+message that the Tauri desktop shell is required for the external action.
+
 Windows 一鍵啟動（會自動設定 Flutter PATH、檢查 Python engine 並啟動 Tauri）：
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1

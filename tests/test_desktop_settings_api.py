@@ -1855,6 +1855,40 @@ def test_web_lan_marks_dirty_and_schedules_nonblocking_restart(
     assert scheduled == [True]
 
 
+def test_recordings_action_returns_shell_intent_without_qt_open(
+    settings_window: EngineApplication,
+) -> None:
+    state = settings_window._handle_desktop_command(
+        "settings.action", {"action": "recordings"}
+    )
+
+    shell_action = state["command_result"]["shell_action"]
+    assert state["command_result"]["action"] == "recordings"
+    assert shell_action["kind"] == "open_path"
+    assert Path(shell_action["target"]).is_dir()
+
+
+def test_web_action_returns_dashboard_url_shell_intent(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        settings_window, "_on_web_info", lambda: "http://127.0.0.1:5000/?token=test"
+    )
+
+    state = settings_window._handle_desktop_command(
+        "settings.action", {"action": "web"}
+    )
+
+    assert state["command_result"] == {
+        "command": "settings.action",
+        "action": "web",
+        "shell_action": {
+            "kind": "open_url",
+            "target": "http://127.0.0.1:5000/?token=test",
+        },
+    }
+
+
 def test_headless_web_preference_round_trip_preserves_bind_contract(
     settings_window: EngineApplication,
 ) -> None:

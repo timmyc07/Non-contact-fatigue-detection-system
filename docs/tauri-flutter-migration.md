@@ -381,3 +381,15 @@ bundled sidecar from the application resource directory.
 ## Rollout
 
 The original Flask dashboard remains available at `http://127.0.0.1:5000` as a diagnostics fallback. Flutter/Tauri owns the visible live monitor, camera controls, recording, analysis modes, calibration toggles, settings, replay, notifications, and overlay. Qt remains only as an internal event-loop/worker runtime while the remaining runtime state is extracted behind the desktop command interface.
+
+## External shell actions
+
+The headless engine does not launch a folder browser or external browser. The
+`settings.action` command keeps its existing API and returns a `command_result`
+with a `shell_action` for the `recordings` and `web` actions. Flutter dispatches
+that intent through Tauri commands: `open_external_path` accepts only an
+existing directory, while `open_external_url` accepts only `http://` or
+`https://` URLs. Tauri passes each target as one process argument to the native
+platform launcher; no shell command string is constructed. Browser-only Flutter
+development reports that the action requires the Tauri desktop shell instead of
+silently treating the backend command as failed.

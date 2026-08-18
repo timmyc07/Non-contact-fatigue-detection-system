@@ -186,12 +186,15 @@ class _MonitorShellState extends State<MonitorShell> {
     });
     try {
       final state = await _backend.command(command, args);
+      final shellActionIssue = await _dispatchShellAction(state);
       if (mounted) {
         _showNewDesktopNotice(state);
         _requestOverlaySync(state);
         setState(() => _engineState = state);
-        final message = _commandSuccessMessage(command, args);
-        if (message != null) _showCommandMessage(message);
+        final message = shellActionIssue ?? _commandSuccessMessage(command, args);
+        if (message != null) {
+          _showCommandMessage(message, isError: shellActionIssue != null);
+        }
       }
     } catch (error) {
       if (mounted) {
@@ -201,6 +204,34 @@ class _MonitorShellState extends State<MonitorShell> {
     } finally {
       if (mounted) setState(() => _commandBusy = false);
     }
+  }
+
+  Future<String?> _dispatchShellAction(Map<String, dynamic> state) async {
+    final rawResult = state['command_result'];
+    if (rawResult is! Map) return null;
+    final rawAction = rawResult['shell_action'];
+    if (rawAction is! Map) return null;
+    final kind = rawAction['kind'];
+    final target = rawAction['target'];
+    if (kind is! String || target is! String || target.isEmpty) {
+      return '引擎已完成指令，但外部資源資訊無效';
+    }
+    if (!_bridge.isAvailable) {
+      return '引擎已完成指令；請在 Tauri 桌面面板中開啟外部資源';
+    }
+    try {
+      switch (kind) {
+        case 'open_path':
+          await _bridge.openExternalPath(target);
+        case 'open_url':
+          await _bridge.openExternalUrl(target);
+        default:
+          return '引擎回傳了不支援的外部操作';
+      }
+    } catch (error) {
+      return '外部資源開啟失敗：$error';
+    }
+    return null;
   }
 
   String? _commandSuccessMessage(String command, Map<String, dynamic>? args) {

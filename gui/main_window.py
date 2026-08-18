@@ -12,9 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, cast
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
-    QDesktopServices,
     QImage,
     QImageWriter,
     QKeySequence,
@@ -1479,16 +1478,34 @@ class EngineApplication(QObject):
 
         elif command == "settings.action":
             action = str(args.get("action", ""))
-            actions = {
-                "recordings": self._open_recordings_dir,
-                "save": self._on_save_layout,
-                "web": self._on_web_info,
-            }
             if action == "web_lan":
                 enabled = self._require_bool(args, "enabled")
                 self._configure_web_preferences(allow_lan=enabled)
-            elif action in actions:
-                actions[action]()
+            elif action == "recordings":
+                state = self._desktop_control_state()
+                state["command_result"] = {
+                    "command": "settings.action",
+                    "action": action,
+                    "shell_action": {
+                        "kind": "open_path",
+                        "target": str(self._recordings_dir()),
+                    },
+                }
+                return state
+            elif action == "save":
+                self._on_save_layout()
+            elif action == "web":
+                url = self._on_web_info()
+                state = self._desktop_control_state()
+                state["command_result"] = {
+                    "command": "settings.action",
+                    "action": action,
+                    "shell_action": {
+                        "kind": "open_url",
+                        "target": url,
+                    },
+                }
+                return state
             else:
                 raise ValueError(f"Unsupported settings action: {action}")
 
@@ -3222,10 +3239,6 @@ class EngineApplication(QObject):
         """OpenCV device index owned by the headless engine controller."""
         return self._engine_controller.camera_snapshot().selected_index
 
-    def _open_recordings_dir(self) -> None:
-        rec = self._recordings_dir()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(rec)))
-
     def _on_save_layout(self) -> None:
         path = self._save_settings()
         self._append_log(f"💾 已保存配置與布局 → {path}")
@@ -3246,12 +3259,17 @@ class EngineApplication(QObject):
             return None
         return options[0][1]
 
-    def _on_web_info(self) -> None:
+    def _on_web_info(self) -> str:
+        """Ensure the diagnostics server is ready and return its URL.
+
+        Opening the URL belongs to the Tauri shell; the engine only supplies
+        the validated dashboard endpoint to the desktop command response.
+        """
         if self._web_server is None:
             self._start_web_server()
         if self._web_server is None:
             raise RuntimeError("Web dashboard failed to start")
         url_str = self._pick_web_dashboard_url()
         if url_str is None:
-            return
-        QDesktopServices.openUrl(QUrl(url_str))
+            raise RuntimeError("Web dashboard URL is unavailable")
+        return url_str

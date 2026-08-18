@@ -102,6 +102,65 @@ fn toggle_always_on_top(window: WebviewWindow) -> Result<bool, String> {
     Ok(next)
 }
 
+fn validate_external_directory(raw_path: &str) -> Result<PathBuf, String> {
+    if raw_path.trim().is_empty() {
+        return Err("external path must not be empty".to_owned());
+    }
+    let path = PathBuf::from(raw_path);
+    if !path.is_dir() {
+        return Err("external path must be an existing directory".to_owned());
+    }
+    fs::canonicalize(&path).map_err(|error| format!("cannot resolve external path: {error}"))
+}
+
+fn validate_external_url(raw_url: &str) -> Result<&str, String> {
+    if raw_url.trim() != raw_url
+        || raw_url.is_empty()
+        || raw_url.chars().any(char::is_whitespace)
+    {
+        return Err("external URL must not contain whitespace".to_owned());
+    }
+    let has_http_scheme = raw_url.starts_with("http://") || raw_url.starts_with("https://");
+    if !has_http_scheme {
+        return Err("external URL must use http:// or https://".to_owned());
+    }
+    let authority = raw_url
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split(['/', '?', '#']).next())
+        .unwrap_or_default();
+    if authority.is_empty() {
+        return Err("external URL must include a host".to_owned());
+    }
+    Ok(raw_url)
+}
+
+fn open_external_target(target: &std::ffi::OsStr) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer.exe");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to open external target: {error}"))
+}
+
+#[tauri::command]
+fn open_external_path(path: String) -> Result<(), String> {
+    let directory = validate_external_directory(&path)?;
+    open_external_target(directory.as_os_str())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let validated = validate_external_url(&url)?;
+    open_external_target(std::ffi::OsStr::new(validated))
+}
+
 fn path_to_frontend_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(str::to_owned)
@@ -485,6 +544,8 @@ fn run() {
             close_window,
             start_dragging,
             toggle_always_on_top,
+            open_external_path,
+            open_external_url,
             pick_replay_folder,
             set_overlay_window,
             get_overlay_geometry
@@ -511,7 +572,8 @@ fn main() {
 mod tests {
     use super::{
         backend_api_version_from_response, bundled_engine_path, bundled_resource_root,
-        engine_path_for_mode, path_to_frontend_string, validate_overlay_geometry,
+        engine_path_for_mode, path_to_frontend_string, validate_external_directory,
+        validate_external_url, validate_overlay_geometry,
         OverlayGeometry,
     };
     use std::fs;
@@ -576,6 +638,35 @@ mod tests {
         assert!(validate_overlay_geometry(geometry)
             .expect_err("small overlay width must be rejected")
             .contains("size"));
+    }
+
+    #[test]
+    fn validates_external_directory_and_resolves_it() {
+        let directory = temp_resource_dir();
+        let resolved = validate_external_directory(directory.to_str().expect("utf8 path"))
+            .expect("temporary directory must be accepted");
+        assert!(resolved.is_dir());
+        fs::remove_dir_all(directory).expect("temporary resource cleanup");
+    }
+
+    #[test]
+    fn rejects_missing_external_directory() {
+        let directory = temp_resource_dir().join("missing");
+        assert!(validate_external_directory(directory.to_str().expect("utf8 path"))
+            .expect_err("missing directory must be rejected")
+            .contains("existing directory"));
+    }
+
+    #[test]
+    fn accepts_only_http_external_urls() {
+        assert_eq!(
+            validate_external_url("http://127.0.0.1:5000/?token=test"),
+            Ok("http://127.0.0.1:5000/?token=test")
+        );
+        assert_eq!(validate_external_url("https://example.test"), Ok("https://example.test"));
+        assert!(validate_external_url("file:///tmp/report").is_err());
+        assert!(validate_external_url("https://").is_err());
+        assert!(validate_external_url("https://example.test bad").is_err());
     }
 
     #[test]
