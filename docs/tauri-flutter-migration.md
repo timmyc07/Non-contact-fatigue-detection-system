@@ -297,8 +297,12 @@ created exactly one visible `Tauri Window`, accepted `app.shutdown`, exited
 normally, uninstalled with code 0, and left no installation directory. The
 release shell was also directly observed starting with the title
 `疲勞監測操作台`, a WebView2 child process, and the bundled `ncfd-engine.exe`
-sidecar; normal window close exited with code 0. This proves launch and process
-ownership, not rendered Flutter controls or camera/overlay interaction.
+sidecar; normal window close exited with code 0. A native release-window visual
+smoke also rendered the Flutter main dashboard and successfully navigated by
+click to the heart-rate belt, replay, and system-settings sections. This proves
+the packaged WebView is rendering and the top-level navigation is interactive;
+it is not a substitute for exhaustive camera, overlay, BLE, and replay-data
+interaction with physical inputs.
 Golden/replay was not run because the UTA-RLDD dataset is not present on this
 machine. This slice did not modify camera routing, worker topology, recording,
 alarm, BLE, replay, rPPG, fatigue scoring, ROI, calibration, or numeric
