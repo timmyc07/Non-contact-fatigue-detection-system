@@ -110,6 +110,16 @@ class BackendService {
     return _controlRequest('GET', '/api/control/state');
   }
 
+  Future<Map<String, dynamic>> metricsSnapshot() async {
+    final response = await _client.get(Uri.parse('$baseUrl/api/metrics'));
+    final payload = jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError(_errorMessage(payload, response.statusCode));
+    }
+    final packet = _packet(payload);
+    return packet ?? <String, dynamic>{};
+  }
+
   Future<Map<String, dynamic>> command(
     String command, [
     Map<String, dynamic>? args,

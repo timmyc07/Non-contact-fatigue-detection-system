@@ -596,9 +596,18 @@ class _OverlayShellState extends State<OverlayShell> {
   Future<void> _refresh() async {
     try {
       final state = await _backend.controlState();
+      Map<String, dynamic>? metrics;
+      try {
+        metrics = await _backend.metricsSnapshot();
+      } catch (_) {
+        // Socket.IO remains the primary stream when the snapshot is unavailable.
+      }
       if (mounted) {
         _hiddenAfterDisconnect = false;
-        setState(() => _state = state);
+        setState(() {
+          _state = state;
+          if (metrics != null && metrics.isNotEmpty) _metrics = metrics;
+        });
       }
     } catch (_) {
       if (!_hiddenAfterDisconnect) {

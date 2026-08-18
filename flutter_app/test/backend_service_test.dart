@@ -40,6 +40,25 @@ void main() {
     );
   });
 
+  test('metrics snapshot unwraps the latest backend packet', () async {
+    final service = BackendService(
+      baseUrl: 'http://127.0.0.1:5000',
+      client: MockClient((request) async {
+        expect(request.url.path, '/api/metrics');
+        return http.Response(
+          '{"success":true,"metrics":{"fps":30,"status":"READY"}}',
+          200,
+        );
+      }),
+    );
+
+    expect(await service.metricsSnapshot(), <String, dynamic>{
+      'fps': 30,
+      'status': 'READY',
+    });
+    await service.dispose();
+  });
+
   test('controlState preserves a legacy string error', () async {
     final service = BackendService(
       client: MockClient(
