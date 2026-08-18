@@ -56,7 +56,7 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
   前一切片原始結果見
   `docs/benchmarks/desktop-engine-qmainwindow-removal-2026-08-17-run1.json` 與 `run2.json`。
 - 完整 PyInstaller、Tauri release/NSIS 與 isolated installed smoke 已通過：install exit `0`、
-  desktop API v2、單一可見 `Tauri Window`、標題 `疲勞監測操作台`、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除；另已直接擷取 release WebView 畫面並點擊驗證主面板、心跳帶、歷史回放與系統設定導覽。仍待實體 camera／BLE／資料集下的完整控制互動驗收。
+  desktop API v2、單一可見 `Tauri Window`、標題 `疲勞監測操作台`、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除；另已直接擷取 release WebView 畫面並點擊驗證主面板、心跳帶、歷史回放與系統設定導覽。主面板開始／停止已透過 packaged sidecar 驗證 1280×720／30 FPS 的 fatigue pipeline 與 Overlay 建立；仍待 BLE／資料集下的完整互動驗收，並應持續監控 PyInstaller sidecar 的冷啟動時序。
 - 2026-08-18 已新增可重跑的 `scripts.desktop_hardware_smoke`。本機 `WebCamera` 的 raw、
   fatigue、rPPG、combined 四種 mode 均實測通過：desktop API v2、camera select、
   1280×720／30 FPS、對應 `frame_source`、pipeline start/stop 與 engine shutdown。

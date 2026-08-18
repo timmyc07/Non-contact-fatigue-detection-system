@@ -301,8 +301,14 @@ sidecar; normal window close exited with code 0. A native release-window visual
 smoke also rendered the Flutter main dashboard and successfully navigated by
 click to the heart-rate belt, replay, and system-settings sections. This proves
 the packaged WebView is rendering and the top-level navigation is interactive;
-it is not a substitute for exhaustive camera, overlay, BLE, and replay-data
-interaction with physical inputs.
+it is not a substitute for exhaustive BLE and replay-data interaction with
+physical inputs. A separate native UI-to-engine smoke clicked the main-panel
+start/stop control: the packaged sidecar reported `pipeline_running=true`,
+`frame_source=fatigue`, 1280x720 and 30 FPS, then reported
+`pipeline_running=false` after the stop click. The same run created the Tauri
+monitoring overlay. This is one successful cold-start sample; one later launch
+timed out waiting for the PyInstaller sidecar API, so startup timing remains a
+release-smoke risk to monitor rather than a claim of deterministic timing.
 Golden/replay was not run because the UTA-RLDD dataset is not present on this
 machine. This slice did not modify camera routing, worker topology, recording,
 alarm, BLE, replay, rPPG, fatigue scoring, ROI, calibration, or numeric
