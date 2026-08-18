@@ -289,17 +289,20 @@ After removing the dormant Qt visual modules, two repeat runs measured
 as `docs/benchmarks/desktop-engine-headless-qt-visual-removal-2026-08-18-run1.json`
 and `run2.json`; these remain noisy local baselines rather than a claim of a
 numeric improvement.
-The focused Python slice completed 212 tests. The first full Windows Qt
-offscreen run hit an access violation in the existing preview-overlay test;
-that test passed twice in isolation, and the complete retry finished with
-`741 passed, 2 skipped`. Compileall and pip check passed. Flutter completed 28
-tests, analyze, and release Web build; Rust completed 8 tests; PyInstaller,
-Tauri release/NSIS, and isolated installed smoke all passed. The installed
-application exposed desktop API v2, accepted `app.shutdown`, exited normally,
-uninstalled with code 0, and left no installation directory. Golden/replay was
-not run because the UTA-RLDD dataset is not present on this machine. This slice
-did not modify camera routing, worker topology, recording, alarm, BLE, replay,
-rPPG, fatigue scoring, ROI, calibration, or numeric thresholds.
+The clean follow-up validation completed `757 passed, 2 skipped`; `compileall`
+and `pip check` passed. Flutter completed 28 tests, analyze, and release Web
+build; Rust completed 8 tests; PyInstaller, Tauri release/NSIS, and isolated
+installed smoke all passed. The installed application exposed desktop API v2,
+created exactly one visible `Tauri Window`, accepted `app.shutdown`, exited
+normally, uninstalled with code 0, and left no installation directory. The
+release shell was also directly observed starting with the title
+`疲勞監測操作台`, a WebView2 child process, and the bundled `ncfd-engine.exe`
+sidecar; normal window close exited with code 0. This proves launch and process
+ownership, not rendered Flutter controls or camera/overlay interaction.
+Golden/replay was not run because the UTA-RLDD dataset is not present on this
+machine. This slice did not modify camera routing, worker topology, recording,
+alarm, BLE, replay, rPPG, fatigue scoring, ROI, calibration, or numeric
+thresholds.
 
 For repeatable physical-camera lifecycle verification, `scripts.desktop_hardware_smoke`
 starts the source engine on a loopback port, selects a camera through desktop API v2,

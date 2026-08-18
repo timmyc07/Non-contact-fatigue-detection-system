@@ -42,7 +42,7 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
   `EngineApplication` 只路由 configure、preview 與 metrics。shutdown 在 camera／analysis producer 停止後冪等 close alarm。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證（移除 legacy Qt 視覺模組後）：Python `756 passed, 2 skipped`、
+- 最近一次完整驗證（含 Flutter-to-engine 命令契約檢查）：Python `757 passed, 2 skipped`、
   Flutter `28 passed`、Rust `8 passed`；Flutter analyze、Web release build、
   `compileall` 與 `pip check` 均通過；PyInstaller、Tauri release/NSIS 與
   source/bundled engine shutdown 也已通過。
@@ -56,7 +56,7 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
   前一切片原始結果見
   `docs/benchmarks/desktop-engine-qmainwindow-removal-2026-08-17-run1.json` 與 `run2.json`。
 - 完整 PyInstaller、Tauri release/NSIS 與 isolated installed smoke 已通過：install exit `0`、
-  desktop API v2、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除；目前仍缺 packaged WebView 的 screenshot 與實際互動點擊證據。
+  desktop API v2、單一可見 `Tauri Window`、標題 `疲勞監測操作台`、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除；目前仍缺 packaged WebView 的 screenshot 與實際互動點擊證據。
 - 2026-08-18 已新增可重跑的 `scripts.desktop_hardware_smoke`。本機 `WebCamera` 的 combined mode
   實測通過：desktop API v2、camera select、1280×720／30 FPS、`frame_source=combined`、
   pipeline start/stop 與 engine shutdown；combined 證據為

@@ -200,6 +200,9 @@ def run_smoke(
         return {
             "install_exit_code": install_result.returncode,
             "desktop_api_version": state["desktop_api_version"],
+            "visible_tauri_window_count": len(visible_windows),
+            "main_window_title": visible_windows[0]["title"],
+            "main_window_class": visible_windows[0]["class_name"],
             "shutdown_success": bool(shutdown.get("success")),
             "engine_exited": True,
             "shell_exit_code": shell.returncode,

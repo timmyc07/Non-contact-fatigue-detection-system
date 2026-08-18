@@ -28,7 +28,11 @@ def test_select_main_windows_ignores_tauri_event_pump_helpers() -> None:
         },
     ]
 
-    assert _select_main_windows(windows) == [main_window]
+    selected = _select_main_windows(windows)
+
+    assert selected == [main_window]
+    assert selected[0]["title"] == "Fatigue Monitor"
+    assert selected[0]["class_name"] == "Tauri Window"
 
 
 @pytest.mark.parametrize(
