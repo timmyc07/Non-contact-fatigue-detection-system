@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kind": "desktop_hardware_smoke",
+  "platform": "win32",
+  "api_ready_ms": 1847.67,
+  "analysis": {
+    "mode": "fatigue",
+    "behavior_enabled": true,
+    "rppg_enabled": false
+  },
+  "camera": {
+    "requested_index": 0,
+    "index": 0,
+    "label": "[0] WebCamera",
+    "selected_index": 0,
+    "codec": "\u0016",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_source": "fatigue"
+  },
+  "checks": {
+    "desktop_api_version": 2,
+    "pipeline_started": true,
+    "camera_metrics_ready": true,
+    "expected_frame_source": "fatigue",
+    "frame_source_matches_mode": true,
+    "pipeline_stopped": true,
+    "analysis_configured": true
+  },
+  "limitations": [
+    "This smoke does not evaluate rPPG or fatigue numeric values.",
+    "BLE hardware is verified separately with scripts.hr_belt_monitor.",
+    "The smoke uses the source engine and does not render the Tauri WebView."
+  ]
+}

@@ -312,11 +312,12 @@ For repeatable physical-camera lifecycle verification, `scripts.desktop_hardware
 starts the source engine on a loopback port, selects a camera through desktop API v2,
 configures one of `raw`, `fatigue`, `rppg`, or `combined` worker modes, waits for live
 metrics, and then stops the pipeline and engine without saving settings or recording.
-On 2026-08-18, `WebCamera` passed the `combined` smoke at 1280x720 and 30 FPS with
-`frame_source=combined`; the API version, camera selection, start/stop, and metrics
-checks all passed. The combined capture is
-`docs/benchmarks/desktop-hardware-smoke-2026-08-18.json`; the raw camera capture is
-`docs/benchmarks/desktop-hardware-smoke-2026-08-18-raw.json`. These validate lifecycle
+On 2026-08-18, `WebCamera` passed raw, fatigue, rPPG, and combined smoke modes at
+1280x720 and 30 FPS; each reported the expected `frame_source`, API version,
+camera selection, start/stop, and metrics checks. Captures are retained in
+`docs/benchmarks/desktop-hardware-smoke-2026-08-18-raw.json`,
+`...-fatigue.json`, `...-rppg.json`, and
+`docs/benchmarks/desktop-hardware-smoke-2026-08-18.json`. These validate lifecycle
 and routing only, not rPPG/fatigue numeric accuracy or Tauri WebView rendering. BLE remains
 separately diagnosable through `scripts.hr_belt_monitor`; this host entered scanning but
 received no heart-rate notification in a four-second sample, so end-to-end BLE evidence
