@@ -1,6 +1,6 @@
 # rppg_mediapipe_system_v2
 
-rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a web dashboard.
+rPPG + MediaPipe based fatigue/physiology monitoring with a Tauri v2 + Flutter Web desktop panel; Python/MediaPipe/rPPG runs as a hidden headless engine, with the Flask dashboard retained only as a localhost diagnostics fallback.
 
 本專題主旨為「無人機駕駛員疲勞狀態監測」：使用一般攝影機觀察遠端操作員的臉部、眼部、姿態與 rPPG 輔助生理訊號，提供長時間監控或操控任務中的警覺度下降提示。UTA-RLDD replay 是可重現驗證與門檻校正工具，不是把專題改成汽車駕駛分類器。
 
@@ -10,10 +10,10 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a desktop GUI and a we
 - Fatigue/behavior analysis overlays
 - Recording to SQLite (.db) and video (.mp4)
 - Web dashboard for live metrics and playback
-- Web dashboard 預設僅本機存取；可在 GUI「設定 → 允許區域網存取 Web 儀表板」開啟後，由同區域網裝置以 `http://<主機IP>:5000` 連線。為降低資安風險，Socket.IO CORS 僅允許本機與 LAN IP 來源（請以主機 IP 連線，勿用主機名稱），且 File Browser（`/api/fb/*`）端點僅接受本機發起的請求。
-- LAN 模式啟用 shared-token 認證：伺服器綁定區域網時會自動產生 access token，GUI 顯示的網址會自動附上 `?token=`；同區域網裝置需使用該完整網址（含 token）才能存取首頁與 API，否則回應 401。本機（127.0.0.1）連線不受影響、免 token。
+- Web dashboard 預設僅本機存取；可在 Flutter 面板「設定 → 允許區域網存取 Web 儀表板」開啟後，由同區域網裝置以 `http://<主機IP>:5000` 連線。為降低資安風險，Socket.IO CORS 僅允許本機與 LAN IP 來源（請以主機 IP 連線，勿用主機名稱），且 File Browser（`/api/fb/*`）端點僅接受本機發起的請求。
+- LAN 模式啟用 shared-token 認證：伺服器綁定區域網時會自動產生 access token，Flutter 面板顯示的網址會自動附上 `?token=`；同區域網裝置需使用該完整網址（含 token）才能存取首頁與 API，否則回應 401。本機（127.0.0.1）連線不受影響、免 token。
 - **警告**：LAN 模式沒有 TLS，仍會將人臉影像與生理數據以未加密 HTTP 廣播給同網段裝置（僅以 token 防止未授權存取），請只在受信任網路開啟。
-- Web dashboard 會在新連線與重新整理後同步 GUI 最新狀態，live camera preview 目標為 30 FPS；UTA-RLDD 離線 replay 預覽仍約 20 FPS。
+- Web dashboard 會在新連線與重新整理後同步 engine 最新狀態，live camera preview 目標為 30 FPS；UTA-RLDD 離線 replay 預覽仍約 20 FPS。
 - 疲勞警報器：正式 Flutter 面板的「設定 → 警報器」可依 `LOW_VIGILANCE` / `DROWSY` / `CRITICAL` / `MICROSLEEP` 指定不同音效（預設路徑 `assets/alerts/*.wav`）
 - rPPG BPM 估測回到第一版基準：有效 ROI 等權平均、Welch peak 直接輸出，並用峰值插值與輕量平滑補足 71/72/73 這類細節。
 - 疲勞融合預設以 MediaPipe 行為疲勞為主，rPPG 權重降為 15%，且 SQI、quality 或 ROI 數不足時不參與融合。
@@ -100,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
 ```
 輸出位於 `src-tauri\target\release\bundle\nsis\`。建置流程會先用 PyInstaller 產生 `dist\ncfd-engine\`，再由 Tauri 將 engine、MediaPipe model、不可變 tuning 資源一起嵌入 installer。正式安裝時，Tauri 會把設定、錄影與校準寫入使用者資料目錄，不需要 repository 或 `.venv`；若要開發 fallback，仍可用 `NCFD_ENGINE_ROOT` 與 `NCFD_ENGINE_PYTHON` 指向 Python engine。
 
-Windows 安裝版完整 smoke（隔離安裝、API v2、engine shutdown、主視窗正常關閉與靜默解除安裝）：
+Windows 安裝版完整 smoke（隔離安裝、API v2、engine shutdown、Tauri 主視窗正常關閉與靜默解除安裝）：
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.installed_desktop_smoke
@@ -111,7 +111,7 @@ Ubuntu engine（供 Tauri 背景服務使用）：
 .venv/bin/python main.py --engine
 ```
 
-Ubuntu GUI 若出現 `Could not load the Qt platform plugin "xcb"`，先重新執行 setup 補齊 Qt xcb runtime：
+Ubuntu engine 若出現 `Could not load the Qt platform plugin "xcb"`，先重新執行 setup 補齊 Qt xcb runtime：
 
 ```bash
 bash scripts/setup_ubuntu.sh
@@ -125,9 +125,9 @@ QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py --engine
 
 正式產品只有 Tauri v2 + Flutter Web 面板與 Overlay；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。PySide6 僅作為隱藏 engine runtime（Qt worker/thread、影像、音效與 Windows 全域快捷鍵），engine mode 不建立 legacy menu、central dashboard、Qt Overlay、視窗樣式或標題列。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
 
-Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機、分析端或 Qt 預覽訊號累積舊幀。GUI 會嘗試把 OpenCV camera buffer 降低，讓分析 worker 永遠取最新幀，並限制預覽影像訊號輸出避免主執行緒堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 GUI 後端手動切換比較穩定性。
+Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機或分析端累積舊幀。engine 會降低 OpenCV camera buffer、讓分析 worker 永遠取最新幀，並節流送往 Flutter/Tauri 的預覽事件，避免 IPC 堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 Flutter 面板「設定 → 攝影機」切換後端比較穩定性。
 
-若相機畫面左右相反，可在 GUI 攝影機區啟用或關閉「水平翻轉（鏡像校正）」。此設定會同步套用到預覽、錄影與分析輸入，避免畫面與分析來源不一致。
+若相機畫面左右相反，可在 Flutter 面板「設定 → 攝影機」啟用或關閉「水平翻轉（鏡像校正）」。此設定會同步套用到預覽、錄影與分析輸入，避免畫面與分析來源不一致。
 
 若 `setup_ubuntu.sh` 在非互動環境因 sudo 密碼失敗，請在自己的終端機直接執行：
 
@@ -201,7 +201,7 @@ UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：h
 .venv/bin/python scripts/utarldd_csv_report.py recordings/utarldd_runs/<timestamp>/utarldd_summary_<timestamp>.csv
 ```
 
-CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。桌面 GUI 也提供「影片回測」區塊，可選資料夾、開始/停止批次、顯示目前 subject/label/video 進度、MediaPipe 人臉特徵與 ROI 標註預覽，以及摘要檔路徑。`開始批次` 會啟用單工預覽，適合抽查偵測畫面；`平行驗證` 會依 GUI 的「平行數」設定使用多進程、停用預覽，適合正式大量驗證，GUI 平行數上限為 4。平行驗證會自動停用 `輸出標註影片`，避免多個子行程同時寫 mp4 造成 Windows/OpenCV/MediaPipe 資源壓力；需要標註影片時請用單工 `開始批次`。若某個子行程異常中止，批次會停止派發新工作，把未完成影片寫成 `failed` 並保留 CSV/manifest。平行驗證時可看 GUI 的「處理清單」：`進行中` 會列出目前正在跑的影片，`已完成` 顯示完成數/總數，`最近完成` 顯示剛處理完的 subject/label、frame 數、狀態與 face rate。GUI 預覽為了保持主視窗流暢，會以最高約 20 FPS 顯示並限制預覽影像尺寸；這只影響螢幕顯示，不影響 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
+CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。正式 Flutter 面板的「影片回測」區塊可選資料夾、開始/停止批次、設定平行數與標註影片輸出，並顯示目前 subject/label/video 進度、平行狀態與摘要檔路徑。`開始批次` 使用單工模式；`平行驗證` 依面板的平行數設定使用多進程，面板平行數上限為 4。平行驗證會自動停用 `輸出標註影片`，避免多個子行程同時寫 mp4 造成 Windows/OpenCV/MediaPipe 資源壓力；需要標註影片時請用單工 `開始批次`。若某個子行程異常中止，批次會停止派發新工作，把未完成影片寫成 `failed` 並保留 CSV/manifest。面板會顯示目前影片、完成數、平行狀態與結果路徑；這些控制只影響回放編排與顯示，不改變 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
 
 ### Golden-output 回歸基準
 
@@ -272,10 +272,10 @@ rPPG BPM 校準以 bias 模型 `scale*bpm+offset` 修正 rPPG 心率；日常疲
 - 校正演算法（`rppg/adaptive_calibration.py` `OnlineBpmCalibrator`，純運算）：以心跳帶 BPM 與 rPPG **原始** BPM 的中位殘差為目標，低增益 EMA 慢速調整 offset（沿用既有 `rppg/calibration.py` bias 模型 `scale*bpm+offset`，本階段只動 offset）。品質門檻（rPPG SQI／quality／warmup／ROI，心跳帶接觸與新鮮度）不過關的樣本不納入；offset 有絕對值上限防呆。比對用原始 BPM，不會自我回饋。
 - 跨 session 累積：啟動時以目前使用中的校準版本 offset 為起點；停止（取消勾選／管線停止／關閉）時，若信心足夠會存成新的「自適應校準」版本並自動設為使用中，下次沿用持續改善。
 - HRV：Scosche Rhythm+ 2.0 需以三連按進入 HRV 模式後，`2A37` 才會帶實測 RR-Interval（實測 `flags=0x16`）；一般心率模式僅帶 BPM（`flags=0x06`）。校準本身只用 BPM，不受 HRV 模式影響。
-- 可視化：GUI 狀態列顯示連線狀態／BPM／RR 數／電量／接觸狀態，以及即時校正量與收斂／分歧狀態；Web dashboard「生理壓力指標」卡片新增「rPPG 真值校準」欄位。連線中若超過 5 秒沒有有效心率，GUI 與 dashboard 會顯示「無心率資料」警告（裝置可能未正確配戴）。
-- 使用流程：戴上心跳帶 → 勾選「壓力／HRV」啟用 rPPG（rPPG 模式）→ 勾選「心跳帶真值校準（背景）」→ 按「開始」。狀態列顯示「掃描中… → 已連線 → 收斂中 → 已收斂」。
+- 可視化：Flutter 面板的心跳帶區塊顯示連線狀態／BPM／RR 數／電量／接觸狀態，以及即時校正量與收斂／分歧狀態；Web dashboard「生理壓力指標」卡片新增「rPPG 真值校準」欄位。連線中若超過 5 秒沒有有效心率，Flutter 面板與 dashboard 會顯示「無心率資料」警告（裝置可能未正確配戴）。
+- 使用流程：戴上心跳帶 → 在 Flutter 面板勾選「壓力／HRV」啟用 rPPG（rPPG 模式）→ 勾選「心跳帶真值校準（背景）」→ 按「開始監測」。面板顯示「掃描中… → 已連線 → 收斂中 → 已收斂」。
 
-裝置設定（選配）：建立 `config/hr_belt.json`（機器特定、不納入版控）可指定目標裝置與掃描參數，GUI 每次啟動心跳帶時重新讀取：
+裝置設定（選配）：建立 `config/hr_belt.json`（機器特定、不納入版控）可指定目標裝置與掃描參數，engine 每次啟動心跳帶時重新讀取：
 
 ```json
 {
@@ -288,7 +288,7 @@ rPPG BPM 校準以 bias 模型 `scale*bpm+offset` 修正 rPPG 心率；日常疲
 
 `address` 指定 BLE 位址時直接精確比對（跳過名稱比對，適合現場有多條心跳帶時鎖定特定裝置）；欄位皆可省略，省略時用預設值。
 
-免 GUI 連線診斷（驗證硬體與 BLE 環境，與 GUI 共用同一連線元件）：
+免面板連線診斷（驗證硬體與 BLE 環境，與正式 engine 共用同一連線元件）：
 
 ```powershell
 .venv\Scripts\python -m scripts.hr_belt_monitor                     # 預設掃描 R+ 前綴
@@ -309,14 +309,14 @@ Add your user to the `video` group if needed, then log out and back in:
 sudo usermod -aG video "$USER"
 ```
 
-若相機黑屏或 GUI 沒有畫面，先用專案診斷腳本分辨硬體/權限與程式問題：
+若相機黑屏或 Flutter 面板沒有畫面，先用專案診斷腳本分辨硬體／權限與程式問題：
 
 ```bash
 .venv/bin/python scripts/diagnose_camera.py --camera 0 --backend v4l2
 ```
 
 若 720p 僅有約 10 FPS，先檢查相機格式。許多 USB UVC webcam 在 `1280×720 YUYV`
-只支援 10 FPS，但 `1280×720 MJPG` 可達 30 FPS；GUI 在 Linux 會優先要求 MJPG。
+只支援 10 FPS，但 `1280×720 MJPG` 可達 30 FPS；engine 在 Linux 會優先要求 MJPG。
 可用下列指令確認協商結果：
 
 ```bash
@@ -338,8 +338,8 @@ fuser /dev/video0
 - `/dev/video*` 不存在：偏向硬體未枚舉、驅動或容器/權限隔離問題。
 - OpenCV 無法開啟相機：偏向權限、裝置被占用、後端不相容或硬體/驅動問題。
 - OpenCV 可讀幀但亮度接近全黑：偏向鏡頭蓋、隱私快門、光線不足或虛擬相機無來源。
-- 終端出現大量 `Camera index out of range` 或 `VIDIOC_QBUF`：通常是掃描不存在的相機 index 或把 metadata 節點當成相機；GUI 會在 Linux 只掃描實際存在且具備 Video Capture capability 的 `/dev/video*`。
-- 診斷腳本可讀到非黑畫面但 GUI 黑屏：偏向 GUI 顯示或相機後端協商問題，請在 GUI 中切換「自動 / V4L2 / FFMPEG」後端再測。
+- 終端出現大量 `Camera index out of range` 或 `VIDIOC_QBUF`：通常是掃描不存在的相機 index 或把 metadata 節點當成相機；engine 會在 Linux 只掃描實際存在且具備 Video Capture capability 的 `/dev/video*`。
+- 診斷腳本可讀到非黑畫面但 Flutter 面板黑屏：偏向 IPC／WebView 顯示或相機後端協商問題，請在 Flutter 面板「設定 → 攝影機」切換「自動 / V4L2 / FFMPEG」後端再測。
 
 ## Project layout
 - `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo
@@ -389,7 +389,7 @@ fuser /dev/video0
 
 ## Poster design artifacts
 - `docs/rppg_fatigue_monitoring_poster_design.md`: 依競賽海報範本撰寫的無人機操作員疲勞監測系統海報製作稿，包含標題、摘要、研究方法、成果、SDG 與製作步驟。
-- `output/pdf/rppg_fatigue_monitoring_poster_design.pdf`: 海報 PDF 預覽稿，可用於檢查版面配置、文字密度與後續替換 GUI/Web dashboard 截圖。
+- `output/pdf/rppg_fatigue_monitoring_poster_design.pdf`: 海報 PDF 預覽稿，可用於檢查版面配置、文字密度與後續替換 Flutter/Tauri/Web dashboard 截圖。
 
 ## Notes
 - Recordings are saved under the `recordings/` folder.

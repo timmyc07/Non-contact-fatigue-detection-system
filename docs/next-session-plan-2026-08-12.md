@@ -123,6 +123,7 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
 - 重新執行 `scripts.desktop_hardware_smoke` 的 `raw`、`fatigue`、`rppg`、`combined` 四種模式；每種皆為 1280x720、30 FPS、正確 `frame_source`，並完成 pipeline start/stop 與 source engine shutdown。
 - 以上驗證涵蓋生命週期與 routing，不等同於 rPPG／疲勞數值精準度、BLE notification 或 UTA-RLDD golden 證據；本次沒有修改任何數值演算法或校準路徑。
 - 目前版本 headless benchmark（10 samples、3 warmup）已保存至 `docs/benchmarks/desktop-engine-current-2026-08-18-run3.json`：API ready 1853.905 ms、engine RSS 254.25 MiB、`state.get` p50 20.221 ms、synthetic JPEG encode p50 1.194 ms。結果與既有 run1/run2 同量級，僅作本機 noisy baseline，不宣稱跨機器效能改善。
+- README 的現行操作說明已同步為 Tauri/Flutter 唯一可見面板與 headless engine：相機設定、回放、心跳帶、LAN Web fallback、Linux 診斷與效能說明不再把已移除的 Qt GUI 當正式入口。
 
 ## 驗收命令
 
