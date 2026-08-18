@@ -1,6 +1,6 @@
 # 下一階段續作計畫
 
-更新日期：2026-08-17
+更新日期：2026-08-18
 
 本切片起始基準：`9a921c8 refactor(desktop): 抽離 runtime timer ownership`
 
@@ -42,21 +42,21 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
   `EngineApplication` 只路由 configure、preview 與 metrics。shutdown 在 camera／analysis producer 停止後冪等 close alarm。
 - 已建立 desktop engine 與 packaged smoke 基準；細節見
   `docs/tauri-flutter-migration.md` 與 `docs/benchmarks/`。
-- 最近一次完整驗證（本次 cleanup 後）：Python `741 passed, 2 skipped`、
-  相關 focused slice `212 passed`、
-  Flutter `28 passed`、Flutter analyze 無問題、Flutter Web release 通過、Rust `8 passed`、
-  PyInstaller、Tauri release/NSIS、source/bundled engine shutdown、`compileall` 與 `pip check` 均通過。
-- 完整 pytest 第一次在 Windows Qt offscreen 的既有 `test_preview_overlay_window.py` 發生 access violation；
-  隔離重跑 `2 passed`，完整重跑通過。此環境處置已寫入 `CLAUDE.md`。
-- 本切片最近兩次重複 benchmark：RSS `254.062/253.805 MiB`、API ready
-  `1846.225/1843.543 ms`、`state.get` p50 `20.610/20.327 ms`、synthetic JPEG p50
-  `1.166/1.263 ms`。相較前一個 QMainWindow removal 切片，RSS 約降低 `2.1-2.3 MiB`；
-  啟動、IPC 與 JPEG 差異仍屬噪聲，不宣稱改善。原始結果見
-  `docs/benchmarks/desktop-engine-legacy-ui-cleanup-2026-08-17-run1.json` 與 `run2.json`。
+- 最近一次完整驗證（移除 legacy Qt 視覺模組後）：Python `756 passed, 2 skipped`、
+  Flutter `28 passed`、Rust `8 passed`；Flutter analyze、Web release build、
+  `compileall` 與 `pip check` 均通過；PyInstaller、Tauri release/NSIS 與
+  source/bundled engine shutdown 也已通過。
+- 2026-08-18 已移除 legacy Qt `PreviewOverlayWindow` 與其 offscreen 測試；正式 Overlay 僅由 Tauri/Flutter 建立。
+- 移除 legacy Qt 視覺模組後的兩次 headless benchmark：RSS
+  `253.297/252.980 MiB`、API ready `2464.125/2438.245 ms`、`state.get` p50
+  `20.355/20.255 ms`、synthetic JPEG p50 `1.305/1.314 ms`；此為 noisy local
+  baseline，不宣稱效能改善。證據位於
+  `docs/benchmarks/desktop-engine-headless-qt-visual-removal-2026-08-18-run1.json`
+  與 `run2.json`。
   前一切片原始結果見
   `docs/benchmarks/desktop-engine-qmainwindow-removal-2026-08-17-run1.json` 與 `run2.json`。
 - 完整 PyInstaller、Tauri release/NSIS 與 isolated installed smoke 已通過：install exit `0`、
-  desktop API v2、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除。
+  desktop API v2、`app.shutdown` 成功、engine 與 shell exit `0`、uninstall exit `0`，安裝目錄已移除；目前仍缺 packaged WebView 的 screenshot 與實際互動點擊證據。
 - 2026-08-18 已新增可重跑的 `scripts.desktop_hardware_smoke`。本機 `WebCamera` 的 combined mode
   實測通過：desktop API v2、camera select、1280×720／30 FPS、`frame_source=combined`、
   pipeline start/stop 與 engine shutdown；combined 證據為

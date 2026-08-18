@@ -118,7 +118,12 @@ def test_engine_mode_does_not_construct_legacy_visual_shell(
 ) -> None:
     assert isinstance(settings_window, QObject)
     assert not isinstance(settings_window, (QWidget, QMainWindow))
-    assert settings_window._preview_overlay is None
+    gui_root = Path(main_window_module.__file__).resolve().parent
+    assert not (gui_root / "preview_overlay_window.py").exists()
+    assert not (gui_root / "dialogs.py").exists()
+    assert not (gui_root / "alarm_dialog.py").exists()
+    desktop_models_source = (gui_root / "desktop_models.py").read_text(encoding="utf-8")
+    assert "PySide6" not in desktop_models_source
     for name in (
         "_chk_all",
         "_chk_preview",
@@ -780,7 +785,6 @@ def test_overlay_geometry_command_rejects_invalid_payload_without_partial_apply(
 
 def test_settings_load_and_reset_restore_overlay_runtime_state(
     settings_window: EngineApplication,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_window._settings_path().write_text(
         json.dumps(
@@ -806,12 +810,6 @@ def test_settings_load_and_reset_restore_overlay_runtime_state(
     assert loaded["overlay_locked"] is False
     assert loaded["overlay_opacity"] == 81
 
-    applied: list[bool] = []
-    monkeypatch.setattr(
-        settings_window,
-        "_apply_overlay_state",
-        lambda: applied.append(True),
-    )
     reset = settings_window._handle_desktop_command(
         "settings.reset", {"sections": ["toggles", "overlay"]}
     )
@@ -821,7 +819,6 @@ def test_settings_load_and_reset_restore_overlay_runtime_state(
     assert reset["overlay_locked"] is True
     assert reset["overlay_opacity"] == 55
     assert reset["overlay_geometry"] is None
-    assert applied == [True]
 
 
 def test_overlay_reset_sections_do_not_change_each_other(
@@ -2424,15 +2421,7 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
 ) -> None:
     events: list[str] = []
 
-    class FakeOverlay:
-        def hide(self) -> None:
-            events.append("overlay.hide")
-
-        def close(self) -> None:
-            events.append("overlay.close")
-
     settings_window._belt_calibrator = object()  # type: ignore[assignment]
-    settings_window._preview_overlay = FakeOverlay()  # type: ignore[assignment]
     monkeypatch.setattr(
         settings_window._engine_runtime,
         "cancel_timer",
@@ -2493,8 +2482,6 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
         "recording.stop",
         "camera.stop",
         "alarm.close",
-        "overlay.hide",
-        "overlay.close",
     ]
     assert settings_window._web_restart_shutdown is True
     assert settings_window._web_restart_scheduled is False

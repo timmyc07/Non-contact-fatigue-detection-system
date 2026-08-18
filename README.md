@@ -343,7 +343,7 @@ fuser /dev/video0
 
 ## Project layout
 - `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo
-- `gui/`: desktop GUI, fatigue analysis, recording, and web dashboard integration
+- `gui/`: headless Qt engine runtime, fatigue analysis, recording, replay, and web transport integration; the visible product UI lives only in `flutter_app/` under the Tauri shell
 - `config/mediapipe_tuning.json`: MediaPipe、ROI、quality score 與 blendshape 校準參數。
 - `scripts/replay_calibration_summary.py`: 從錄製資料庫彙整 rPPG / fatigue 品質與 ROI 診斷。
 - `scripts/mediapipe_profile_sweep.py`: 以錄影檔重跑 MediaPipe profiles，輸出偵測與 ROI 穩定度比較。

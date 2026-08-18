@@ -65,7 +65,7 @@ Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。
 - PowerShell 5.1 **沒有** `&&` / `||`：出現 parser error 不是指令壞掉，改 `A; if ($?) { B }` 或用 Bash tool。
 - PowerShell `Out-File`/`Set-Content` 預設 UTF-16 LE：寫給其他工具讀的檔案必加 `-Encoding utf8`；寫檔優先用 Write/Edit tool。
 - `git push` 可能因 gh credential helper hang 住：解法見 memory `git-push-credential-hang-workaround.md`（GIT_ASKPASS shim + `gh auth token`）。
-- Windows Qt offscreen 完整 pytest 偶爾會在 `test_preview_overlay_window.py` 發生 access violation：先隔離重跑該測試確認，再最多完整重跑一次；2026-08-17 隔離測試 `2 passed`、完整重跑 `741 passed, 2 skipped`。
+- 2026-08-18 已移除 legacy Qt `PreviewOverlayWindow` 與其 offscreen 測試；正式 Overlay 僅由 Tauri/Flutter 建立，Python engine 只保留 Qt runtime 與 overlay state。
 - 同一子任務最多重試 2 輪，第 2 輪失敗必須換假設或升級模型，不准第 3 輪原樣重試（詳見 `~/.claude/rules/judgment-rubrics.md`）。
 
 ## 架構總覽

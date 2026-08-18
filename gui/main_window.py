@@ -31,7 +31,7 @@ from gui.belt_runtime import BeltRuntime
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.capture_preferences_state import CapturePreferencesState
 from gui.combined_worker import CombinedWorker
-from gui.dialogs import HotkeyConfig, UserProfile
+from gui.desktop_models import HotkeyConfig, UserProfile
 from gui.desktop_control import (
     AlarmUnplayableError,
     BusyError,
@@ -139,7 +139,6 @@ class EngineApplication(QObject):
         self._capture_preferences = CapturePreferencesState()
         self._web_preferences = WebPreferencesState()
 
-        self._preview_overlay = None
         app = QApplication.instance()
         if app is None:
             raise RuntimeError("EngineApplication requires a QApplication instance")
@@ -315,7 +314,6 @@ class EngineApplication(QObject):
         current = self._overlay_state.configure(**changes)
         if current == previous:
             return
-        self._apply_overlay_state()
         self._settings_dirty = True
 
     def _configure_replay(self, **changes: object) -> None:
@@ -537,27 +535,8 @@ class EngineApplication(QObject):
     def _settings_path(self) -> Path:
         return data_path("settings.json")
 
-    @staticmethod
-    def _encode_bytes(data: QByteArray) -> str:
-        return bytes(cast(Any, data.toBase64())).decode("ascii")
-
-    @staticmethod
-    def _decode_bytes(text: str) -> QByteArray:
-        return QByteArray.fromBase64(text.encode("ascii"))
-
     def _on_camera_config_changed(self, **changes: object) -> None:
         self._engine_controller.configure_camera(**changes)
-
-    def _apply_overlay_state(self) -> None:
-        overlay = self._preview_overlay
-        if overlay is None:
-            return
-        state = self._overlay_state.snapshot()
-        overlay.set_opacity(state.opacity / 100.0)
-        overlay.apply_lock_state(state.locked)
-        overlay.set_preview_visible(state.preview)
-        overlay.set_metrics_visible(state.metrics)
-        self._sync_overlay_visibility()
 
     def _load_settings(self) -> None:
         path = self._settings_path()
@@ -578,9 +557,6 @@ class EngineApplication(QObject):
             }
 
         overlay = data.get("overlay", {})
-        overlay_geo = overlay.get("geometry")
-        if self._preview_overlay is not None and isinstance(overlay_geo, str):
-            self._preview_overlay.restoreGeometry(self._decode_bytes(overlay_geo))
 
         hotkeys = data.get("hotkeys", {})
         if isinstance(hotkeys, dict):
@@ -660,14 +636,6 @@ class EngineApplication(QObject):
             )
 
         self._overlay_state.load(toggles=toggles, overlay=overlay)
-        loaded_overlay_geometry = self._overlay_state.snapshot().geometry
-        if self._preview_overlay is not None and loaded_overlay_geometry is not None:
-            self._preview_overlay.setGeometry(
-                loaded_overlay_geometry.x,
-                loaded_overlay_geometry.y,
-                loaded_overlay_geometry.width,
-                loaded_overlay_geometry.height,
-            )
 
         self._web_preferences.load(web=data.get("web", {}))
 
@@ -677,16 +645,6 @@ class EngineApplication(QObject):
 
     def _save_settings(self) -> Path:
         path = self._settings_path()
-        if self._preview_overlay is not None:
-            geometry = self._preview_overlay.geometry()
-            self._overlay_state.configure(
-                geometry={
-                    "x": geometry.x(),
-                    "y": geometry.y(),
-                    "width": geometry.width(),
-                    "height": geometry.height(),
-                }
-            )
         camera = self._engine_controller.camera_snapshot()
         analysis = self._engine_controller.analysis_snapshot()
         overlay_state = self._overlay_state.to_settings()
@@ -1631,9 +1589,6 @@ class EngineApplication(QObject):
             cleanup_step("recording", self._stop_recording)
             cleanup_step("camera and analysis adapters", self._stop_camera_worker)
             cleanup_step("alarm", self._engine_runtime.close_alarm)
-            if self._preview_overlay is not None:
-                cleanup_step("overlay hide", self._preview_overlay.hide)
-                cleanup_step("overlay close", self._preview_overlay.close)
             adapters_stopped = self._runtime_adapter_threads_stopped()
             self._runtime_cleanup_complete = not had_error and adapters_stopped
             return self._runtime_cleanup_complete
@@ -2135,38 +2090,6 @@ class EngineApplication(QObject):
         self._replay_state.finish_thread()
         if self._engine_controller.finish_replay():
             self._shutdown_engine()
-
-    def _on_toggle_all(self, checked: bool) -> None:
-        self._configure_overlay(all_enabled=checked)
-        self._append_log(f"[UI] 全部 Overlay → {'顯示' if checked else '隱藏'}")
-
-    def _on_preview_toggled(self, checked: bool) -> None:
-        self._configure_overlay(preview=checked)
-        self._append_log(f"[UI] 鏡頭預覽 Overlay → {'開啟' if checked else '關閉'}")
-
-    def _on_metrics_toggled(self, checked: bool) -> None:
-        self._configure_overlay(metrics=checked)
-        self._append_log(f"[UI] 數值 Overlay → {'開啟' if checked else '關閉'}")
-
-    def _on_lock_toggled(self, checked: bool) -> None:
-        self._configure_overlay(locked=checked)
-        self._append_log(f"[UI] Overlay 鎖定 → {'鎖定（穿透點擊）' if checked else '解鎖（可拖曳）'}")
-
-    def _sync_overlay_visibility(self) -> None:
-        """Show overlay window only when pipeline running AND at least one overlay is on."""
-        overlay = self._preview_overlay
-        if overlay is None:
-            return
-        state = self._overlay_state.snapshot()
-        any_on = state.preview or state.metrics
-        if self._engine_controller.pipeline_snapshot().running and any_on:
-            overlay.refresh_layout()
-            overlay.show()
-        else:
-            overlay.hide()
-
-    def _on_opacity(self, v: int) -> None:
-        self._configure_overlay(opacity=v)
 
     # ── Camera worker ─────────────────────────────────────────────────────────
 
@@ -2738,10 +2661,6 @@ class EngineApplication(QObject):
 
         self._begin_auto_baseline()
         self._update_frame_routing()
-        if self._preview_overlay is not None:
-            self._preview_overlay.show_rppg_panel(enable_rppg)
-            self._preview_overlay.show_fatigue_panel(True)
-            self._preview_overlay.show_fused_panel(True)
         self._append_log("▶ 合併引擎啟動（rPPG + 行為警覺，單 MediaPipe 實例）")
 
     def _stop_combined_worker(self) -> bool:
@@ -2754,16 +2673,10 @@ class EngineApplication(QObject):
         if combined_queue is not None and camera_worker is not None:
             camera_worker.detach_bgr_queue(combined_queue)
         self._combined_queue = None
-        if self._preview_overlay is not None:
-            self._preview_overlay.show_rppg_panel(False)
-            self._preview_overlay.show_fatigue_panel(False)
-            self._preview_overlay.show_fused_panel(False)
         self._update_frame_routing()
         return True
 
     def _on_fused_score(self, score: object) -> None:
-        if self._preview_overlay is not None:
-            self._preview_overlay.update_fused_score(score)  # type: ignore[arg-type]
         self._latest_fused_score = score
         self._record_metrics()
         self._emit_web_metrics()
@@ -2804,8 +2717,6 @@ class EngineApplication(QObject):
         )
 
         self._update_frame_routing()
-        if self._preview_overlay is not None:
-            self._preview_overlay.show_rppg_panel(True)
         self._append_log("▶ rPPG 引擎啟動（MediaPipe Face Landmarker + POS）")
 
     def _stop_rppg_worker(self) -> bool:
@@ -2818,8 +2729,6 @@ class EngineApplication(QObject):
             camera_worker.detach_bgr_queue(bgr_queue)
         self._bgr_queue = None
         self._update_frame_routing()
-        if self._preview_overlay is not None:
-            self._preview_overlay.show_rppg_panel(False)
         return True
 
     def _on_stress_toggled(self, checked: bool) -> None:
@@ -2848,8 +2757,6 @@ class EngineApplication(QObject):
         if self._combined_worker is None:
             write_live_feed(metrics)  # type: ignore[arg-type]
             metrics = self._apply_rppg_calibration(metrics)
-        if self._preview_overlay is not None:
-            self._preview_overlay.update_rppg_metrics(metrics)  # type: ignore[arg-type]
         self._latest_rppg_metrics = metrics
         self._record_metrics()
         self._emit_web_metrics()
@@ -2889,8 +2796,6 @@ class EngineApplication(QObject):
 
         self._begin_auto_baseline()
         self._update_frame_routing()
-        if self._preview_overlay is not None:
-            self._preview_overlay.show_fatigue_panel(True)
         self._append_log("▶ 行為警覺引擎啟動（V2：EAR + 瞳孔 + 注視 + 頭部）")
 
     def _stop_fatigue_worker(self) -> bool:
@@ -2904,8 +2809,6 @@ class EngineApplication(QObject):
             camera_worker.detach_bgr_queue(fatigue_queue)
         self._fatigue_queue = None
         self._update_frame_routing()
-        if self._preview_overlay is not None:
-            self._preview_overlay.show_fatigue_panel(False)
         return True
 
     def _on_behavior_toggled(self, checked: bool) -> None:
@@ -2916,8 +2819,6 @@ class EngineApplication(QObject):
         )
 
     def _on_fatigue_metrics(self, metrics: object) -> None:
-        if self._preview_overlay is not None:
-            self._preview_overlay.update_fatigue_metrics(metrics)  # type: ignore[arg-type]
         self._latest_fatigue_metrics = metrics
         self._engine_runtime.handle_alarm_metrics(metrics)
         self._feed_baseline_collectors(metrics)
@@ -3028,13 +2929,9 @@ class EngineApplication(QObject):
         self._append_log(
             f"[相機] 實際格式 → 編碼：{codec}  解析度：{w}×{h}  FPS：{fps_str}"
         )
-        if self._preview_overlay is not None:
-            self._preview_overlay.update_camera_info(codec, w, h, cam_text)
         self._emit_web_metrics(force=True)
 
     def _on_frame(self, image) -> None:
-        if self._preview_overlay is not None:
-            self._preview_overlay.update_frame(image)
         self._emit_web_frame(image)
 
     def _on_record_frame(self, image) -> None:
@@ -3046,8 +2943,6 @@ class EngineApplication(QObject):
             pass
 
     def _on_fps(self, fps: float) -> None:
-        if self._preview_overlay is not None:
-            self._preview_overlay.update_fps(fps)
         self._last_fps = float(fps)
         self._emit_web_metrics()
 
@@ -3079,7 +2974,6 @@ class EngineApplication(QObject):
         self._latest_fused_score = None
         self._last_fps = 0.0
         self._last_camera_info = {"codec": "", "width": 0, "height": 0}
-        self._sync_overlay_visibility()
         self._emit_web_metrics(force=True)
         self._publish_desktop_notice(f"攝影機錯誤：{msg}")
 
@@ -3096,7 +2990,6 @@ class EngineApplication(QObject):
             except (ValueError, RuntimeError):
                 self._pipeline_running = False
                 self._engine_controller.stop_pipeline()
-                self._sync_overlay_visibility()
                 self._emit_web_metrics(force=True)
                 return
             self._pipeline_running = True
@@ -3114,11 +3007,9 @@ class EngineApplication(QObject):
                 self._engine_controller.stop_pipeline()
                 self._pipeline_running = False
                 self._notify_user("管線", f"無法啟動分析管線：{exc}")
-                self._sync_overlay_visibility()
                 self._emit_web_metrics(force=True)
                 return
             self._ensure_belt_calibration()   # rPPG 運行時視勾選啟動背景校準
-            self._sync_overlay_visibility()
             if self._capture_preferences.snapshot().auto_record and not self._recording:
                 self._toggle_recording()
             self._emit_web_metrics(force=True)
@@ -3135,7 +3026,6 @@ class EngineApplication(QObject):
             if self._belt_calibrator is not None:
                 self._stop_belt_calibration()   # 停止前先存本次 session 校準版本
             self._stop_camera_worker()
-            self._sync_overlay_visibility()
             self._append_log("■ 管線停止。")
             if self._recording:
                 self._recording = False

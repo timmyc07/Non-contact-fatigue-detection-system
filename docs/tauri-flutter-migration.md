@@ -90,6 +90,11 @@ registrations without a QWidget HWND or `nativeEvent()`.
 Legacy menu shortcut and fake `statusBar()` source has been removed.
 Engine mode no longer creates hidden monitor labels, progress bars, sparklines,
 or the legacy REC-pill timer.
+The remaining dormant Qt visual modules (`PreviewOverlayWindow`, the old settings
+dialogs, and the alarm dialog) were removed on 2026-08-18. `HotkeyConfig` and
+`UserProfile` now live in the Qt-free `gui/desktop_models.py`; this keeps the
+engine import graph focused on runtime services while Flutter owns all forms and
+visible overlay rendering.
 The rPPG, behavior, and fusion callbacks retain their snapshot, alarm, baseline,
 recording, and Web-metrics side effects; Flutter renders the shared metrics payload.
 Engine mode also omits hidden belt labels, banners, device status, sparklines, and
@@ -278,6 +283,12 @@ the preceding `QMainWindow` removal samples, process-tree RSS was about
 noise and are not claimed as improvements. Raw captures are in
 `docs/benchmarks/desktop-engine-legacy-ui-cleanup-2026-08-17-run1.json` and
 `docs/benchmarks/desktop-engine-legacy-ui-cleanup-2026-08-17-run2.json`.
+After removing the dormant Qt visual modules, two repeat runs measured
+252.98/253.297 MiB RSS, 2438.245/2464.125 ms startup, `state.get` p50
+20.255/20.355 ms, and synthetic JPEG p50 1.314/1.305 ms. The runs are retained
+as `docs/benchmarks/desktop-engine-headless-qt-visual-removal-2026-08-18-run1.json`
+and `run2.json`; these remain noisy local baselines rather than a claim of a
+numeric improvement.
 The focused Python slice completed 212 tests. The first full Windows Qt
 offscreen run hit an access violation in the existing preview-overlay test;
 that test passed twice in isolation, and the complete retry finished with
