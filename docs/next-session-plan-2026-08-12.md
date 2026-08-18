@@ -153,7 +153,12 @@ The `settings.action` recordings/web actions now return a Tauri-owned
 target directory or HTTP(S) URL and launches it with a platform-native command;
 Flutter dispatches the result and reports browser-only limitations. Targeted
 Python tests (133), Rust tests (11), Flutter tests (29), and Flutter analyze
-passed. The complete verification and packaged smoke remain the next gate.
+passed. The release package and installed smoke also passed; only the
+UTA-RLDD-labelled replay and physical BLE evidence remain external gates.
+
+A non-labelled local recording subsequently passed generic replay smoke (30
+frames, face rate 1.000, 1/1 videos completed). It does not replace the pending
+UTA-RLDD golden/replay check.
 
 完成前必須 read-back，明確聲明數值行為影響，並只提交代理造成的變更。測試、build、
 upstream、認證或 push 失敗時，保留本地狀態並回報確切阻礙，不得宣稱完成。

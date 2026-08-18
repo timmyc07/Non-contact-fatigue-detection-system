@@ -393,3 +393,8 @@ existing directory, while `open_external_url` accepts only `http://` or
 platform launcher; no shell command string is constructed. Browser-only Flutter
 development reports that the action requires the Tauri desktop shell instead of
 silently treating the backend command as failed.
+
+On 2026-08-18, a non-labelled local recording also completed the generic replay
+smoke (`30` frames, face rate `1.000`, `1/1` videos completed) with output kept
+outside the repository. This is replay-pipeline evidence only; no UTA-RLDD
+golden result is claimed because that labelled dataset is not present locally.
