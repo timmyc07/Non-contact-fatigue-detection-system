@@ -116,6 +116,13 @@ dashboard/monitor/belt/replay/settings renderer、widget imports 與 presentatio
    - isolated NSIS smoke 已固化為 `scripts.installed_desktop_smoke`：只向 class=`Tauri Window`
      的主視窗送 WM_CLOSE，不得關閉 `Tao Thread Event Target` 等事件泵 helper HWND。
 
+## 2026-08-18 最新驗證
+
+- 以目前 commit `532fb3e` 重新建置 Flutter Web release 與 Tauri NSIS；Rust release build 與 8 項 Rust tests 全部通過。Flutter 僅出現既有 `socket_io_common` WebAssembly dry-run warning，JavaScript Web build 成功。
+- 使用新產出的 NSIS bundle 做隔離安裝：API v2、唯一可見 `Tauri Window`（標題「疲勞監測操作台」）、`app.shutdown`、engine/shell 正常結束、卸載與安裝目錄移除全部通過。
+- 重新執行 `scripts.desktop_hardware_smoke` 的 `raw`、`fatigue`、`rppg`、`combined` 四種模式；每種皆為 1280x720、30 FPS、正確 `frame_source`，並完成 pipeline start/stop 與 source engine shutdown。
+- 以上驗證涵蓋生命週期與 routing，不等同於 rPPG／疲勞數值精準度、BLE notification 或 UTA-RLDD golden 證據；本次沒有修改任何數值演算法或校準路徑。
+
 ## 驗收命令
 
 ```powershell
