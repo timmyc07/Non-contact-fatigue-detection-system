@@ -24,16 +24,25 @@ def test_flutter_visible_controls_only_call_supported_engine_commands() -> None:
     assert flutter_commands
     assert flutter_commands <= engine_commands
     assert {
+        "alarm.test",
         "pipeline.set",
         "recording.set",
         "camera.select",
         "camera.configure",
+        "camera.refresh",
         "analysis.configure",
         "overlay.configure",
+        "preferences.configure",
+        "auto_capture.configure",
+        "auto_capture.set",
+        "baseline.start",
+        "monitor.layout",
         "replay.configure",
         "replay.set",
         "hotkeys.configure",
         "user_profile.configure",
         "alarm.configure",
+        "settings.action",
+        "settings.reset",
         "settings.save",
-    } <= flutter_commands
+    } == flutter_commands
