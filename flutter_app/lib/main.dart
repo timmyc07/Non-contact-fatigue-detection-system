@@ -713,14 +713,30 @@ class _OverlayShellState extends State<OverlayShell> {
                   if (previewOn) ...[
                     const SizedBox(height: 8),
                     Expanded(
-                      child: CameraPreview(
-                        frame: _frame,
-                        running: _state['pipeline_running'] == true,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: ColoredBox(
+                          color: kBackgroundDeep,
+                          child: _frame == null
+                              ? Center(
+                                  child: Icon(
+                                    _state['pipeline_running'] == true
+                                        ? Icons.videocam_outlined
+                                        : Icons.videocam_off_outlined,
+                                    color: Colors.white24,
+                                    size: 30,
+                                  ),
+                                )
+                              : Image.memory(
+                                  _frame!,
+                                  fit: BoxFit.contain,
+                                  gaplessPlayback: true,
+                                ),
+                        ),
                       ),
                     ),
                   ],
                   if (metricsOn) ...[
-                    if (!previewOn) const Spacer(),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
