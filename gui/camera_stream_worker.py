@@ -33,12 +33,11 @@ _FPS_WINDOW_FRAMES = 60
 
 
 class CameraStreamWorker(QObject):
-    """Runs in a QThread: grab frames via FFMPEG (or other backend), emit QImage + real FPS.
+    """Runs in a QThread: grab frames via the platform camera backend and emit QImage + real FPS.
 
-    FFMPEG backend:
-        cap.set() for resolution and FPS does not trigger a full pipeline rebuild
-        (unlike MSMF), so we apply the user's requested values before reading.
-        FOURCC is intentionally not set — FFMPEG selects the best format.
+    The public ``ffmpeg`` setting is retained for compatibility. Platform policy
+    selects the native camera API where appropriate; resolution and FPS are
+    applied before reading.
 
     FPS measurement:
         Sliding-window counter over the last _FPS_WINDOW_FRAMES timestamps.

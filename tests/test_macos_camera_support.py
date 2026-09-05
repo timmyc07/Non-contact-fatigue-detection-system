@@ -78,7 +78,7 @@ def test_macos_scan_caps_probe_count(monkeypatch) -> None:
     assert calls == list(range(8))
 
 
-def test_macos_ffmpeg_fallback_uses_avfoundation_before_any(monkeypatch) -> None:
+def test_macos_legacy_ffmpeg_setting_uses_native_avfoundation_first(monkeypatch) -> None:
     _select_macos(monkeypatch)
     calls: list[int] = []
 
@@ -92,16 +92,16 @@ def test_macos_ffmpeg_fallback_uses_avfoundation_before_any(monkeypatch) -> None
     monkeypatch.setattr(camera_devices.cv2, "VideoCapture", fake_capture)
 
     assert camera_devices.open_camera_capture(0, backend="ffmpeg") is not None
-    assert calls == [1900, 1200]
+    assert calls == [1200]
 
 
-def test_macos_ffmpeg_fallback_skips_opened_backend_without_frames(monkeypatch) -> None:
+def test_macos_native_backend_fallback_skips_opened_backend_without_frames(monkeypatch) -> None:
     _select_macos(monkeypatch)
     calls: list[int] = []
 
     def fake_capture(_index: int, api: int):
         calls.append(api)
-        if api == 1900:
+        if api == 1200:
             return _OpenedButUnreadableCapture()
         return _OpenedCapture()
 
@@ -114,7 +114,7 @@ def test_macos_ffmpeg_fallback_skips_opened_backend_without_frames(monkeypatch) 
     monkeypatch.setattr(camera_devices.time, "perf_counter", lambda: next(ticks))
 
     assert camera_devices.open_camera_capture(0, backend="ffmpeg") is not None
-    assert calls == [1900, 1200]
+    assert calls == [1200, 0]
 
 
 def test_explicit_avfoundation_backend(monkeypatch) -> None:

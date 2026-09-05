@@ -240,9 +240,9 @@ def open_camera_capture(index: int, backend: str = "auto"):
         ``"auto"``   — Platform-preferred order without explicit backend.
         ``"avfoundation"`` — macOS AVFoundation directly.
         ``"v4l2"``   — Linux Video4Linux2 directly.
-        ``"ffmpeg"`` — Try CAP_FFMPEG first (file/stream path on Windows);
-                       if that fails (common for integer camera indices),
-                       fall back through platform-preferred APIs.
+        ``"ffmpeg"`` — Backward-compatible logical backend name. Uses the
+                       platform policy's camera API order (native AVFoundation
+                       on macOS; existing FFmpeg/MSMF/DSHOW fallback on Windows).
                        cap.set() works without pipeline rebuild.
         ``"msmf"``   — Windows Media Foundation directly; preserves native MJPG.
                        cap.set() causes pipeline rebuild (~1 s each).
