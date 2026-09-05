@@ -251,7 +251,7 @@ UTA-RLDD 回放：
 | 項目 | Windows | macOS | Ubuntu/Linux |
 | --- | --- | --- | --- |
 | 相機列舉 | 優先 DirectShow 裝置名稱 | AVFoundation index probe | 優先 V4L2 與 `/dev/v4l/by-id` |
-| 相機開啟 | DirectShow、MSMF、FFMPEG、CAP_ANY fallback | AVFoundation、FFMPEG、CAP_ANY fallback | V4L2、FFMPEG、CAP_ANY fallback |
+| 相機開啟 | DirectShow、MSMF、FFMPEG、CAP_ANY fallback | AVFoundation、CAP_ANY、CAP_FFMPEG fallback（`ffmpeg` 為相容設定名稱） | V4L2、FFMPEG、CAP_ANY fallback |
 | 可見 UI runtime | Tauri + Flutter Web + WebView2 | Tauri + Flutter Web + WKWebView | Tauri + Flutter Web + WebKitGTK |
 | 隱藏 engine runtime | PySide6（隱藏 adapter） | PySide6 + CoreBluetooth | PySide6，需 Qt xcb 相關 runtime packages |
 | 預設 control port | 5000 | 5055（避開 AirPlay Receiver） | 5000 |
