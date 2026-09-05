@@ -343,16 +343,17 @@ npm install --save-dev @tauri-apps/cli
 npm run desktop
 ```
 
-Installed builds use the bundled sidecar automatically. `NCFD_ENGINE_ROOT` and
-`NCFD_ENGINE_PYTHON` remain development/custom-runtime overrides for a source
-engine. Set `NCFD_BACKEND_PORT` consistently and pass
+Installed builds use the bundled sidecar automatically and fail closed when the
+bundle is missing it. `NCFD_ENGINE_ROOT` and `NCFD_ENGINE_PYTHON` are debug/source
+development overrides only. Set `NCFD_BACKEND_PORT` consistently and pass
 `--dart-define=NCFD_BACKEND_URL=http://127.0.0.1:<port>` when using a non-default
 port during development.
 
-`scripts/build_engine_sidecar.ps1` creates a PyInstaller `--onedir` engine under
-`dist/ncfd-engine/`. `scripts/build_desktop.ps1` runs that step before the
-Flutter/Tauri build, and `src-tauri/tauri.conf.json` embeds it under the
-installer's `engine/` resource directory. At runtime Tauri injects
+`scripts/build_engine_sidecar.py` creates a platform-native PyInstaller `--onedir`
+engine under `dist/ncfd-engine/`. The Windows PowerShell wrapper and
+`scripts/build_desktop_macos.sh` run that step before the Flutter/Tauri build, and
+`src-tauri/tauri.conf.json` embeds it under the installer's `engine/` resource
+directory. At runtime Tauri injects
 `NCFD_RESOURCE_ROOT` for immutable bundled assets and `NCFD_DATA_ROOT` for
 per-user settings, recordings, and calibration. The resulting NSIS artifact is
 a standalone product installer and no longer depends on a checkout or `.venv`.
@@ -360,6 +361,13 @@ The NSIS build embeds the offline WebView2 installer, so first launch does not
 depend on network access. Release executables are not Authenticode-signed until
 a project signing certificate is configured; SmartScreen trust remains a
 distribution release gate rather than a runtime dependency.
+macOS uses `tauri.macos.conf.json`, AVFoundation/CoreBluetooth privacy descriptions,
+the 5055 loopback port, an arm64 PyInstaller engine, and `.app`/`.dmg` targets. Local
+builds are ad-hoc signed and verified with `codesign`; public distribution still
+requires a Developer ID identity and notarization. The current native Python wheels
+set the supported floor to macOS 15.0 and Apple Silicon. The transparent Overlay
+uses Tauri's `macos-private-api`, so this configuration targets direct/notarized DMG
+distribution rather than the Mac App Store.
 On 2026-08-10, the generated NSIS package was silently installed into an
 isolated temporary directory and launched successfully: the bundled engine
 returned desktop API v2, created the per-user calibration data root, and its
@@ -380,7 +388,12 @@ bundled sidecar from the application resource directory.
 
 ## Rollout
 
-The original Flask dashboard remains available at `http://127.0.0.1:5000` as a diagnostics fallback. Flutter/Tauri owns the visible live monitor, camera controls, recording, analysis modes, calibration toggles, settings, replay, notifications, and overlay. Qt remains only as an internal event-loop/worker runtime while the remaining runtime state is extracted behind the desktop command interface.
+The original Flask dashboard remains available at `http://127.0.0.1:5000` on
+Windows/Linux and `http://127.0.0.1:5055` on macOS as a diagnostics fallback.
+Flutter/Tauri owns the visible live monitor, camera controls, recording, analysis
+modes, calibration toggles, settings, replay, notifications, and overlay. Qt remains
+only as an internal event-loop/worker runtime while the remaining runtime state is
+extracted behind the desktop command interface.
 
 ## External shell actions
 

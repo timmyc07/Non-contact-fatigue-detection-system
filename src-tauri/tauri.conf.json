@@ -41,17 +41,17 @@
   },
   "bundle": {
     "active": true,
-    "icon": ["icons/icon.ico"],
+    "icon": [
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon-windows.ico"
+    ],
     "resources": {
       "../dist/ncfd-engine/": "engine/"
     },
-    "windows": {
-      "webviewInstallMode": {
-        "type": "offlineInstaller",
-        "silent": true
-      }
-    },
-    "targets": ["nsis"],
     "createUpdaterArtifacts": false
   }
 }

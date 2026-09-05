@@ -17,6 +17,8 @@ use tauri_plugin_dialog::DialogExt;
 struct BackendProcess(Mutex<Option<Child>>);
 
 const DESKTOP_CONTROL_API_VERSION: u64 = 2;
+const WINDOWS_LINUX_BACKEND_PORT: u16 = 5000;
+const MACOS_BACKEND_PORT: u16 = 5055;
 
 #[derive(Debug, Serialize)]
 struct SystemInfo {
@@ -282,7 +284,11 @@ fn backend_address() -> SocketAddr {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|value| *value != 0)
-        .unwrap_or(5000);
+        .unwrap_or(if cfg!(target_os = "macos") {
+            MACOS_BACKEND_PORT
+        } else {
+            WINDOWS_LINUX_BACKEND_PORT
+        });
     SocketAddr::from(([127, 0, 0, 1], port))
 }
 
@@ -379,8 +385,16 @@ fn bundled_engine_path(resource_dir: &Path) -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
-fn engine_path_for_mode(resource_dir: &Path, use_bundled: bool) -> Option<PathBuf> {
-    use_bundled.then(|| bundled_engine_path(resource_dir)).flatten()
+fn engine_path_for_mode(resource_dir: &Path, use_bundled: bool) -> Result<Option<PathBuf>, String> {
+    if !use_bundled {
+        return Ok(None);
+    }
+    bundled_engine_path(resource_dir).map(Some).ok_or_else(|| {
+        format!(
+            "bundled Python engine is missing under {}",
+            resource_dir.join("engine").display()
+        )
+    })
 }
 
 fn bundled_resource_root(engine_path: &Path) -> PathBuf {
@@ -407,7 +421,7 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         .path()
         .resource_dir()
         .map_err(|error| format!("failed to resolve resource directory: {error}"))?;
-    let packaged_engine = engine_path_for_mode(&resource_dir, !cfg!(debug_assertions));
+    let packaged_engine = engine_path_for_mode(&resource_dir, !cfg!(debug_assertions))?;
     if backend_available() {
         if backend_api_compatible() && packaged_engine.is_none() {
             return Ok(None);
@@ -451,6 +465,7 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         command
     };
     command
+        .env("NCFD_BACKEND_PORT", backend_address().port().to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -694,8 +709,20 @@ mod tests {
         };
         fs::write(engine_dir.join(name), b"stale").expect("stale engine marker");
 
-        assert_eq!(engine_path_for_mode(&directory, false), None);
-        assert!(engine_path_for_mode(&directory, true).is_some());
+        assert_eq!(engine_path_for_mode(&directory, false), Ok(None));
+        assert!(engine_path_for_mode(&directory, true)
+            .expect("release engine")
+            .is_some());
+        fs::remove_dir_all(directory).expect("temporary resource cleanup");
+    }
+
+    #[test]
+    fn release_mode_rejects_missing_bundled_engine() {
+        let directory = temp_resource_dir();
+
+        assert!(engine_path_for_mode(&directory, true)
+            .expect_err("release must not fall back to the checkout")
+            .contains("bundled Python engine is missing"));
         fs::remove_dir_all(directory).expect("temporary resource cleanup");
     }
 

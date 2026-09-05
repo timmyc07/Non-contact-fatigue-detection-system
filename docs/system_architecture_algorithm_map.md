@@ -248,13 +248,14 @@ UTA-RLDD 回放：
 
 ## 平台與設定重點
 
-| 項目 | Windows | Ubuntu/Linux |
-| --- | --- | --- |
-| 相機列舉 | 優先 DirectShow 裝置名稱 | 優先 V4L2 與 `/dev/v4l/by-id` |
-| 相機開啟 | DirectShow、MSMF、FFMPEG、CAP_ANY fallback | V4L2、FFMPEG、CAP_ANY fallback |
-| 可見 UI runtime | Tauri + Flutter Web + WebView2 | Tauri + Flutter Web + WebKitGTK |
-| 隱藏 engine runtime | PySide6（隱藏 adapter） | PySide6，需 Qt xcb 相關 runtime packages |
-| 可選依賴 | pygrabber 只在 Windows 使用 | pygrabber 不會執行 |
+| 項目 | Windows | macOS | Ubuntu/Linux |
+| --- | --- | --- | --- |
+| 相機列舉 | 優先 DirectShow 裝置名稱 | AVFoundation index probe | 優先 V4L2 與 `/dev/v4l/by-id` |
+| 相機開啟 | DirectShow、MSMF、FFMPEG、CAP_ANY fallback | AVFoundation、FFMPEG、CAP_ANY fallback | V4L2、FFMPEG、CAP_ANY fallback |
+| 可見 UI runtime | Tauri + Flutter Web + WebView2 | Tauri + Flutter Web + WKWebView | Tauri + Flutter Web + WebKitGTK |
+| 隱藏 engine runtime | PySide6（隱藏 adapter） | PySide6 + CoreBluetooth | PySide6，需 Qt xcb 相關 runtime packages |
+| 預設 control port | 5000 | 5055（避開 AirPlay Receiver） | 5000 |
+| 可選依賴 | pygrabber 只在 Windows 使用 | pygrabber 不會執行 | pygrabber 不會執行 |
 
 MediaPipe 調校目前以 `stable_indoor` profile 為預設，另有 low light 與 high motion profile 可調整偵測信心、ROI 平滑與低光門檻。
 

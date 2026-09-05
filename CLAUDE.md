@@ -40,7 +40,7 @@ threshold behavior.
 
 ## 常用指令
 
-環境優先使用專案內 `.venv`（Windows: `.venv\Scripts\python`；Linux: `.venv/bin/python`）。
+環境優先使用專案內 `.venv`（Windows: `.venv\Scripts\python`；macOS/Linux: `.venv/bin/python`）。
 
 ```powershell
 # 執行正式主程式（Tauri + Flutter；Python engine 由 Tauri 管理）
@@ -67,6 +67,9 @@ Tauri debug build 必須使用 checkout source engine（忽略 `src-tauri/target
 `spawn_backend` 時須維持此邊界，避免 dev UI 驗到舊版 Python API。
 
 Ubuntu 環境安裝與 Qt xcb runtime 補齊：`bash scripts/setup_ubuntu.sh`。相機黑屏診斷：`scripts/diagnose_camera.py`。
+macOS 開發啟動：`bash scripts/start_desktop_macos.sh`；arm64 `.app/.dmg` 建置：
+`bash scripts/build_desktop_macos.sh`。Windows 與 macOS 的 `.venv`、sidecar、Flutter/Rust
+產物必須各自在目標平台建立，不可跨平台複製。
 
 ## 環境已知坑（遇錯先查這裡，再決定要不要重試）
 
@@ -252,12 +255,14 @@ worker 參數、標註輸出、報表或分析數值。
 
 ## 平台差異
 
-- 相機後端：Windows 自動優先 `DSHOW` → fallback `MSMF`；Linux 用 `V4L2`（Linux 優先要求 MJPG 以取得 30 FPS）。相機名稱在 Windows 用 `pygrabber`（Windows-only 選配，Linux 不執行其 import）。**勿把平台專用後端邏輯混在一起改**。
+- 相機後端：Windows 自動優先 `DSHOW` → fallback `MSMF`；macOS 優先 `AVFoundation` → `CAP_ANY`；Linux 用 `V4L2`（Linux 優先要求 MJPG 以取得 30 FPS）。相機名稱在 Windows 用 `pygrabber`（Windows-only 選配），macOS 以 index 探測，Linux 使用 `/dev/video*` 與 `/dev/v4l/by-id`。**勿把平台專用後端邏輯混在一起改**。
+- Desktop backend 預設埠：Windows/Linux 5000；macOS 5055（避開 AirPlay Receiver）。Tauri 啟動 Python engine 時必須注入同一個 `NCFD_BACKEND_PORT`，Flutter macOS build 必須使用相同 `NCFD_BACKEND_URL`。
+- macOS 透明 Overlay 使用 Tauri `macos-private-api`，因此目前不符合 Mac App Store 規則；一般 Developer ID/notarized DMG 發佈不受此限制。
 - `main.py` 在建立 `QApplication` **之前** 會把 Qt platform plugin 路徑固定回 PySide6（`_prefer_pyside6_qt_plugins`），避免 OpenCV wheel 的 `cv2/qt/plugins` 蓋掉 PySide6 的 xcb plugin；Linux 缺 xcb runtime 套件時回傳 exit code 78 並印安裝指引。修改啟動流程時勿破壞此順序。
 
 ## 測試慣例
 
-`tests/` 使用 `pytest`，每個測試檔對應一個子系統（rPPG 訊號處理、MediaPipe 增強、校準、UTA-RLDD replay、watch adapter、web playback / socketio dashboard、alarm、Ubuntu 相機支援）。新增分析邏輯時，優先在對應測試檔擴充純運算層測試（engine / scorer / calibration），避免依賴實體相機或 Qt event loop。
+`tests/` 使用 `pytest`，每個測試檔對應一個子系統（rPPG 訊號處理、MediaPipe 增強、校準、UTA-RLDD replay、watch adapter、web playback / socketio dashboard、alarm、Ubuntu/macOS 相機支援）。新增分析邏輯時，優先在對應測試檔擴充純運算層測試（engine / scorer / calibration），避免依賴實體相機或 Qt event loop。
 
 ## 文件
 

@@ -14,7 +14,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 5000
+DEFAULT_PORT = 5055 if sys.platform == "darwin" else 5000
 DESKTOP_API_VERSION = 2
 
 

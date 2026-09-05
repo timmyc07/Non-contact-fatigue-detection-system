@@ -10,7 +10,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a Tauri v2 + Flutter W
 - Fatigue/behavior analysis overlays
 - Recording to SQLite (.db) and video (.mp4)
 - Web dashboard for live metrics and playback
-- Web dashboard 預設僅本機存取；可在 Flutter 面板「設定 → 允許區域網存取 Web 儀表板」開啟後，由同區域網裝置以 `http://<主機IP>:5000` 連線。為降低資安風險，Socket.IO CORS 僅允許本機與 LAN IP 來源（請以主機 IP 連線，勿用主機名稱），且 File Browser（`/api/fb/*`）端點僅接受本機發起的請求。
+- Web dashboard 預設僅本機存取；Windows/Linux 預設使用 5000，macOS 為避開 AirPlay Receiver 使用 5055。可在 Flutter 面板「設定 → 允許區域網存取 Web 儀表板」開啟後，由同區域網裝置連線。為降低資安風險，Socket.IO CORS 僅允許本機與 LAN IP 來源（請以面板顯示的完整網址連線，勿自行猜測埠號），且 File Browser（`/api/fb/*`）端點僅接受本機發起的請求。
 - LAN 模式啟用 shared-token 認證：伺服器綁定區域網時會自動產生 access token，Flutter 面板顯示的網址會自動附上 `?token=`；同區域網裝置需使用該完整網址（含 token）才能存取首頁與 API，否則回應 401。本機（127.0.0.1）連線不受影響、免 token。
 - **警告**：LAN 模式沒有 TLS，仍會將人臉影像與生理數據以未加密 HTTP 廣播給同網段裝置（僅以 token 防止未授權存取），請只在受信任網路開啟。
 - Web dashboard 會在新連線與重新整理後同步 engine 最新狀態，live camera preview 目標為 30 FPS；UTA-RLDD 離線 replay 預覽仍約 20 FPS。
@@ -22,11 +22,11 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a Tauri v2 + Flutter W
 - 心跳帶真值校準（背景）：BLE 直連標準 Heart Rate Service 心跳帶（如 Scosche Rhythm+ 2.0）作為 rPPG 的「真值參考」，線上以低增益自適應微調 rPPG 的 BPM 校正量；心跳帶數值只用於校準與可信度判斷，**不進**疲勞融合分數
 
 ## Requirements
-- Python 3.10+ recommended
+- Python 3.12 recommended and validated
 - Node.js/npm、Rust stable toolchain 與 Flutter SDK（建置 Tauri v2 + Flutter Web 正式桌面面板）
-- Windows and Ubuntu Linux supported
+- Windows、macOS 15+ 與 Ubuntu Linux supported；目前 macOS release 產物已驗證 Apple Silicon arm64
 - Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
-- 心跳帶真值校準需要主機具備 Bluetooth LE 介面（Windows 10 1903+ 使用 WinRT；Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
+- 心跳帶真值校準需要主機具備 Bluetooth LE 介面（Windows 使用 WinRT、macOS 使用 CoreBluetooth、Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
 
 ## Setup
 Windows:
@@ -50,6 +50,20 @@ bash scripts/setup_ubuntu.sh
 .venv/bin/python -m pip install -r requirements-dev.txt
 ```
 
+macOS（Apple Silicon）：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install -r requirements-dev.txt
+npm ci
+cd flutter_app && flutter pub get && cd ..
+```
+
+另需 Xcode Command Line Tools、Node.js/npm、Rust stable 與 Flutter stable。`.venv`、
+`node_modules`、Flutter `.dart_tool`、Rust `target` 與 `dist` 都是平台原生產物；在
+Windows/macOS 來回切換時，請在各自電腦重新建立，不要跨作業系統複製。
+
 If the virtual environment already exists, reinstall/update Python dependencies with:
 ```bash
 .venv/bin/python -m pip install -r requirements.txt
@@ -71,6 +85,16 @@ Windows 一鍵啟動（會自動設定 Flutter PATH、檢查 Python engine 並�
 powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
 ```
 
+macOS 一鍵啟動：
+
+```bash
+bash scripts/start_desktop_macos.sh
+```
+
+macOS 第一次啟動會要求相機權限；啟用心跳帶時也會要求 Bluetooth 權限。全域快捷鍵
+目前仍只有 Windows 原生 backend，macOS 面板會回報 `supported=false`，其餘監測、錄影、
+回放、Overlay 與 BLE 流程不受影響。
+
 影片回放的「選擇資料夾」由 Tauri 原生 dialog 提供；取消不會修改目前設定。若原生 picker 無法使用，面板會顯示錯誤，仍可在同一區塊手動輸入完整資料夾路徑並套用。
 
 啟用面板設定中的鏡頭或數值 Overlay 且開始管線後，Tauri 會建立獨立的透明 Overlay WebView；它與主面板共用 Python engine 的即時 metrics/preview。鎖定 Overlay 時由原生視窗啟用 click-through，解除鎖定後可拖曳視窗；位置與尺寸變更會同步到設定狀態，按「儲存設定」後於下次啟動還原（支援多螢幕負座標）。
@@ -87,7 +111,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
 `state.get` command latency，以及固定合成影像的 JPEG payload、encode latency 與
 Socket.IO server dispatch rate。Preview 數字是無相機、in-process 微基準，不包含
 實際網路、Tauri WebView 解碼或 Flutter 繪製；比較重構前後結果時應使用相同機器、
-Python/套件版本與 `--samples`，並確保 TCP 5000 沒有其他 engine。
+Python/套件版本與 `--samples`，並確保對應平台的 engine 埠沒有其他程序（Windows/Linux
+預設 5000；macOS 預設 5055）。
 
 實體 camera 的 desktop API／engine／worker lifecycle smoke（不儲存設定或錄影）：
 
@@ -105,6 +130,25 @@ BLE 裝置請另用下方的 `scripts.hr_belt_monitor` 診斷，因為實際 BPM
 powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
 ```
 輸出位於 `src-tauri\target\release\bundle\nsis\`。建置流程會先用 PyInstaller 產生 `dist\ncfd-engine\`，再由 Tauri 將 engine、MediaPipe model、不可變 tuning 資源一起嵌入 installer。正式安裝時，Tauri 會把設定、錄影與校準寫入使用者資料目錄，不需要 repository 或 `.venv`；若要開發 fallback，仍可用 `NCFD_ENGINE_ROOT` 與 `NCFD_ENGINE_PYTHON` 指向 Python engine。
+
+產生 macOS `.app` 與 `.dmg`（目前為 Apple Silicon arm64）：
+
+```bash
+bash scripts/build_desktop_macos.sh
+```
+
+輸出位於 `src-tauri/target/release/bundle/macos/` 與
+`src-tauri/target/release/bundle/dmg/`。本機建置使用 ad-hoc signing，適合本機驗證；對外
+散佈仍需 Apple Developer ID、正式 codesign 與 notarization。PyInstaller 不是跨平台
+編譯器，因此 Windows installer 必須在 Windows 建，macOS app/DMG 必須在 macOS 建。
+release 嚴格只啟動 bundle 內的 engine；`NCFD_ENGINE_ROOT`/`NCFD_ENGINE_PYTHON` 僅供
+debug/source 開發，不會讓 release 靜默退回 checkout。
+
+macOS bundle API／engine shutdown smoke：
+
+```bash
+.venv/bin/python -m scripts.installed_desktop_smoke_macos
+```
 
 Windows 安裝版完整 smoke（隔離安裝、API v2、engine shutdown、Tauri 主視窗正常關閉與靜默解除安裝）：
 
@@ -304,6 +348,9 @@ rPPG BPM 校準以 bias 模型 `scale*bpm+offset` 修正 rPPG 心率；日常疲
 
 即時列印每筆 BPM／RR-Interval、狀態轉換（掃描中→已連線→重連中）、電量與接觸不良警告；未收到任何心率 notification 時以非零 exit code 結束。
 
+On macOS, camera enumeration prefers AVFoundation and falls back to OpenCV `CAP_ANY`. If the
+camera is denied, enable it under System Settings → Privacy & Security → Camera.
+
 On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
 ```bash
 ls -l /dev/video*
@@ -400,4 +447,4 @@ fuser /dev/video0
 ## Notes
 - Recordings are saved under the `recordings/` folder.
 - If playback video is needed in the web dashboard, make sure ffmpeg is available (imageio-ffmpeg is supported via requirements).
-- `pygrabber` is a Windows-only optional dependency for DirectShow camera names. On Ubuntu/Linux, camera access uses V4L2 and the guarded `pygrabber` imports are not executed.
+- `pygrabber` is a Windows-only optional dependency for DirectShow camera names. macOS uses AVFoundation, Ubuntu/Linux uses V4L2, and guarded platform imports do not run on other systems.

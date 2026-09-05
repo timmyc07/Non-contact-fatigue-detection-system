@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>用於連線心跳帶，提供 rPPG 心率校準的參考資料。</string>
+  <key>NSCameraUsageDescription</key>
+  <string>用於非接觸式臉部、疲勞與生理訊號監測。</string>
+</dict>
+</plist>

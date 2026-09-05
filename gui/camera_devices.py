@@ -1,8 +1,9 @@
-"""Enumerate cameras across Windows and Linux backends.
+"""Enumerate cameras across Windows, macOS, and Linux backends.
 
 Windows: if pygrabber returns DirectShow device names, we **do not** open VideoCapture per
 index (instant list, same as V1). Only fall back to OpenCV probing when names are unavailable.
 Linux: prefer V4L2 and expose stable `/dev/v4l/by-id` labels when available.
+macOS: probe camera indices with AVFoundation before the generic OpenCV backend.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ except Exception:
     _CAP_DEVICE_DESC = None
 
 _IS_WIN = sys.platform.startswith("win")
+_IS_MAC = sys.platform == "darwin"
+_IS_LINUX = sys.platform.startswith("linux")
 
 try:
     if cv2 is not None:
@@ -40,7 +43,7 @@ def _list_windows_dshow_device_names() -> list[str]:
 
 
 def _list_linux_v4l2_device_names() -> dict[int, str]:
-    if _IS_WIN:
+    if not _IS_LINUX:
         return {}
     try:
         import glob
@@ -64,7 +67,7 @@ def _list_linux_v4l2_device_names() -> dict[int, str]:
 
 
 def _list_linux_video_indices() -> list[int]:
-    if _IS_WIN:
+    if not _IS_LINUX:
         return []
     try:
         import glob
@@ -83,7 +86,7 @@ def _list_linux_video_indices() -> list[int]:
 
 
 def _is_linux_video_capture_node(path: str) -> bool:
-    if _IS_WIN:
+    if not _IS_LINUX:
         return False
     try:
         import fcntl
@@ -132,7 +135,11 @@ def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
         cap_msmf = getattr(cv2, "CAP_MSMF", None)
         if isinstance(cap_msmf, int):
             prefs.append(cap_msmf)
-    else:
+    elif _IS_MAC:
+        cap_avfoundation = getattr(cv2, "CAP_AVFOUNDATION", None)
+        if isinstance(cap_avfoundation, int):
+            prefs.append(cap_avfoundation)
+    elif _IS_LINUX:
         cap_v4l2 = getattr(cv2, "CAP_V4L2", None)
         if isinstance(cap_v4l2, int):
             prefs.append(cap_v4l2)
@@ -180,11 +187,12 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
     linux_labels = _list_linux_v4l2_device_names()
     found: list[tuple[int, str]] = []
 
-    candidate_indices = (
-        [i for i in _list_linux_video_indices() if i < max_index]
-        if not _IS_WIN
-        else list(range(max_index))
-    )
+    if _IS_LINUX:
+        candidate_indices = [i for i in _list_linux_video_indices() if i < max_index]
+    elif _IS_MAC:
+        candidate_indices = list(range(min(max_index, 8)))
+    else:
+        candidate_indices = list(range(max_index))
 
     for i in candidate_indices:
         if not _probe_camera_index(i, warmup_read, api_preferences):
@@ -228,6 +236,7 @@ def open_camera_capture(index: int, backend: str = "auto"):
 
     ``backend``:
         ``"auto"``   — Platform-preferred order without explicit backend.
+        ``"avfoundation"`` — macOS AVFoundation directly.
         ``"v4l2"``   — Linux Video4Linux2 directly.
         ``"ffmpeg"`` — Try CAP_FFMPEG first (file/stream path on Windows);
                        if that fails (common for integer camera indices),
@@ -276,11 +285,22 @@ def open_camera_capture(index: int, backend: str = "auto"):
             return _try(int(v4l2))
         return None
 
+    if b == "avfoundation":
+        avfoundation = getattr(cv2, "CAP_AVFOUNDATION", None)
+        if avfoundation is not None:
+            return _try(int(avfoundation))
+        return None
+
     if b == "ffmpeg":
         # CAP_FFMPEG only accepts integer indices on some builds/platforms;
         # cascade through workable alternatives if it fails.
         attrs = ["CAP_FFMPEG"]
-        attrs.extend(["CAP_MSMF", "CAP_DSHOW"] if _IS_WIN else ["CAP_V4L2"])
+        if _IS_WIN:
+            attrs.extend(["CAP_MSMF", "CAP_DSHOW"])
+        elif _IS_MAC:
+            attrs.append("CAP_AVFOUNDATION")
+        elif _IS_LINUX:
+            attrs.append("CAP_V4L2")
         attrs.append("CAP_ANY")
         for attr in attrs:
             api_val = getattr(cv2, attr, None)

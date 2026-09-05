@@ -123,7 +123,12 @@ def main() -> int:
     app = QApplication(qt_args)
     app.setQuitOnLastWindowClosed(False)
     engine = EngineApplication()
-    print("[Engine] Desktop control backend listening on http://127.0.0.1:5000")
+    from gui.web_server import WEB_DASHBOARD_DEFAULT_PORT
+
+    print(
+        "[Engine] Desktop control backend listening on "
+        f"http://127.0.0.1:{WEB_DASHBOARD_DEFAULT_PORT}"
+    )
     exit_code = app.exec()
     engine.close_runtime()
     return exit_code

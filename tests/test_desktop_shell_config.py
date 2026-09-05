@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_windows_shell_uses_opaque_webview_surface() -> None:
+def test_desktop_shell_uses_opaque_main_webview_surface() -> None:
     config = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
     window = config["app"]["windows"][0]
 
@@ -42,10 +42,45 @@ def test_tauri_csp_allows_configured_loopback_backend_ports_only() -> None:
 
 
 def test_windows_installer_bundles_offline_webview_runtime() -> None:
-    config = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    config = json.loads(
+        (ROOT / "src-tauri" / "tauri.windows.conf.json").read_text(encoding="utf-8")
+    )
     install_mode = config["bundle"]["windows"]["webviewInstallMode"]
 
     assert install_mode == {"type": "offlineInstaller", "silent": True}
+    assert config["bundle"]["targets"] == ["nsis"]
+
+
+def test_macos_bundle_enables_overlay_and_native_artifacts() -> None:
+    config = json.loads(
+        (ROOT / "src-tauri" / "tauri.macos.conf.json").read_text(encoding="utf-8")
+    )
+
+    assert config["app"]["macOSPrivateApi"] is True
+    assert config["bundle"]["targets"] == ["app", "dmg"]
+    assert config["bundle"]["macOS"]["minimumSystemVersion"] == "15.0"
+    assert config["bundle"]["macOS"]["infoPlist"] == "Info.plist"
+    assert config["bundle"]["macOS"]["signingIdentity"] == "-"
+    assert "127.0.0.1:5055" in config["build"]["beforeDevCommand"]["script"]
+    assert "127.0.0.1:5055" in config["build"]["beforeBuildCommand"]["script"]
+
+
+def test_desktop_icons_cover_windows_and_macos() -> None:
+    config = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    icons = set(config["bundle"]["icon"])
+
+    assert "icons/icon.png" in icons
+    assert "icons/icon.icns" in icons
+    assert "icons/icon-windows.ico" in icons
+    for relative_path in icons:
+        assert (ROOT / "src-tauri" / relative_path).is_file()
+
+
+def test_macos_privacy_manifest_declares_camera_and_bluetooth() -> None:
+    plist = (ROOT / "src-tauri" / "Info.plist").read_text(encoding="utf-8")
+
+    assert "NSCameraUsageDescription" in plist
+    assert "NSBluetoothAlwaysUsageDescription" in plist
 
 
 def test_tauri_bundles_engine_under_the_runtime_resource_root() -> None:
@@ -68,3 +103,17 @@ def test_desktop_build_propagates_tauri_failure() -> None:
     assert "npm run desktop:build" in script
     assert 'if ($LASTEXITCODE -ne 0)' in script
     assert "Tauri desktop build failed" in script
+
+
+def test_macos_build_and_smoke_scripts_use_native_bundle_contract() -> None:
+    build_script = (ROOT / "scripts" / "build_desktop_macos.sh").read_text(
+        encoding="utf-8"
+    )
+    smoke_script = (ROOT / "scripts" / "installed_desktop_smoke_macos.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "scripts/build_engine_sidecar.py" in build_script
+    assert "npm run desktop:build" in build_script
+    assert "疲勞監測操作台.app" in smoke_script
+    assert 'default=5055' in smoke_script

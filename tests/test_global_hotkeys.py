@@ -169,7 +169,7 @@ def test_runtime_removes_filter_when_every_registration_fails() -> None:
 def test_unsupported_runtime_does_not_require_windows_ctypes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delattr(global_hotkeys_module.ctypes, "get_last_error")
+    monkeypatch.delattr(global_hotkeys_module.ctypes, "get_last_error", raising=False)
     runtime = GlobalHotkeyRuntime(lambda _hotkey_id: None, supported=False)
 
     assert runtime.supported is False

@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import socket
+import sys
 import threading
 import time
 from collections import deque
@@ -43,12 +44,15 @@ _PLAYBACK_MAX_LIMIT = 1000
 # 5000 為上限，避免單一請求被要求撈出過大批次拖垮伺服器記憶體。
 _PLAYBACK_FULL_DEFAULT_LIMIT = 2000
 _PLAYBACK_FULL_MAX_LIMIT = 5000
+
+
 def _configured_port() -> int:
+    default_port = 5055 if sys.platform == "darwin" else 5000
     try:
-        port = int(os.environ.get("NCFD_BACKEND_PORT", "5000"))
+        port = int(os.environ.get("NCFD_BACKEND_PORT", str(default_port)))
     except ValueError:
-        return 5000
-    return port if 1 <= port <= 65535 else 5000
+        return default_port
+    return port if 1 <= port <= 65535 else default_port
 
 
 WEB_DASHBOARD_DEFAULT_PORT = _configured_port()

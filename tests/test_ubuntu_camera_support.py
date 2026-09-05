@@ -38,6 +38,8 @@ class _OpenedCapture:
 
 def test_linux_api_preferences_prioritise_v4l2(monkeypatch) -> None:
     monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices, "_IS_MAC", False)
+    monkeypatch.setattr(camera_devices, "_IS_LINUX", True)
     monkeypatch.setattr(camera_devices.cv2, "CAP_V4L2", 200, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_ANY", 0, raising=False)
 
@@ -46,6 +48,8 @@ def test_linux_api_preferences_prioritise_v4l2(monkeypatch) -> None:
 
 def test_windows_api_preferences_prioritise_dshow_then_msmf(monkeypatch) -> None:
     monkeypatch.setattr(camera_devices, "_IS_WIN", True)
+    monkeypatch.setattr(camera_devices, "_IS_MAC", False)
+    monkeypatch.setattr(camera_devices, "_IS_LINUX", False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_MSMF", 1400, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_DSHOW", 700, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_ANY", 0, raising=False)
@@ -55,6 +59,8 @@ def test_windows_api_preferences_prioritise_dshow_then_msmf(monkeypatch) -> None
 
 def test_list_camera_devices_returns_empty_when_probe_finds_nothing(monkeypatch) -> None:
     monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices, "_IS_MAC", False)
+    monkeypatch.setattr(camera_devices, "_IS_LINUX", True)
     monkeypatch.setattr(camera_devices, "_list_linux_v4l2_device_names", lambda: {})
     monkeypatch.setattr(camera_devices, "_build_api_preferences", lambda _prefs: [0])
     monkeypatch.setattr(camera_devices.cv2, "VideoCapture", lambda _index, _api: _ClosedCapture())
@@ -70,6 +76,8 @@ def test_linux_camera_scan_only_probes_existing_video_nodes(monkeypatch) -> None
         return _OpenedCapture()
 
     monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices, "_IS_MAC", False)
+    monkeypatch.setattr(camera_devices, "_IS_LINUX", True)
     monkeypatch.setattr(camera_devices, "_list_linux_v4l2_device_names", lambda: {})
     monkeypatch.setattr(camera_devices, "_list_linux_video_indices", lambda: [0, 1])
     monkeypatch.setattr(camera_devices, "_build_api_preferences", lambda _prefs: [0])
@@ -83,6 +91,8 @@ def test_linux_camera_scan_only_probes_existing_video_nodes(monkeypatch) -> None
 
 def test_linux_video_indices_skip_metadata_nodes(monkeypatch) -> None:
     monkeypatch.setattr(camera_devices, "_IS_WIN", False)
+    monkeypatch.setattr(camera_devices, "_IS_MAC", False)
+    monkeypatch.setattr(camera_devices, "_IS_LINUX", True)
 
     import glob
     import os
