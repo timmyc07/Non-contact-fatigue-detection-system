@@ -43,6 +43,8 @@ from .fatigue_engine import FatigueEngine, FatigueMetrics, FatigueParams
 from .personal_profile import PersonalProfile
 from .frame_queue import get_latest
 from .mediapipe_tuning import load_mediapipe_tuning
+from .platforms import create_face_landmarker_base_options
+from .worker_safety import fail_closed_worker
 from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig
 from .fatigue_worker import draw_fatigue_annotations
 from rppg.rppg_worker import (
@@ -222,6 +224,7 @@ class CombinedWorker(QObject):
         self._pending_profile = profile
         self._has_pending_profile = True
 
+    @fail_closed_worker("合併分析 worker", log)
     @Slot()
     def run(self) -> None:
         # ── Dependency checks ─────────────────────────────────────────────────
@@ -250,17 +253,22 @@ class CombinedWorker(QObject):
             return
 
         # ── Build FaceLandmarker ──────────────────────────────────────────────
-        base_opts  = _mp_python.BaseOptions(model_asset_path=str(model_path))
-        lm_options = _mp_vision.FaceLandmarkerOptions(
-            base_options=base_opts,
-            output_face_blendshapes=True,
-            output_facial_transformation_matrixes=True,
-            min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
-            min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
-            min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
-            num_faces=max(1, int(self._tuning.face_landmarker.num_faces)),
-            running_mode=_mp_vision.RunningMode.VIDEO,
-        )
+        try:
+            base_opts = create_face_landmarker_base_options(_mp_python, model_path)
+            lm_options = _mp_vision.FaceLandmarkerOptions(
+                base_options=base_opts,
+                output_face_blendshapes=True,
+                output_facial_transformation_matrixes=True,
+                min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
+                min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
+                min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
+                num_faces=max(1, int(self._tuning.face_landmarker.num_faces)),
+                running_mode=_mp_vision.RunningMode.VIDEO,
+            )
+        except Exception as exc:
+            self.failed.emit(f"MediaPipe Face Landmarker 選項建立失敗：{exc}")
+            self.finished.emit()
+            return
 
         # ── Engines ───────────────────────────────────────────────────────────
         rppg_engine    = RppgEngine(buffer_sec=self._buffer_sec,
@@ -296,7 +304,14 @@ class CombinedWorker(QObject):
             parts.append("行為警覺")
         self.status_changed.emit(f"合併引擎就緒（{' + '.join(parts)}），等待幀資料…")
 
-        with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
+        try:
+            landmarker = _mp_vision.FaceLandmarker.create_from_options(lm_options)
+        except Exception as exc:
+            self.failed.emit(f"MediaPipe Face Landmarker 初始化失敗：{exc}")
+            self.finished.emit()
+            return
+
+        with landmarker:
             while not self._stop:
                 if self._has_pending_profile and fatigue_engine is not None:
                     fatigue_engine.set_personal_profile(self._pending_profile)

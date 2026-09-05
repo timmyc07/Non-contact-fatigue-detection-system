@@ -14,16 +14,13 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 $env:NCFD_ENGINE_ROOT = $repoRoot
 $pythonPath = Join-Path $repoRoot '.venv\Scripts\python.exe'
-if (Test-Path $pythonPath) {
-    $env:NCFD_ENGINE_PYTHON = $pythonPath
+if (-not (Test-Path $pythonPath)) {
+    throw 'Python virtual environment was not found. Create .venv and install requirements.txt.'
 }
+$env:NCFD_ENGINE_PYTHON = $pythonPath
 
 Push-Location $repoRoot
 try {
-    powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts\build_engine_sidecar.ps1')
-    if ($LASTEXITCODE -ne 0) {
-        throw "Engine sidecar build failed with exit code $LASTEXITCODE"
-    }
     npm run desktop:build
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri desktop build failed with exit code $LASTEXITCODE"

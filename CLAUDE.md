@@ -71,6 +71,13 @@ macOS 開發啟動：`bash scripts/start_desktop_macos.sh`；arm64 `.app/.dmg` �
 `bash scripts/build_desktop_macos.sh`。Windows 與 macOS 的 `.venv`、sidecar、Flutter/Rust
 產物必須各自在目標平台建立，不可跨平台複製。
 
+桌面硬體/runtime 的平台差異集中於 `gui/platforms/`：Windows 使用
+`windows.py`，macOS 使用 `macos.py`，共用模型、MediaPipe tuning、rPPG、疲勞與校準
+數值路徑不得移入平台模組。兩平台固定使用 `mediapipe 0.10.35` 與唯一的
+`opencv-contrib-python 5.0.0.93`（不可並裝 `opencv-python`）；`1.0.1` 已知會在目前
+macOS Face Landmarker 初始化的 `DrishtiMetalHelper` 原生層觸發 `SIGABRT`。啟動前可執行
+`.venv/bin/python -m scripts.runtime_preflight`（Windows 改用 `.venv\Scripts\python`）。
+
 ## 環境已知坑（遇錯先查這裡，再決定要不要重試）
 
 - PowerShell 5.1 **沒有** `&&` / `||`：出現 parser error 不是指令壞掉，改 `A; if ($?) { B }` 或用 Bash tool。

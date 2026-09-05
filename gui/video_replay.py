@@ -32,6 +32,7 @@ from gui.fatigue_engine import FatigueEngine, FatigueParams
 from gui.fatigue_scorer import FatigueFuser
 from gui.fatigue_worker import draw_fatigue_annotations
 from gui.mediapipe_tuning import load_mediapipe_tuning
+from gui.platforms import create_face_landmarker_base_options
 from gui.runtime_paths import data_path
 from gui.metrics_recorder import MetricsRecorder
 from rppg.rppg_worker import (
@@ -459,7 +460,7 @@ def run_replay_video(
     tuning = load_mediapipe_tuning()
     model_path = ensure_face_model(_MODELS_DIR)
     options = _mp_vision.FaceLandmarkerOptions(
-        base_options=_mp_python.BaseOptions(model_asset_path=str(model_path)),
+        base_options=create_face_landmarker_base_options(_mp_python, model_path),
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
         min_face_detection_confidence=tuning.face_landmarker.min_face_detection_confidence,

@@ -29,4 +29,6 @@ def test_build_command_keeps_required_runtime_resources() -> None:
     assert "face_landmarker.task" in rendered
     assert "mediapipe_tuning.json" in rendered
     assert "gui/web_ui" in rendered
+    assert "opencv-contrib-python" in rendered
+    assert "--copy-metadata" in command
     assert command[-1].endswith("main.py")

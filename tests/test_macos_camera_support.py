@@ -22,6 +22,11 @@ class _OpenedCapture:
         pass
 
 
+class _OpenedButUnreadableCapture(_OpenedCapture):
+    def read(self):
+        return False, None
+
+
 def _select_macos(monkeypatch) -> None:
     monkeypatch.setattr(camera_devices, "_IS_WIN", False)
     monkeypatch.setattr(camera_devices, "_IS_MAC", True)
@@ -85,6 +90,28 @@ def test_macos_ffmpeg_fallback_uses_avfoundation_before_any(monkeypatch) -> None
     monkeypatch.setattr(camera_devices.cv2, "CAP_AVFOUNDATION", 1200, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "CAP_ANY", 0, raising=False)
     monkeypatch.setattr(camera_devices.cv2, "VideoCapture", fake_capture)
+
+    assert camera_devices.open_camera_capture(0, backend="ffmpeg") is not None
+    assert calls == [1900, 1200]
+
+
+def test_macos_ffmpeg_fallback_skips_opened_backend_without_frames(monkeypatch) -> None:
+    _select_macos(monkeypatch)
+    calls: list[int] = []
+
+    def fake_capture(_index: int, api: int):
+        calls.append(api)
+        if api == 1900:
+            return _OpenedButUnreadableCapture()
+        return _OpenedCapture()
+
+    monkeypatch.setattr(camera_devices.cv2, "CAP_FFMPEG", 1900, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_AVFOUNDATION", 1200, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "CAP_ANY", 0, raising=False)
+    monkeypatch.setattr(camera_devices.cv2, "VideoCapture", fake_capture)
+    monkeypatch.setattr(camera_devices.time, "sleep", lambda _seconds: None)
+    ticks = iter((0.0, 0.0, 2.0, 3.0, 3.0))
+    monkeypatch.setattr(camera_devices.time, "perf_counter", lambda: next(ticks))
 
     assert camera_devices.open_camera_capture(0, backend="ffmpeg") is not None
     assert calls == [1900, 1200]

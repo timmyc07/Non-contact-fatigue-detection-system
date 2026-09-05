@@ -5,7 +5,7 @@
   "scripts": {
     "tauri": "tauri",
     "desktop": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "node scripts/prepare_engine_sidecar.mjs && tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"

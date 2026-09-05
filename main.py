@@ -16,6 +16,10 @@ from PySide6.QtCore import QLibraryInfo
 from PySide6.QtWidgets import QApplication
 
 
+# 延後載入重量級 engine adapter；測試可覆寫此 seam，preflight 也不需匯入完整 GUI runtime。
+EngineApplication = None
+
+
 _UBUNTU_QT_RUNTIME_PACKAGES = (
     "libxcb-cursor0",
     "libxcb-icccm4",
@@ -75,8 +79,6 @@ def _print_linux_qt_runtime_help(missing_packages: list[str]) -> None:
 
 _prefer_pyside6_qt_plugins()
 
-from gui.main_window import EngineApplication
-
 
 def _legacy_ui_requested() -> bool:
     return "--legacy-ui" in sys.argv
@@ -84,6 +86,40 @@ def _legacy_ui_requested() -> bool:
 
 def _should_launch_tauri() -> bool:
     return "--engine" not in sys.argv
+
+
+def _face_landmarker_preflight_requested() -> bool:
+    return "--runtime-preflight-face-landmarker" in sys.argv
+
+
+def _runtime_preflight_requested() -> bool:
+    return "--runtime-preflight" in sys.argv
+
+
+def _run_face_landmarker_preflight() -> int:
+    try:
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python import vision as mp_vision
+
+        from gui.platforms import create_face_landmarker_base_options
+        from gui.runtime_paths import resource_path
+
+        model_path = resource_path("models", "face_landmarker.task")
+        base_options = create_face_landmarker_base_options(mp_python, model_path)
+        options = mp_vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=mp_vision.RunningMode.VIDEO,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
+            num_faces=1,
+        )
+        with mp_vision.FaceLandmarker.create_from_options(options):
+            pass
+    except Exception as exc:
+        print(f"[Runtime preflight] Face Landmarker 初始化失敗：{exc}", file=sys.stderr)
+        return 78
+    print("[Runtime preflight] Face Landmarker 初始化通過。")
+    return 0
 
 
 def _launch_tauri() -> int:
@@ -104,6 +140,18 @@ def _launch_tauri() -> int:
 
 
 def main() -> int:
+    global EngineApplication
+    if _face_landmarker_preflight_requested():
+        return _run_face_landmarker_preflight()
+    if _runtime_preflight_requested():
+        from scripts.runtime_preflight import check_runtime
+
+        errors = check_runtime()
+        if errors:
+            for error in errors:
+                print(f"[Runtime preflight] {error}", file=sys.stderr)
+            return 78
+        return 0
     if _legacy_ui_requested():
         print(
             "[Launcher] 舊版 PySide 主面板已移除。"
@@ -122,6 +170,11 @@ def main() -> int:
     qt_args = [arg for arg in sys.argv if arg != "--engine"]
     app = QApplication(qt_args)
     app.setQuitOnLastWindowClosed(False)
+    if EngineApplication is None:
+        from gui.main_window import EngineApplication as _EngineApplication
+
+        EngineApplication = _EngineApplication
+
     engine = EngineApplication()
     from gui.web_server import WEB_DASHBOARD_DEFAULT_PORT
 

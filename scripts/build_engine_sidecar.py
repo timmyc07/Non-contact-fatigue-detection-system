@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 DIST_ROOT = ROOT / "dist"
 ENGINE_DIST = DIST_ROOT / "ncfd-engine"
 WORK_ROOT = ROOT / "build" / "pyinstaller"
@@ -51,6 +53,10 @@ def build_command(python_executable: str | Path = sys.executable) -> list[str]:
         "mediapipe",
         "--collect-all",
         "cv2",
+        "--copy-metadata",
+        "mediapipe",
+        "--copy-metadata",
+        "opencv-contrib-python",
         "--exclude-module",
         "mediapipe.tasks.python.test",
         "--hidden-import",
@@ -67,7 +73,28 @@ def build_command(python_executable: str | Path = sys.executable) -> list[str]:
     ]
 
 
+def _run_checked(command: list[str]) -> None:
+    subprocess.run(command, cwd=ROOT, check=True, timeout=60)
+
+
+def validate_source_runtime() -> None:
+    from scripts.runtime_preflight import check_runtime
+
+    errors = check_runtime()
+    if errors:
+        raise RuntimeError("\n".join(errors))
+    _run_checked(
+        [sys.executable, str(ROOT / "main.py"), "--runtime-preflight-face-landmarker"]
+    )
+
+
+def validate_packaged_runtime(engine_executable: Path) -> None:
+    _run_checked([str(engine_executable), "--runtime-preflight"])
+    _run_checked([str(engine_executable), "--runtime-preflight-face-landmarker"])
+
+
 def main() -> int:
+    validate_source_runtime()
     if ENGINE_DIST.exists():
         shutil.rmtree(ENGINE_DIST)
     if WORK_ROOT.exists():
@@ -85,6 +112,7 @@ def main() -> int:
     mediapipe_tests = ENGINE_DIST / "_internal" / "mediapipe" / "tasks" / "python" / "test"
     if mediapipe_tests.exists():
         shutil.rmtree(mediapipe_tests)
+    validate_packaged_runtime(engine_executable)
     print(f"Engine sidecar ready: {ENGINE_DIST}")
     return 0
 

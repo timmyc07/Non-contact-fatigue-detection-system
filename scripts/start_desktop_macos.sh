@@ -11,6 +11,8 @@ test -x "$NCFD_ENGINE_PYTHON"
 command -v flutter >/dev/null
 command -v npm >/dev/null
 command -v cargo >/dev/null
+cd "$repo_root"
+"$NCFD_ENGINE_PYTHON" -m scripts.runtime_preflight
 
 cd "$repo_root/flutter_app"
 flutter pub get

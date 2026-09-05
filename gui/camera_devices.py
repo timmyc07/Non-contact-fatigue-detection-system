@@ -9,9 +9,12 @@ macOS: probe camera indices with AVFoundation before the generic OpenCV backend.
 from __future__ import annotations
 
 import sys
+import time
 from typing import Any, Optional, Sequence
 
 import cv2
+
+from gui.platforms import get_desktop_platform_runtime
 
 try:
     _CAP_DEVICE_DESC = cv2.CAP_PROP_DEVICE_DESCRIPTION  # type: ignore[union-attr]
@@ -126,25 +129,23 @@ def _build_api_preferences(api_preferences: Sequence[int] | None) -> list[int]:
         return [int(api) for api in api_preferences]
 
     prefs: list[int] = []
-    if _IS_WIN:
-        # DirectShow is usually lower latency for live webcam preview on
-        # Windows; MSMF remains the first fallback for cameras that need it.
-        cap_dshow = getattr(cv2, "CAP_DSHOW", None)
-        if isinstance(cap_dshow, int):
-            prefs.append(cap_dshow)
-        cap_msmf = getattr(cv2, "CAP_MSMF", None)
-        if isinstance(cap_msmf, int):
-            prefs.append(cap_msmf)
-    elif _IS_MAC:
-        cap_avfoundation = getattr(cv2, "CAP_AVFOUNDATION", None)
-        if isinstance(cap_avfoundation, int):
-            prefs.append(cap_avfoundation)
-    elif _IS_LINUX:
-        cap_v4l2 = getattr(cv2, "CAP_V4L2", None)
-        if isinstance(cap_v4l2, int):
-            prefs.append(cap_v4l2)
-    prefs.append(getattr(cv2, "CAP_ANY", 0))
+    runtime = get_desktop_platform_runtime(_selected_platform_name())
+    for attr in runtime.preferred_camera_api_names:
+        api = getattr(cv2, attr, None)
+        if isinstance(api, int) and api not in prefs:
+            prefs.append(api)
     return prefs
+
+
+def _selected_platform_name() -> str:
+    """解析目前 adapter，並保留測試覆寫平台旗標的能力。"""
+    if _IS_WIN:
+        return "win32"
+    if _IS_MAC:
+        return "darwin"
+    if _IS_LINUX:
+        return "linux"
+    return sys.platform
 
 
 def _probe_camera_index(index: int, warmup_read: bool, api_preferences: Sequence[int]) -> bool:
@@ -190,7 +191,8 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
     if _IS_LINUX:
         candidate_indices = [i for i in _list_linux_video_indices() if i < max_index]
     elif _IS_MAC:
-        candidate_indices = list(range(min(max_index, 8)))
+        probe_limit = get_desktop_platform_runtime("darwin").camera_probe_limit
+        candidate_indices = list(range(min(max_index, probe_limit or max_index)))
     else:
         candidate_indices = list(range(max_index))
 
@@ -252,10 +254,19 @@ def open_camera_capture(index: int, backend: str = "auto"):
 
     b = backend.lower().strip()
 
-    def _try(api: int) -> Optional[Any]:
+    def _try(api: int, *, verify_first_frame: bool = False) -> Optional[Any]:
         try:
             cap = cv2.VideoCapture(index, api)
             if cap.isOpened():
+                if verify_first_frame:
+                    deadline = time.perf_counter() + 1.5
+                    while time.perf_counter() < deadline:
+                        ok, frame = cap.read()
+                        if ok and frame is not None:
+                            return cap
+                        time.sleep(0.01)
+                    cap.release()
+                    return None
                 return cap
             cap.release()
         except Exception:
@@ -294,19 +305,16 @@ def open_camera_capture(index: int, backend: str = "auto"):
     if b == "ffmpeg":
         # CAP_FFMPEG only accepts integer indices on some builds/platforms;
         # cascade through workable alternatives if it fails.
-        attrs = ["CAP_FFMPEG"]
-        if _IS_WIN:
-            attrs.extend(["CAP_MSMF", "CAP_DSHOW"])
-        elif _IS_MAC:
-            attrs.append("CAP_AVFOUNDATION")
-        elif _IS_LINUX:
-            attrs.append("CAP_V4L2")
-        attrs.append("CAP_ANY")
+        runtime = get_desktop_platform_runtime(_selected_platform_name())
+        attrs = runtime.ffmpeg_fallback_api_names
         for attr in attrs:
             api_val = getattr(cv2, attr, None)
             if api_val is None:
                 continue
-            cap = _try(int(api_val))
+            cap = _try(
+                int(api_val),
+                verify_first_frame=runtime.verify_camera_first_frame_on_fallback,
+            )
             if cap is not None:
                 if attr == "CAP_MSMF":
                     _apply_msmf_io_timeouts(cap)

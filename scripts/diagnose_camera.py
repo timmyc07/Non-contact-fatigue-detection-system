@@ -1,4 +1,4 @@
-"""Linux/Ubuntu camera diagnostics for GUI black-screen reports."""
+"""跨平台相機、權限與黑屏診斷。"""
 
 from __future__ import annotations
 
@@ -113,9 +113,14 @@ def _fourcc_to_str(raw: int) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="診斷 Linux/Ubuntu 相機與黑屏問題。")
+    parser = argparse.ArgumentParser(description="診斷桌面相機與黑屏問題。")
     parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index，預設 0。")
-    parser.add_argument("--backend", default="v4l2", choices=("auto", "v4l2", "ffmpeg"), help="測試後端。")
+    parser.add_argument(
+        "--backend",
+        default="auto",
+        choices=("auto", "avfoundation", "dshow", "msmf", "v4l2", "ffmpeg"),
+        help="測試後端；預設使用目前平台的 auto 順序。",
+    )
     parser.add_argument("--seconds", type=float, default=3.0, help="讀幀測試秒數。")
     parser.add_argument("--width", type=int, default=1280, help="測試寬度，預設 1280。")
     parser.add_argument("--height", type=int, default=720, help="測試高度，預設 720。")
@@ -131,28 +136,42 @@ def main() -> int:
     print(f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '') or '未設定'}")
     print()
 
-    print("== 裝置節點 ==")
-    video_nodes = sorted(glob.glob("/dev/video*"))
-    if video_nodes:
-        for node in video_nodes:
-            print(node)
-    else:
-        print("未找到 /dev/video*，偏向硬體未枚舉、驅動或容器/權限隔離問題。")
-    print()
+    video_nodes: list[str] = []
+    if sys.platform.startswith("linux"):
+        print("== Linux 裝置節點 ==")
+        video_nodes = sorted(glob.glob("/dev/video*"))
+        if video_nodes:
+            for node in video_nodes:
+                print(node)
+        else:
+            print("未找到 /dev/video*，偏向硬體未枚舉、驅動或容器/權限隔離問題。")
+        print()
 
-    print("== V4L2 資訊 ==")
-    _print_command(["v4l2-ctl", "--list-devices"])
-    if video_nodes:
-        _print_command(["v4l2-ctl", "--all", "-d", f"/dev/video{args.camera}"])
-    print()
+        print("== V4L2 資訊 ==")
+        _print_command(["v4l2-ctl", "--list-devices"])
+        if video_nodes:
+            _print_command(["v4l2-ctl", "--all", "-d", f"/dev/video{args.camera}"])
+        print()
 
-    print("== 權限與占用 ==")
-    _print_command(["groups"])
-    if video_nodes:
-        node = f"/dev/video{args.camera}"
-        _print_command(["ls", "-l", node])
-        _print_command(["fuser", node])
-    print()
+        print("== Linux 權限與占用 ==")
+        _print_command(["groups"])
+        if video_nodes:
+            node = f"/dev/video{args.camera}"
+            _print_command(["ls", "-l", node])
+            _print_command(["fuser", node])
+        print()
+    elif sys.platform == "darwin":
+        print("== macOS 相機硬體 ==")
+        _print_command(["system_profiler", "SPCameraDataType"])
+        print(
+            "權限位置：系統設定 → 隱私權與安全性 → 相機。若曾拒絕 Terminal、IDE 或應用程式，"
+            "請重新允許後完整關閉並重開啟啟動來源。"
+        )
+        print()
+    elif sys.platform.startswith("win"):
+        print("== Windows 權限提示 ==")
+        print("請確認 Windows 設定 → 隱私權與安全性 → 相機 已允許桌面應用程式存取。")
+        print()
 
     print("== 專案相機列舉 ==")
     probe_count = max(args.camera + 1, len(video_nodes), 1)

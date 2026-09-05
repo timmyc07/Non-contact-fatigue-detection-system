@@ -42,6 +42,11 @@ from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 from gui.frame_queue import get_latest
 from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
 from gui.runtime_paths import data_path, resource_path
+from gui.platforms import (
+    create_face_landmarker_base_options,
+    validate_mediapipe_runtime,
+)
+from gui.worker_safety import fail_closed_worker
 from rppg.adaptive_calibration import recompute_raw_bpm_from_roi_windows
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
 from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rppg
@@ -1108,6 +1113,10 @@ def ensure_face_model(
     models_dir: Path,
     status_cb: Optional[Callable[[str], None]] = None,
 ) -> Path:
+    # Validate before returning an already-downloaded model.  MediaPipe 1.0.1
+    # aborts inside DrishtiMetalHelper on current macOS and cannot be caught as
+    # a Python exception; fail closed with an actionable error instead.
+    validate_mediapipe_runtime()
     target = models_dir / "face_landmarker.task"
     if target.exists() and target.stat().st_size > 1_000_000:
         return target
@@ -1700,6 +1709,7 @@ class RppgWorker(QObject):
             float(cand_bpm) if cand_bpm is not None else float("nan"),
         )
 
+    @fail_closed_worker("rPPG worker", log)
     @Slot()
     def run(self) -> None:
         if not _HAS_MP:
@@ -1731,17 +1741,22 @@ class RppgWorker(QObject):
             return
 
         # Build Face Landmarker options
-        base_opts = _mp_python.BaseOptions(model_asset_path=str(model_path))
-        lm_options = _mp_vision.FaceLandmarkerOptions(
-            base_options=base_opts,
-            output_face_blendshapes=True,
-            output_facial_transformation_matrixes=True,
-            min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
-            min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
-            min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
-            num_faces=max(1, int(self._tuning.face_landmarker.num_faces)),
-            running_mode=_mp_vision.RunningMode.VIDEO,
-        )
+        try:
+            base_opts = create_face_landmarker_base_options(_mp_python, model_path)
+            lm_options = _mp_vision.FaceLandmarkerOptions(
+                base_options=base_opts,
+                output_face_blendshapes=True,
+                output_facial_transformation_matrixes=True,
+                min_face_detection_confidence=self._tuning.face_landmarker.min_face_detection_confidence,
+                min_face_presence_confidence=self._tuning.face_landmarker.min_face_presence_confidence,
+                min_tracking_confidence=self._tuning.face_landmarker.min_tracking_confidence,
+                num_faces=max(1, int(self._tuning.face_landmarker.num_faces)),
+                running_mode=_mp_vision.RunningMode.VIDEO,
+            )
+        except Exception as exc:
+            self.failed.emit(f"MediaPipe Face Landmarker 選項建立失敗：{exc}")
+            self.finished.emit()
+            return
 
         engine = RppgEngine(buffer_sec=self._buffer_sec, target_fps=self._target_fps)
         roi_tracker = RoiGeometryTracker()
@@ -1766,7 +1781,14 @@ class RppgWorker(QObject):
 
         self.status_changed.emit("MediaPipe 初始化完成，等待幀資料…")
 
-        with _mp_vision.FaceLandmarker.create_from_options(lm_options) as landmarker:
+        try:
+            landmarker = _mp_vision.FaceLandmarker.create_from_options(lm_options)
+        except Exception as exc:
+            self.failed.emit(f"MediaPipe Face Landmarker 初始化失敗：{exc}")
+            self.finished.emit()
+            return
+
+        with landmarker:
             while not self._stop:
                 try:
                     ts, bgr = get_latest(self._queue, timeout=0.1)

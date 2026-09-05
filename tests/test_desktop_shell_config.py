@@ -113,7 +113,8 @@ def test_macos_build_and_smoke_scripts_use_native_bundle_contract() -> None:
         encoding="utf-8"
     )
 
-    assert "scripts/build_engine_sidecar.py" in build_script
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    assert "scripts/prepare_engine_sidecar.mjs" in package["scripts"]["desktop:build"]
     assert "npm run desktop:build" in build_script
     assert "疲勞監測操作台.app" in smoke_script
     assert 'default=5055' in smoke_script

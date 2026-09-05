@@ -24,7 +24,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a Tauri v2 + Flutter W
 ## Requirements
 - Python 3.12 recommended and validated
 - Node.js/npm、Rust stable toolchain 與 Flutter SDK（建置 Tauri v2 + Flutter Web 正式桌面面板）
-- Windows、macOS 15+ 與 Ubuntu Linux supported；目前 macOS release 產物已驗證 Apple Silicon arm64
+- Windows x64、macOS 15+ 與 Ubuntu Linux supported；目前 macOS release 產物已驗證 Apple Silicon arm64
 - Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
 - 心跳帶真值校準需要主機具備 Bluetooth LE 介面（Windows 使用 WinRT、macOS 使用 CoreBluetooth、Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
 
@@ -94,6 +94,31 @@ bash scripts/start_desktop_macos.sh
 macOS 第一次啟動會要求相機權限；啟用心跳帶時也會要求 Bluetooth 權限。全域快捷鍵
 目前仍只有 Windows 原生 backend，macOS 面板會回報 `supported=false`，其餘監測、錄影、
 回放、Overlay 與 BLE 流程不受影響。
+
+Windows 與 macOS 的硬體/runtime policy 分別位於 `gui/platforms/windows.py` 與
+`gui/platforms/macos.py`；相機後端偏好順序、MediaPipe delegate 等平台決策由這一層提供，
+既有相機列舉與開啟機制仍由 `gui/camera_devices.py` 共用。模型、
+`config/mediapipe_tuning.json`、rPPG 與疲勞演算法維持共用。啟動腳本會先執行
+`python -m scripts.runtime_preflight`，避免不相容的原生套件等到按下「開始監測」才終止 engine。
+
+若 macOS 在按下「開始監測」後整個 engine 消失，先檢查 MediaPipe 版本：
+
+```bash
+.venv/bin/python -c "import mediapipe; print(mediapipe.__version__)"
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m scripts.runtime_preflight
+```
+
+本專案固定使用 `mediapipe 0.10.35` 與唯一的 `opencv-contrib-python 5.0.0.93`；不要同時
+安裝 `opencv-python`，兩者會覆寫相同的 `cv2` namespace。已知 MediaPipe `1.0.1` 在目前
+macOS Face Landmarker 初始化時可能於 `DrishtiMetalHelper` 原生 Metal 路徑觸發
+`SIGABRT`，Python 例外處理無法攔截。
+若 preflight 回報兩種 OpenCV 並存，可執行：
+
+```bash
+.venv/bin/python -m pip uninstall -y opencv-python
+.venv/bin/python -m pip install --force-reinstall -r requirements.txt
+```
 
 影片回放的「選擇資料夾」由 Tauri 原生 dialog 提供；取消不會修改目前設定。若原生 picker 無法使用，面板會顯示錯誤，仍可在同一區塊手動輸入完整資料夾路徑並套用。
 
@@ -364,6 +389,20 @@ sudo usermod -aG video "$USER"
 
 若相機黑屏或 Flutter 面板沒有畫面，先用專案診斷腳本分辨硬體／權限與程式問題：
 
+macOS：
+
+```bash
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend avfoundation
+```
+
+Windows：
+
+```powershell
+.venv\Scripts\python scripts\diagnose_camera.py --camera 0 --backend auto
+```
+
+Ubuntu：
+
 ```bash
 .venv/bin/python scripts/diagnose_camera.py --camera 0 --backend v4l2
 ```
@@ -392,7 +431,7 @@ fuser /dev/video0
 - OpenCV 無法開啟相機：偏向權限、裝置被占用、後端不相容或硬體/驅動問題。
 - OpenCV 可讀幀但亮度接近全黑：偏向鏡頭蓋、隱私快門、光線不足或虛擬相機無來源。
 - 終端出現大量 `Camera index out of range` 或 `VIDIOC_QBUF`：通常是掃描不存在的相機 index 或把 metadata 節點當成相機；engine 會在 Linux 只掃描實際存在且具備 Video Capture capability 的 `/dev/video*`。
-- 診斷腳本可讀到非黑畫面但 Flutter 面板黑屏：偏向 IPC／WebView 顯示或相機後端協商問題，請在 Flutter 面板「設定 → 攝影機」切換「自動 / V4L2 / FFMPEG」後端再測。
+- 診斷腳本可讀到非黑畫面但 Flutter 面板黑屏：偏向 IPC／WebView 顯示或相機後端協商問題，請在 Flutter 面板「設定 → 攝影機」切換該平台可用的後端再測。
 
 ## Project layout
 - `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo

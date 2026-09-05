@@ -45,6 +45,7 @@ from rppg.rppg_worker import (
     resolve_rppg_hrv_metrics,
 )
 from gui.mediapipe_tuning import load_mediapipe_tuning
+from gui.platforms import create_face_landmarker_base_options
 
 _IS_WIN = platform.system() == "Windows"
 # OpenCV: device description (MSMF / some backends)
@@ -717,7 +718,7 @@ def run(camera_id: int, camera_label: str, backend: str = "auto") -> None:
 
     model_path = ensure_face_model(Path(__file__).resolve().parents[1] / "models")
     tuning = load_mediapipe_tuning()
-    base_options = python.BaseOptions(model_asset_path=str(model_path))
+    base_options = create_face_landmarker_base_options(python, model_path)
     options = vision.FaceLandmarkerOptions(
         base_options=base_options,
         output_face_blendshapes=True,

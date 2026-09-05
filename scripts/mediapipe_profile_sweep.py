@@ -30,6 +30,7 @@ from gui.mediapipe_tuning import (  # noqa: E402
     BlendshapeTuning,
     _deep_update,
 )
+from gui.platforms import create_face_landmarker_base_options  # noqa: E402
 from rppg.rppg_worker import (  # noqa: E402
     RoiGeometryTracker,
     collect_rppg_roi_sample,
@@ -76,7 +77,7 @@ def run_profile(video_path: Path, profile: str, max_frames: int, stride: int) ->
     tuning = _load_profile_tuning(profile)
     model_path = ensure_face_model(_MODELS_DIR)
     options = _mp_vision.FaceLandmarkerOptions(
-        base_options=_mp_python.BaseOptions(model_asset_path=str(model_path)),
+        base_options=create_face_landmarker_base_options(_mp_python, model_path),
         output_face_blendshapes=True,
         output_facial_transformation_matrixes=True,
         min_face_detection_confidence=tuning.face_landmarker.min_face_detection_confidence,

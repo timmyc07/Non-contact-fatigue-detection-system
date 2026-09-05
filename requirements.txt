@@ -1,5 +1,5 @@
-mediapipe>=0.10.14
-opencv-python>=4.8.0
+mediapipe==0.10.35  # 1.0.1 在 macOS Face Landmarker 初始化會於 Metal 原生層 SIGABRT
+opencv-contrib-python==5.0.0.93  # 與 mediapipe 共用唯一 cv2 distribution，避免 namespace 覆寫
 numpy>=1.24.0
 Pillow>=10.0.0  # 疲勞 overlay 中文文字渲染（cv2 內建字型無 CJK glyph）
 scipy>=1.11.0
