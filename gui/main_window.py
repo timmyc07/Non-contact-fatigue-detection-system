@@ -161,6 +161,8 @@ class EngineApplication(QObject):
 
         self._last_camera_info = {"codec": "", "width": 0, "height": 0}
         self._last_fps: float = 0.0
+        self._fps_measurement_samples = 0
+        self._camera_fps_warning_sent = False
 
         self._global_hotkey_runtime = GlobalHotkeyRuntime(self._on_global_hotkey)
         self._global_hotkey_bindings: dict[int, _GlobalHotkeyBinding] = {}
@@ -2125,6 +2127,8 @@ class EngineApplication(QObject):
         backend = spec.backend
         backend_label = backend.upper()
         horizontal_flip = spec.horizontal_flip
+        self._fps_measurement_samples = 0
+        self._camera_fps_warning_sent = False
 
         worker = CameraStreamWorker(cam_idx, width=w, height=h,
                                     target_fps=target_fps, backend=backend,
@@ -2939,12 +2943,11 @@ class EngineApplication(QObject):
         self._notify_user("行為警覺錯誤", msg)
 
     def _on_camera_info(self, codec: str, w: int, h: int, fps: float) -> None:
-        """Called once after camera opens — shows actual driver-reported settings."""
+        """Called after camera opens — shows backend-reported negotiated settings."""
         fps_str = f"{fps:.0f}" if fps > 0 else "—"
         self._last_camera_info = {"codec": codec, "width": w, "height": h}
-        cam_text = self._engine_controller.selected_camera_label()
         self._append_log(
-            f"[相機] 實際格式 → 編碼：{codec}  解析度：{w}×{h}  FPS：{fps_str}"
+            f"[相機] 後端回報格式 → 編碼：{codec}  解析度：{w}×{h}  FPS：{fps_str}"
         )
         self._emit_web_metrics(force=True)
 
@@ -2961,6 +2964,19 @@ class EngineApplication(QObject):
 
     def _on_fps(self, fps: float) -> None:
         self._last_fps = float(fps)
+        self._fps_measurement_samples += 1
+        requested_fps = float(self._engine_controller.camera_snapshot().fps)
+        if (
+            not self._camera_fps_warning_sent
+            and self._fps_measurement_samples >= 15
+            and fps > 0
+            and fps + 1.0 < requested_fps
+        ):
+            self._camera_fps_warning_sent = True
+            self._append_log(
+                f"⚠ 相機要求 {requested_fps:.0f} FPS，但目前實測約 {fps:.1f} FPS；"
+                "請用 scripts/diagnose_camera.py 確認相機格式與系統負載。"
+            )
         self._emit_web_metrics()
 
     def _on_camera_failed(self, msg: str) -> None:

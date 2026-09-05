@@ -1245,6 +1245,22 @@ def test_engine_runtime_callbacks_update_headless_state_without_legacy_controls(
     assert emitted == [True, False]
 
 
+def test_measured_camera_fps_warns_once_when_requested_rate_is_not_reached(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logs: list[str] = []
+    settings_window._engine_controller.configure_camera(fps="60")
+    monkeypatch.setattr(settings_window, "_append_log", logs.append)
+    monkeypatch.setattr(settings_window, "_emit_web_metrics", lambda **_kwargs: None)
+
+    for _ in range(16):
+        settings_window._on_fps(30.0)
+
+    warnings = [message for message in logs if "相機要求 60 FPS" in message]
+    assert len(warnings) == 1
+    assert "實測約 30.0 FPS" in warnings[0]
+
+
 def test_engine_metric_callbacks_keep_non_visual_side_effects(
     settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:

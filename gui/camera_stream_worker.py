@@ -180,7 +180,10 @@ class CameraStreamWorker(QObject):
 
             # Re-read after first frame — MSMF sometimes finalises FOURCC only then.
             post_codec, post_w, post_h, post_fps = self._read_cap_info(cap)
-            if (post_codec, post_w, post_h) != (pre_codec, pre_w, pre_h):
+            if (
+                (post_codec, post_w, post_h) != (pre_codec, pre_w, pre_h)
+                or abs(float(post_fps) - float(pre_fps)) > 0.1
+            ):
                 self.camera_info.emit(post_codec, post_w, post_h, float(post_fps))
             capture_context = self._format_capture_context(post_codec, post_w, post_h, float(post_fps))
 

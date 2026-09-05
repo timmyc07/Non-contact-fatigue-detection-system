@@ -59,6 +59,16 @@ def _frame_stats(frame: np.ndarray) -> tuple[float, float]:
     return mean, near_black_ratio
 
 
+def _measured_fps(first_frame_at: float | None, last_frame_at: float | None, frames: int) -> float:
+    """以實際相鄰影格時間計算 FPS，不採信驅動宣告值。"""
+    if frames < 2 or first_frame_at is None or last_frame_at is None:
+        return 0.0
+    elapsed = last_frame_at - first_frame_at
+    if elapsed <= 0.0:
+        return 0.0
+    return float(frames - 1) / elapsed
+
+
 def _read_probe(
     index: int,
     backend: str,
@@ -83,22 +93,29 @@ def _read_probe(
         )
         deadline = time.perf_counter() + seconds
         frames = 0
-        last_stats: tuple[float, float] | None = None
+        first_frame_at: float | None = None
+        last_frame_at: float | None = None
+        last_frame: np.ndarray | None = None
         shape: tuple[int, ...] | None = None
         while time.perf_counter() < deadline:
             ok, frame = cap.read()
             if not ok or frame is None:
                 time.sleep(0.01)
                 continue
+            captured_at = time.perf_counter()
             frames += 1
+            if first_frame_at is None:
+                first_frame_at = captured_at
+            last_frame_at = captured_at
             shape = tuple(frame.shape)
-            last_stats = _frame_stats(frame)
+            last_frame = frame
 
         return {
             "opened": True,
             "frames": frames,
+            "measured_fps": _measured_fps(first_frame_at, last_frame_at, frames),
             "shape": shape,
-            "stats": last_stats,
+            "stats": _frame_stats(last_frame) if last_frame is not None else None,
             "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
             "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             "fps": float(cap.get(cv2.CAP_PROP_FPS)),
@@ -201,11 +218,19 @@ def main() -> int:
     print(
         f"opened=True frames={result['frames']} "
         f"format={_fourcc_to_str(result['fourcc'])} "
-        f"{result['width']}x{result['height']} fps={result['fps']:.1f}"
+        f"{result['width']}x{result['height']} "
+        f"driver_fps={result['fps']:.1f} measured_fps={result['measured_fps']:.1f}"
     )
     if result["frames"] <= 0:
         print("判斷：相機可開啟但沒有送出影像，常見於裝置被占用或驅動卡住。")
         return 3
+
+    requested_fps = max(1.0, args.fps)
+    if result["measured_fps"] + 1.0 < requested_fps:
+        print(
+            f"判斷：要求 {requested_fps:.1f} FPS，但實測只有 {result['measured_fps']:.1f} FPS；"
+            "相機格式／後端可能未接受該幀率，也可能受解碼、USB 頻寬或系統負載限制。"
+        )
 
     stats = result["stats"]
     if stats is not None:

@@ -393,6 +393,7 @@ macOS：
 
 ```bash
 .venv/bin/python scripts/diagnose_camera.py --camera 0 --backend avfoundation
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend avfoundation --width 1280 --height 720 --fps 60 --seconds 5
 ```
 
 Windows：
@@ -432,6 +433,7 @@ fuser /dev/video0
 - OpenCV 可讀幀但亮度接近全黑：偏向鏡頭蓋、隱私快門、光線不足或虛擬相機無來源。
 - 終端出現大量 `Camera index out of range` 或 `VIDIOC_QBUF`：通常是掃描不存在的相機 index 或把 metadata 節點當成相機；engine 會在 Linux 只掃描實際存在且具備 Video Capture capability 的 `/dev/video*`。
 - 診斷腳本可讀到非黑畫面但 Flutter 面板黑屏：偏向 IPC／WebView 顯示或相機後端協商問題，請在 Flutter 面板「設定 → 攝影機」切換該平台可用的後端再測。
+- `driver_fps` 是相機後端宣告值，`measured_fps` 是依實際收到影格時間計算的值；要求 60 FPS 但兩者都約 30 時，通常表示該相機／解析度／後端沒有接受 60 FPS，也需排除解碼、USB 頻寬與系統負載。預覽傳輸仍以 30 FPS 為上限，避免 WebView JPEG/IPC 負載影響分析。
 
 ## Project layout
 - `rppg/`: rPPG-specific signal processing, MediaPipe ROI extraction, and the standalone live demo

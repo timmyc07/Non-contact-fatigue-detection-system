@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,6 +16,7 @@ use tauri::{
 use tauri_plugin_dialog::DialogExt;
 
 struct BackendProcess(Mutex<Option<Child>>);
+struct DesktopShutdown(AtomicBool);
 
 const DESKTOP_CONTROL_API_VERSION: u64 = 2;
 const WINDOWS_LINUX_BACKEND_PORT: u16 = 5000;
@@ -84,8 +86,9 @@ fn toggle_maximize_window(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn close_window(window: WebviewWindow) -> Result<(), String> {
-    window.close().map_err(|error| error.to_string())
+fn close_window(app: tauri::AppHandle) -> Result<(), String> {
+    shutdown_desktop(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -416,6 +419,39 @@ fn hide_backend_console(command: &mut Command) {
 #[cfg(not(windows))]
 fn hide_backend_console(_command: &mut Command) {}
 
+#[cfg(unix)]
+fn isolate_backend_process_tree(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn isolate_backend_process_tree(_command: &mut Command) {}
+
+#[cfg(windows)]
+fn kill_backend_process_tree(child: &mut Child) {
+    let mut command = Command::new("taskkill");
+    command.args(["/PID", &child.id().to_string(), "/T", "/F"]);
+    hide_backend_console(&mut command);
+    let _ = command.status();
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn kill_backend_process_tree(child: &mut Child) {
+    // engine 使用獨立 process group，最後收尾時可一併結束 replay pool 與 ffmpeg，
+    // 且不會誤傷其他桌面程序。
+    unsafe {
+        let _ = libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_backend_process_tree(child: &mut Child) {
+    let _ = child.kill();
+}
+
 fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
     let resource_dir = app
         .path()
@@ -470,6 +506,7 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     hide_backend_console(&mut command);
+    isolate_backend_process_tree(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to start Python engine: {error}"))?;
@@ -484,7 +521,8 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         }
         thread::sleep(Duration::from_millis(150));
     }
-    let _ = child.kill();
+    kill_backend_process_tree(&mut child);
+    let _ = child.wait();
     Err(format!(
         "Python engine did not open port {} within 20 seconds",
         backend_address().port()
@@ -507,13 +545,20 @@ fn request_backend_shutdown() {
 }
 
 fn stop_owned_backend(state: &BackendProcess) {
-    let Ok(mut guard) = state.0.lock() else {
-        return;
-    };
-    let Some(child) = guard.as_mut() else {
-        return;
+    let mut guard = match state.0.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     };
     request_backend_shutdown();
+    let Some(child) = guard.as_mut() else {
+        // Debug 模式可能重用相容的 source engine，因此沒有可用的 Child handle。
+        drop(guard);
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while backend_available() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(100));
+        }
+        return;
+    };
     let deadline = Instant::now() + Duration::from_secs(6);
     while Instant::now() < deadline {
         match child.try_wait() {
@@ -525,9 +570,29 @@ fn stop_owned_backend(state: &BackendProcess) {
             Err(_) => break,
         }
     }
-    let _ = child.kill();
+    kill_backend_process_tree(child);
     let _ = child.wait();
     *guard = None;
+}
+
+fn begin_desktop_shutdown(state: &DesktopShutdown) -> bool {
+    !state.0.swap(true, Ordering::AcqRel)
+}
+
+fn shutdown_desktop(app_handle: &tauri::AppHandle) {
+    if !begin_desktop_shutdown(&app_handle.state::<DesktopShutdown>()) {
+        return;
+    }
+    for label in ["main", "overlay"] {
+        if let Some(window) = app_handle.get_webview_window(label) {
+            let _ = window.hide();
+        }
+    }
+    let app_handle = app_handle.clone();
+    thread::spawn(move || {
+        stop_owned_backend(&app_handle.state::<BackendProcess>());
+        app_handle.exit(0);
+    });
 }
 
 fn run() {
@@ -541,6 +606,7 @@ fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(BackendProcess(Mutex::new(None)))
+        .manage(DesktopShutdown(AtomicBool::new(false)))
         .setup(|app: &mut tauri::App| {
             let child = spawn_backend(app.handle()).map_err(std::io::Error::other)?;
             *app.state::<BackendProcess>()
@@ -568,8 +634,28 @@ fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Tauri application");
     app.run(|app_handle, event| {
-        if matches!(event, tauri::RunEvent::Exit) {
-            stop_owned_backend(&app_handle.state::<BackendProcess>());
+        match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } if label == "main" => {
+                // macOS 關閉最後一個視窗後仍會保留應用程式，因此原生關閉事件也必須走
+                // 與 Flutter 標題列關閉按鈕相同的完整 shutdown 路徑。Windows 共用此流程。
+                api.prevent_close();
+                shutdown_desktop(app_handle);
+            }
+            tauri::RunEvent::Exit => {
+                // OS/session shutdown 與未來其他退出路徑的冪等 fallback。
+                if !app_handle
+                    .state::<DesktopShutdown>()
+                    .0
+                    .load(Ordering::Acquire)
+                {
+                    stop_owned_backend(&app_handle.state::<BackendProcess>());
+                }
+            }
+            _ => {}
         }
     });
 }
@@ -586,13 +672,14 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        backend_api_version_from_response, bundled_engine_path, bundled_resource_root,
-        engine_path_for_mode, path_to_frontend_string, validate_external_directory,
-        validate_external_url, validate_overlay_geometry,
-        OverlayGeometry,
+        backend_api_version_from_response, begin_desktop_shutdown, bundled_engine_path,
+        bundled_resource_root, engine_path_for_mode, path_to_frontend_string,
+        validate_external_directory, validate_external_url, validate_overlay_geometry,
+        DesktopShutdown, OverlayGeometry,
     };
     use std::fs;
     use std::path::Path;
+    use std::sync::atomic::AtomicBool;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_resource_dir() -> std::path::PathBuf {
@@ -603,6 +690,13 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ncfd-tauri-test-{stamp}"));
         fs::create_dir_all(&path).expect("temporary resource directory");
         path
+    }
+
+    #[test]
+    fn desktop_shutdown_guard_allows_only_one_cleanup_worker() {
+        let state = DesktopShutdown(AtomicBool::new(false));
+        assert!(begin_desktop_shutdown(&state));
+        assert!(!begin_desktop_shutdown(&state));
     }
 
     #[test]
