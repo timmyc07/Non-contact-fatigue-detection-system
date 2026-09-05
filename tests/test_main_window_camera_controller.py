@@ -34,7 +34,7 @@ def camera_window(
                 "camera": {
                     "index": 2,
                     "resolution": "800×600",
-                    "fps": "24",
+                    "fps": "60",
                     "backend": "ffmpeg",
                     "horizontal_flip": False,
                 }
@@ -65,7 +65,7 @@ def test_camera_settings_commands_state_and_scan_use_controller(
     snapshot = window._engine_controller.camera_snapshot()
     assert snapshot.selected_index == 2
     assert snapshot.resolution == "800×600"
-    assert snapshot.fps == "24"
+    assert snapshot.fps == "30"
     assert snapshot.backend == "ffmpeg"
     assert snapshot.horizontal_flip is False
 
@@ -79,13 +79,13 @@ def test_camera_settings_commands_state_and_scan_use_controller(
 
     window._handle_desktop_command(
         "camera.configure",
-        {"resolution": "1280×800", "fps": 60, "horizontal_flip": True},
+        {"resolution": "1280×800", "fps": 30, "horizontal_flip": True},
     )
     window._handle_desktop_command("camera.select", {"index": 0})
     configured = window._engine_controller.camera_snapshot()
     assert configured.selected_index == 0
     assert configured.resolution == "1280×800"
-    assert configured.fps == "60"
+    assert configured.fps == "30"
     assert configured.horizontal_flip is True
     for name in (
         "_cmb_camera",
@@ -102,7 +102,7 @@ def test_camera_settings_commands_state_and_scan_use_controller(
     assert saved_camera == {
         "index": 0,
         "resolution": "1280×800",
-        "fps": "60",
+        "fps": "30",
         "backend": "ffmpeg",
         "horizontal_flip": True,
     }
@@ -193,7 +193,7 @@ def test_start_camera_worker_uses_controller_start_spec(
         "camera.configure",
         {
             "resolution": "1920×1080（1080p）",
-            "fps": "60",
+            "fps": "30",
             "backend": "ffmpeg",
             "horizontal_flip": False,
         },
@@ -210,7 +210,7 @@ def test_start_camera_worker_uses_controller_start_spec(
             {
                 "width": 1920,
                 "height": 1080,
-                "target_fps": 60,
+                "target_fps": 30,
                 "backend": "ffmpeg",
                 "horizontal_flip": False,
             },

@@ -19,7 +19,8 @@ CAMERA_RESOLUTIONS = (
     "1280×800",
     "1920×1080（1080p）",
 )
-CAMERA_FPS_OPTIONS = ("15", "24", "30", "60")
+CAMERA_FIXED_FPS = "30"
+CAMERA_FPS_OPTIONS = (CAMERA_FIXED_FPS,)
 CAMERA_BACKENDS = ("ffmpeg",)
 CAMERA_RESOLUTION_SIZES = {
     "640×480": (640, 480),
@@ -64,7 +65,7 @@ class CameraConfig:
     devices: tuple[CameraDevice, ...] = ()
     selected_index: int | None = None
     resolution: str = "1280×720（720p）"
-    fps: str = "30"
+    fps: str = CAMERA_FIXED_FPS
     backend: str = "ffmpeg"
     horizontal_flip: bool = True
 

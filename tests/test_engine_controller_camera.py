@@ -47,13 +47,12 @@ def test_camera_configure_validates_atomically() -> None:
     controller = EngineController()
     controller.configure_camera(
         resolution="800×600",
-        fps="24",
         backend="ffmpeg",
         horizontal_flip=False,
     )
     configured = controller.camera_snapshot()
     assert configured.resolution == "800×600"
-    assert configured.fps == "24"
+    assert configured.fps == "30"
     assert configured.backend == "ffmpeg"
     assert configured.horizontal_flip is False
 
@@ -64,6 +63,10 @@ def test_camera_configure_validates_atomically() -> None:
     else:
         raise AssertionError("Unsupported resolution must be rejected")
 
+    assert controller.camera_snapshot() == configured
+
+    with pytest.raises(ValueError, match="FPS"):
+        controller.configure_camera(fps="60")
     assert controller.camera_snapshot() == configured
 
 
@@ -84,7 +87,7 @@ def test_camera_start_spec_preserves_legacy_resolution_mapping(
     controller.replace_cameras([CameraDevice(4, "[4] USB Camera")])
     controller.configure_camera(
         resolution=resolution,
-        fps="60",
+        fps="30",
         backend="ffmpeg",
         horizontal_flip=False,
     )
@@ -93,7 +96,7 @@ def test_camera_start_spec_preserves_legacy_resolution_mapping(
 
     assert (spec.width, spec.height) == expected_size
     assert spec.index == 4
-    assert spec.target_fps == 60
+    assert spec.target_fps == 30
     assert spec.backend == "ffmpeg"
     assert spec.horizontal_flip is False
     assert spec.camera_label == "[4] USB Camera"
@@ -115,7 +118,7 @@ def test_reset_camera_settings_preserves_catalog_and_selection() -> None:
     controller.replace_cameras([CameraDevice(4, "USB Camera")])
     controller.configure_camera(
         resolution="1920×1080（1080p）",
-        fps="60",
+        fps="30",
         backend="ffmpeg",
         horizontal_flip=False,
     )

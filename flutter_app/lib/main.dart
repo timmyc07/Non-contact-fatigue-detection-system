@@ -2540,10 +2540,10 @@ class SettingsView extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
                 child: _SettingDropdown(
-                    label: '目標 FPS',
+                    label: '目標 FPS（固定）',
                     value: state['fps']?.toString(),
-                    values: const ['15', '24', '30', '60'],
-                    enabled: !busy && !running,
+                    values: const ['30'],
+                    enabled: false,
                     onChanged: (value) => onCommand(
                         'camera.configure', <String, dynamic>{'fps': value}))),
           ]),

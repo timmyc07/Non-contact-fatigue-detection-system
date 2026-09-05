@@ -19,6 +19,8 @@
 
 因此此裝置在目前 AVFoundation 格式下沒有接受 60 FPS。程式的相機擷取迴圈沒有把 60 限制成 30；Flutter/WebView 預覽傳輸另有 30 FPS 上限，用來控制 JPEG 與 IPC 負載，不代表分析輸入一定被同樣限速。
 
+後續正式設定已固定為 30 FPS。診斷腳本仍可要求 60 FPS 作為硬體能力測試，但桌面設定與 desktop API 不再接受 15、24 或 60 FPS。
+
 `scripts/diagnose_camera.py` 現在同時顯示：
 
 - `driver_fps`：相機 backend 宣告的協商值。
