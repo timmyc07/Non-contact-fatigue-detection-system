@@ -140,4 +140,47 @@ void main() {
 
     expect(find.text('NCFD 監測 Overlay'), findsOneWidget);
   });
+
+  test('overlay values use bounded display precision', () {
+    expect(formatOverlayValue('fps', 29.915841141097077), '29.9');
+    expect(formatOverlayValue('stress_bpm', 56.099237808936956), '56.1');
+    expect(formatOverlayValue('perclos', 3.03040432814172), '3.0%');
+    expect(formatOverlayValue('perclos', 120), '100.0%');
+    expect(formatOverlayValue('stress_bpm', 0), '--');
+    expect(formatOverlayValue('fps', double.nan), '--');
+    expect(formatOverlayValue('status', '  清醒  '), '清醒');
+  });
+
+  testWidgets('overlay metrics do not overflow at the native minimum size',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 180));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(2.25)),
+          child: OverlayShell(
+            initialState: <String, dynamic>{
+              'overlay_preview': true,
+              'overlay_metrics': true,
+              'overlay_locked': false,
+              'overlay_opacity': 100,
+            },
+            initialMetrics: <String, dynamic>{
+              'fps': 29.915841141097077,
+              'stress_bpm': 56.099237808936956,
+              'perclos': 3.03040432814172,
+              'status': '極度危險狀態',
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('FPS 29.9'), findsOneWidget);
+    expect(find.text('56.1'), findsOneWidget);
+    expect(find.text('3.0%'), findsOneWidget);
+  });
 }

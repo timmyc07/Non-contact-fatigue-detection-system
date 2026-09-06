@@ -542,7 +542,14 @@ class _MonitorShellState extends State<MonitorShell> {
 }
 
 class OverlayShell extends StatefulWidget {
-  const OverlayShell({super.key});
+  const OverlayShell({
+    this.initialMetrics = const <String, dynamic>{},
+    this.initialState = const <String, dynamic>{},
+    super.key,
+  });
+
+  final Map<String, dynamic> initialMetrics;
+  final Map<String, dynamic> initialState;
 
   @override
   State<OverlayShell> createState() => _OverlayShellState();
@@ -597,6 +604,29 @@ bool overlayGeometryResetRequested({
   return geometryNeedsApply && savedGeometry == null;
 }
 
+String formatOverlayValue(String key, Object? rawValue) {
+  if (rawValue == null) return '--';
+  if (key == 'status') {
+    final text = rawValue.toString().trim();
+    return text.isEmpty ? '--' : text;
+  }
+
+  final value = rawValue is num
+      ? rawValue.toDouble()
+      : double.tryParse(rawValue.toString());
+  if (value == null || !value.isFinite) return '--';
+  switch (key) {
+    case 'fps':
+      return value > 0 ? value.toStringAsFixed(1) : '--';
+    case 'stress_bpm':
+      return value > 0 ? value.toStringAsFixed(1) : '--';
+    case 'perclos':
+      return '${value.clamp(0, 100).toStringAsFixed(1)}%';
+    default:
+      return rawValue.toString();
+  }
+}
+
 class _OverlayShellState extends State<OverlayShell> {
   final _backend = BackendService();
   final _bridge = TauriBridge.instance;
@@ -611,6 +641,8 @@ class _OverlayShellState extends State<OverlayShell> {
   @override
   void initState() {
     super.initState();
+    _metrics = Map<String, dynamic>.from(widget.initialMetrics);
+    _state = Map<String, dynamic>.from(widget.initialState);
     _metricsSubscription = _backend.connectMetrics().listen((packet) {
       if (mounted) setState(() => _metrics = packet);
     });
@@ -671,8 +703,7 @@ class _OverlayShellState extends State<OverlayShell> {
     } catch (_) {}
   }
 
-  String _text(String key, [String fallback = '--']) =>
-      _metrics[key]?.toString() ?? fallback;
+  String _metricText(String key) => formatOverlayValue(key, _metrics[key]);
 
   @override
   Widget build(BuildContext context) {
@@ -704,11 +735,23 @@ class _OverlayShellState extends State<OverlayShell> {
                     Expanded(
                       child: Text(
                         'NCFD 監測 Overlay',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.labelLarge,
                       ),
                     ),
-                    Text('FPS ${_text('fps')}',
-                        style: Theme.of(context).textTheme.labelSmall),
+                    SizedBox(
+                      width: 76,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          'FPS ${_metricText('fps')}',
+                          maxLines: 1,
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                      ),
+                    ),
                   ]),
                   if (previewOn) ...[
                     const SizedBox(height: 8),
@@ -739,13 +782,27 @@ class _OverlayShellState extends State<OverlayShell> {
                   if (metricsOn) ...[
                     const SizedBox(height: 8),
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
-                        _OverlayMetric(
-                            label: 'BPM', value: _text('stress_bpm')),
-                        _OverlayMetric(
-                            label: 'PERCLOS', value: _text('perclos')),
-                        _OverlayMetric(label: '狀態', value: _text('status')),
+                        Expanded(
+                          child: _OverlayMetric(
+                            label: 'BPM',
+                            value: _metricText('stress_bpm'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _OverlayMetric(
+                            label: 'PERCLOS',
+                            value: _metricText('perclos'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _OverlayMetric(
+                            label: '狀態',
+                            value: _metricText('status'),
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -770,13 +827,28 @@ class _OverlayMetric extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label, style: Theme.of(context).textTheme.labelSmall),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
         const SizedBox(height: 2),
-        Text(value,
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(color: kAccentBright)),
+        SizedBox(
+          width: double.infinity,
+          height: 28,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(color: kAccentBright),
+            ),
+          ),
+        ),
       ],
     );
   }
