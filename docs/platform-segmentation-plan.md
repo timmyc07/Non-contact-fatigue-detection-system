@@ -45,9 +45,10 @@ mobile shell
 - 為 Windows/macOS/Linux 建立既有 runtime 的正式註冊；Android/iOS 註冊為 `planned`，直到原生 runtime 完成前明確拒絕 desktop engine 啟動。
 - 新增契約測試，確保五平台都有定義、能力名稱不漂移、數值核心不匯入平台 UI/原生 adapter。
 
-### Phase 2：桌面三平台封裝隔離
+### Phase 2：桌面三平台封裝隔離（進行中）
 
 - 將 Windows NSIS、macOS App/DMG、Linux AppImage/deb（或選定的 Tauri target）分別放入平台建置設定。
+- Linux 已建立 AppImage/deb Tauri 設定與 Ubuntu 啟動/建置腳本；Linux 原生建置與安裝後 smoke 尚待目標設備驗收。
 - 每個平台原生建立 sidecar、模型資源與設定資料目錄；加入安裝後 smoke、啟動/停止/相機/解除安裝驗收。
 - macOS 作為主要開發與驗收平台，先完成相機、BLE、Overlay、休眠/喚醒與權限流程。
 
@@ -82,7 +83,7 @@ mobile shell
 |---|---|---|---|
 | Windows | desktop runtime 已有 | NSIS installer | sidecar、WebView、相機 DSHOW/MSMF、停止、解除安裝 |
 | macOS | desktop runtime 已有，主測試平台 | App/DMG | AVFoundation、MediaPipe CPU、BLE、Overlay、休眠喚醒、資料目錄 |
-| Linux | engine/runtime policy 已有 | Tauri target 待定 | V4L2、Qt/xcb、相機、停止、資料目錄 |
+| Linux | engine/runtime policy 已有；封裝設定已建立，原生驗收待完成 | AppImage、deb | Ubuntu 原生 build、V4L2、Qt/xcb、相機、停止、資料目錄 |
 | Android | 原生 runtime 尚未完成 | APK/AAB | permission、camera lifecycle、on-device inference、低記憶體 |
 | iOS | 原生 runtime 尚未完成 | IPA/archive | permission、AVFoundation、interruptions、signing、memory pressure |
 

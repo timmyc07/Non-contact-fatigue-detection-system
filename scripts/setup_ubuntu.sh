@@ -7,12 +7,27 @@ cd "$ROOT_DIR"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${VENV_DIR:-.venv}"
 
+if [[ -r /etc/os-release ]]; then
+  . /etc/os-release
+  if [[ "${ID:-}" == ubuntu ]] && dpkg --compare-versions "${VERSION_ID:-0}" lt 24.04; then
+    echo "Ubuntu 24.04 or newer is required for Tauri's WebKitGTK 4.1 build dependency." >&2
+    exit 1
+  fi
+fi
+
 if command -v apt-get >/dev/null 2>&1; then
   echo "Installing Ubuntu runtime packages. sudo may ask for your password."
   sudo apt-get update
   sudo apt-get install -y \
     python3-venv \
     python3-pip \
+    build-essential \
+    curl \
+    file \
+    libssl-dev \
+    libxdo-dev \
+    librsvg2-dev \
+    libwebkit2gtk-4.1-dev \
     libgl1 \
     libglib2.0-0 \
     libdbus-1-3 \
@@ -56,4 +71,6 @@ echo "  source $VENV_DIR/bin/activate"
 echo "Run the app with:"
 echo "  $VENV_DIR/bin/python main.py --engine"
 echo "Then start the Tauri/Flutter panel from the repository root with:"
-echo "  npm run desktop"
+echo "  bash scripts/start_desktop_linux.sh"
+echo "Build Linux AppImage/deb bundles with:"
+echo "  bash scripts/build_desktop_linux.sh"

@@ -118,3 +118,37 @@ def test_macos_build_and_smoke_scripts_use_native_bundle_contract() -> None:
     assert "npm run desktop:build" in build_script
     assert "疲勞監測操作台.app" in smoke_script
     assert 'default=5055' in smoke_script
+
+
+def test_linux_bundle_declares_native_appimage_and_deb_artifacts() -> None:
+    config = json.loads(
+        (ROOT / "src-tauri" / "tauri.linux.conf.json").read_text(encoding="utf-8")
+    )
+
+    assert config["bundle"]["targets"] == ["appimage", "deb"]
+    assert config["bundle"]["linux"]["appimage"]["bundleMediaFramework"] is False
+    assert "libglib2.0-0" in config["bundle"]["linux"]["deb"]["depends"]
+    for icon in config["bundle"]["icon"]:
+        assert (ROOT / "src-tauri" / icon).is_file()
+
+
+def test_linux_build_and_start_scripts_use_linux_runtime_contract() -> None:
+    build_script = (ROOT / "scripts" / "build_desktop_linux.sh").read_text(
+        encoding="utf-8"
+    )
+    start_script = (ROOT / "scripts" / "start_desktop_linux.sh").read_text(
+        encoding="utf-8"
+    )
+    setup_script = (ROOT / "scripts" / "setup_ubuntu.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "scripts.runtime_preflight" in build_script
+    assert "scripts/prepare_engine_sidecar.mjs" in build_script
+    assert "tauri build --config src-tauri/tauri.linux.conf.json" in build_script
+    assert "scripts.runtime_preflight" in start_script
+    assert "flutter pub get" in start_script
+    assert "npm run desktop" in start_script
+    assert "NCFD_BACKEND_PORT" in start_script
+    assert "dpkg --compare-versions" in setup_script
+    assert "libwebkit2gtk-4.1-dev" in setup_script

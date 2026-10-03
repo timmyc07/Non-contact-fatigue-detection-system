@@ -59,6 +59,7 @@ def test_five_platform_registry_is_explicit_and_mobile_is_fail_closed() -> None:
     assert normalize_platform_name("darwin") == "macos"
     assert get_platform_descriptor("android").status == "planned"
     assert get_platform_descriptor("ios").native_inference_ready is False
+    assert get_platform_descriptor("linux").artifact_types == ("appimage", "deb")
     for platform_name in ("windows", "macos", "linux", "android", "ios"):
         descriptor = get_platform_descriptor(platform_name)
         assert descriptor.key == platform_name

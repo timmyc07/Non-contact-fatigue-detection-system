@@ -63,7 +63,7 @@ PLATFORM_REGISTRY: dict[str, PlatformDescriptor] = {
         key="linux", family="desktop", runtime_type=DESKTOP_RUNTIME_TYPE, status="available",
         desktop_engine_supported=True, native_inference_ready=True,
         capabilities=frozenset({"camera", "tauri_shell"}),
-        artifact_types=("tauri-target-pending",),
+        artifact_types=("appimage", "deb"),
     ),
     "android": PlatformDescriptor(
         key="android", family="mobile", runtime_type=MOBILE_RUNTIME_TYPE, status="planned",

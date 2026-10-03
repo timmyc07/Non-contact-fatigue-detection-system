@@ -24,7 +24,7 @@ rPPG + MediaPipe based fatigue/physiology monitoring with a Tauri v2 + Flutter W
 ## Requirements
 - Python 3.12 recommended and validated
 - Node.js/npm、Rust stable toolchain 與 Flutter SDK（建置 Tauri v2 + Flutter Web 正式桌面面板）
-- Windows x64、macOS 15+ 與 Ubuntu Linux supported；目前 macOS release 產物已驗證 Apple Silicon arm64
+- Windows x64、macOS 15+ 與 Ubuntu 24.04+ supported；目前 macOS release 產物已驗證 Apple Silicon arm64。Linux Tauri build 使用 WebKitGTK 4.1。
 - Ubuntu desktop/runtime libraries for Qt, OpenCV, and V4L2 cameras
 - 心跳帶真值校準需要主機具備 Bluetooth LE 介面（Windows 使用 WinRT、macOS 使用 CoreBluetooth、Linux 使用 BlueZ），BLE 通訊由 `bleak` 套件提供（隨 `requirements.txt` 安裝）
 
@@ -177,6 +177,19 @@ macOS bundle API／engine shutdown smoke：
 ```bash
 .venv/bin/python -m scripts.installed_desktop_smoke_macos
 ```
+
+Ubuntu/Linux 開發啟動與免安裝封裝：
+
+```bash
+bash scripts/start_desktop_linux.sh
+bash scripts/build_desktop_linux.sh
+```
+
+建置輸出位於 `src-tauri/target/release/bundle/appimage/` 與
+`src-tauri/target/release/bundle/deb/`。需在目標 Linux 發行版原生建置，不能從 macOS
+或 Windows 複製 sidecar、Flutter/Rust 產物代替；此設定尚待 Ubuntu/Linux 原生 build、
+安裝啟動、相機與資料目錄 smoke 驗收。AppImage 可攜性仍受目標機器的 WebKitGTK/系統函式庫
+相容性影響；deb 會宣告所需的 GTK/WebKitGTK runtime dependencies。
 
 Windows 安裝版完整 smoke（隔離安裝、API v2、engine shutdown、Tauri 主視窗正常關閉與靜默解除安裝）：
 
