@@ -152,3 +152,14 @@ def test_linux_build_and_start_scripts_use_linux_runtime_contract() -> None:
     assert "NCFD_BACKEND_PORT" in start_script
     assert "dpkg --compare-versions" in setup_script
     assert "libwebkit2gtk-4.1-dev" in setup_script
+
+
+def test_linux_installed_smoke_uses_appimage_and_configurable_port() -> None:
+    smoke_script = (ROOT / "scripts" / "installed_desktop_smoke_linux.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "APPIMAGE_EXTRACT_AND_RUN" in smoke_script
+    assert "NCFD_BACKEND_PORT" in smoke_script
+    assert 'default=5000' in smoke_script
+    assert 'app.shutdown' in smoke_script

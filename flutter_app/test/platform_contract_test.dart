@@ -15,12 +15,24 @@ void main() {
 
   test('platform detection keeps web desktop separate from mobile', () {
     expect(
-      currentPlatformCapabilities(isWeb: true, isAndroid: true, isIos: false)
+      currentPlatformCapabilities(
+              isWeb: true,
+              isAndroid: true,
+              isIos: false,
+              isWindows: false,
+              isMacos: false,
+              isLinux: false)
           .platform,
       AppPlatform.webDesktop,
     );
     expect(
-      currentPlatformCapabilities(isWeb: false, isAndroid: true, isIos: false)
+      currentPlatformCapabilities(
+              isWeb: false,
+              isAndroid: true,
+              isIos: false,
+              isWindows: false,
+              isMacos: false,
+              isLinux: false)
           .platform,
       AppPlatform.android,
     );

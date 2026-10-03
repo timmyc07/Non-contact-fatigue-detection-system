@@ -6,6 +6,7 @@ enum AppPlatform {
   android,
   ios,
   webDesktop,
+  unsupportedNative,
 }
 
 class PlatformCapabilities {
@@ -98,6 +99,16 @@ class PlatformCapabilities {
     artifactTypes: [],
   );
 
+  static const unsupportedNative = PlatformCapabilities(
+    platform: AppPlatform.unsupportedNative,
+    runtimeKind: 'unknown',
+    status: 'unsupported',
+    desktopEngineSupported: false,
+    nativeInferenceReady: false,
+    capabilities: {},
+    artifactTypes: [],
+  );
+
   static PlatformCapabilities forPlatform(AppPlatform platform) {
     switch (platform) {
       case AppPlatform.windows:
@@ -112,6 +123,8 @@ class PlatformCapabilities {
         return ios;
       case AppPlatform.webDesktop:
         return webDesktop;
+      case AppPlatform.unsupportedNative:
+        return unsupportedNative;
     }
   }
 }
@@ -120,11 +133,17 @@ PlatformCapabilities currentPlatformCapabilities({
   required bool isWeb,
   required bool isAndroid,
   required bool isIos,
+  required bool isWindows,
+  required bool isMacos,
+  required bool isLinux,
 }) {
   if (isWeb) return PlatformCapabilities.webDesktop;
   if (isAndroid) return PlatformCapabilities.android;
   if (isIos) return PlatformCapabilities.ios;
-  return PlatformCapabilities.webDesktop;
+  if (isWindows) return PlatformCapabilities.windows;
+  if (isMacos) return PlatformCapabilities.macos;
+  if (isLinux) return PlatformCapabilities.linux;
+  return PlatformCapabilities.unsupportedNative;
 }
 
 class UnsupportedPlatformRuntimeError extends UnsupportedError {

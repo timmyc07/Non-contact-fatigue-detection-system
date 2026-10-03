@@ -187,9 +187,16 @@ bash scripts/build_desktop_linux.sh
 
 建置輸出位於 `src-tauri/target/release/bundle/appimage/` 與
 `src-tauri/target/release/bundle/deb/`。需在目標 Linux 發行版原生建置，不能從 macOS
-或 Windows 複製 sidecar、Flutter/Rust 產物代替；此設定尚待 Ubuntu/Linux 原生 build、
-安裝啟動、相機與資料目錄 smoke 驗收。AppImage 可攜性仍受目標機器的 WebKitGTK/系統函式庫
-相容性影響；deb 會宣告所需的 GTK/WebKitGTK runtime dependencies。
+或 Windows 複製 sidecar、Flutter/Rust 產物代替。Linux AppImage bundle smoke（需在 Linux
+主機執行）如下；`APPIMAGE_EXTRACT_AND_RUN=1` 可在沒有 FUSE 的 runner 使用：
+
+```bash
+.venv/bin/python -m scripts.installed_desktop_smoke_linux
+```
+
+AppImage 可攜性仍受目標機器的 WebKitGTK/系統函式庫相容性影響；deb 會宣告所需的
+GTK/WebKitGTK runtime dependencies。Linux 原生 build、安裝啟動、相機與資料目錄的實機
+結果需在 Ubuntu/Linux 目標主機補記，不能由 macOS build 代替。
 
 Windows 安裝版完整 smoke（隔離安裝、API v2、engine shutdown、Tauri 主視窗正常關閉與靜默解除安裝）：
 

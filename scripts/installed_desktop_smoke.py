@@ -14,7 +14,12 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
-from scripts.desktop_engine_client import control_state, port_in_use, request_json
+try:
+    from scripts.desktop_engine_client import control_state, port_in_use, request_json
+except ModuleNotFoundError:
+    # 允許以 `python scripts/installed_desktop_smoke.py` 直接執行。
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.desktop_engine_client import control_state, port_in_use, request_json
 
 
 CREATE_NO_WINDOW = 0x08000000

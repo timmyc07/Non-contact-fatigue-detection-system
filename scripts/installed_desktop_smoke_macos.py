@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from scripts.desktop_engine_client import control_state, port_in_use, request_json
+try:
+    from scripts.desktop_engine_client import control_state, port_in_use, request_json
+except ModuleNotFoundError:
+    # 允許以 `python scripts/installed_desktop_smoke_macos.py` 直接執行。
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.desktop_engine_client import control_state, port_in_use, request_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,9 +46,12 @@ def main() -> int:
     if port_in_use(host="127.0.0.1", port=args.port):
         raise RuntimeError(f"Port 127.0.0.1:{args.port} is already in use")
 
+    environment = os.environ.copy()
+    environment["NCFD_BACKEND_PORT"] = str(args.port)
     process = subprocess.Popen(
         [str(executable)],
         cwd=ROOT,
+        env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

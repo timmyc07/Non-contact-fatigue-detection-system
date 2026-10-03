@@ -35,6 +35,9 @@ class FatigueMonitorApp extends StatelessWidget {
       isWeb: kIsWeb,
       isAndroid: defaultTargetPlatform == TargetPlatform.android,
       isIos: defaultTargetPlatform == TargetPlatform.iOS,
+      isWindows: defaultTargetPlatform == TargetPlatform.windows,
+      isMacos: defaultTargetPlatform == TargetPlatform.macOS,
+      isLinux: defaultTargetPlatform == TargetPlatform.linux,
     );
     return MaterialApp(
       title: '疲勞監測操作台',

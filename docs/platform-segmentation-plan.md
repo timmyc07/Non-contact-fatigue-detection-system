@@ -47,14 +47,14 @@ mobile shell
 
 已完成：`gui/platforms/registry.py` 定義 Windows/macOS/Linux/Android/iOS 五平台 runtime、能力與 artifact；Android/iOS 標記 `planned`，desktop engine 啟動採 fail-closed。`tests/test_platform_runtime.py` 覆蓋五平台登錄、能力名稱與行動平台拒絕 desktop engine。Flutter 端也已建立對應的 `PlatformCapabilities` 型別與契約測試。桌面能力是否在目標設備可用，仍以 Phase 2/6 的原生驗收為準。
 
-### Phase 2：桌面三平台封裝隔離（設定與腳本已建立，原生驗收未完成）
+### Phase 2：桌面三平台封裝隔離（實作完成；Windows/Linux 原生驗收待對應主機）
 
 - 將 Windows NSIS、macOS App/DMG、Linux AppImage/deb（或選定的 Tauri target）分別放入平台建置設定。
-- Linux 已建立 AppImage/deb Tauri 設定與 Ubuntu 啟動/建置腳本；Linux 原生建置與安裝後 smoke 尚待目標設備驗收。
+- Linux 已建立 AppImage/deb Tauri 設定、Ubuntu 啟動/建置腳本與 AppImage 安裝後 smoke；Linux 原生建置、安裝後 smoke 與相機流程仍待目標設備驗收。
 - 每個平台原生建立 sidecar、模型資源與設定資料目錄；加入安裝後 smoke、啟動/停止/相機/解除安裝驗收。
 - macOS 作為主要開發與驗收平台，先完成相機、BLE、Overlay、休眠/喚醒與權限流程。
 
-已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows/macOS 有既有安裝 smoke 與桌面驗證紀錄。這些設定不等於目前 checkout 已在三種作業系統各自完成新一輪建置及安裝驗收。Linux 尤其仍待 Ubuntu 目標設備原生 build、安裝後 smoke 與相機流程驗收；macOS 權限、BLE、Overlay、休眠/喚醒等項目也需依下方矩陣逐項確認。
+已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows、macOS、Linux 各有對應的安裝 smoke 入口。macOS 已在本機 Apple Silicon 完成 PyInstaller sidecar、Flutter Web release、Tauri `.app/.dmg` 建置，並通過 bundle codesign 檢查與 API v2／相機列舉／`app.shutdown`／非預設埠 smoke。Linux smoke 支援 `APPIMAGE_EXTRACT_AND_RUN=1`，可在沒有 FUSE 的 runner 執行；Windows smoke 仍維持隔離安裝、主視窗、engine shutdown 與解除安裝檢查。Windows/Linux 的新一輪原生 build、安裝與相機流程必須在各自目標主機完成，不能由 macOS 結果代替。
 
 ### Phase 3：行動共用資料契約（第一批已完成；plugin 接線未開始）
 
@@ -105,19 +105,20 @@ mobile shell
 
 每一階段以獨立 commit 推送；commit 內容只包含該階段的程式、測試、文件與可重現命令。二進位安裝包不直接納入 git，改由 CI/release artifact 保存。每次交付回報修改檔案、測試命令、平台限制、數值行為影響與尚未完成項目。
 
-## 目前進度（2026-10-03）
+## 目前進度（2026-10-04）
 
 - **已完成：** Phase 0 基線與桌面平台 policy；Phase 1 五平台 registry、行動平台 fail-closed 與契約測試；Phase 3 第一批 Dart metrics/control/error/recording models 與 `MobileRuntimeAdapter` 抽象介面。既有 Flutter Map API 保留。
-- **部分完成：** Phase 2 三平台封裝設定、build/start 腳本與部分 Windows/macOS smoke 已存在；Linux 封裝設定和 Ubuntu 腳本已建立，但 Linux 原生建置及安裝驗收未完成，其他桌面平台也須按矩陣確認本輪完整驗收。
+- **已完成：** Phase 2 的三平台封裝隔離實作。Windows NSIS、macOS App/DMG、Linux AppImage/deb 的 Tauri 設定、sidecar/model/resource/data-directory 邊界、build/start 腳本與安裝 smoke 入口均已具備；新增 Linux AppImage smoke，並修正 macOS／Windows smoke 可直接以檔案路徑執行及使用指定 backend port。macOS Apple Silicon 已完成原生建置與 packaged smoke：API version `2`、camera count `1`、engine shutdown、port release 均通過。
+- **待外部主機驗收：** Windows NSIS 與 Linux AppImage/deb 尚未在 Windows／Ubuntu Linux 原生主機重新建置、安裝、啟動、相機、資料目錄與解除安裝；目前主機為 macOS arm64，不能以跨平台產物或 macOS 結果宣稱通過。macOS 的 BLE、Overlay、休眠/喚醒與相機權限仍屬硬體／作業系統情境測試，未納入本輪 packaged smoke。
 - **未完成：** Android Kotlin 與 iOS Swift/Objective-C runtime/plugin、真實相機權限與影格、模型載入/推論、前景生命週期與裝置驗收；Phase 6 五平台 release gate。不得將 Android/iOS 標示為可運行。
-- **目前問題：** 工作樹已有未提交修改 `flutter_app/lib/models/platform_contract.dart`，為 `currentPlatformCapabilities` 增加三個必填平台參數及 unsupported-native 分支；目前 `flutter_app/lib/main.dart` 與既有契約測試呼叫尚未同步。執行 `cd flutter_app && flutter analyze` 得 9 個 missing-required-argument errors；`flutter test test/platform_contract_test.dart` 編譯失敗，錯誤相同。這是現存工作樹狀態，需在該修改完成接線後重跑。
-- **Python 驗證：** `.venv/bin/python -m pytest tests/test_platform_runtime.py tests/test_desktop_shell_config.py -q` 通過（30 passed）。Flutter 檢查仍因目前未提交的平台偵測修改與呼叫點不同步而失敗，需完成接線後重跑。
-- **數值行為影響：** 本次僅更新狀態文件，沒有修改分析公式、門檻、ROI、濾波或校準行為。
+- **目前問題：** Windows/Linux 原生驗收受限於目前工作主機沒有對應作業系統與硬體；macOS build 的 Flutter Wasm dry-run、MaterialIcons 與 notarization 會顯示非阻斷警告，正式 `.app/.dmg` 仍可建立並已通過 adhoc codesign verify。工作樹中的 `flutter_app/lib/models/platform_contract.dart` 是既有平台契約修改，本輪已補齊 `main.dart` 與契約測試的必要參數接線。
+- **Python 驗證：** Phase 2 子集 `57 passed, 2 skipped`；完整 Python 測試 `794 passed, 2 skipped`；`pip check`、受影響 scripts/gui/platforms 的 `compileall` 與 build/start shell syntax check 均通過。Flutter `analyze` 通過，Flutter `test` 共 `38 tests` 通過。
+- **數值行為影響：** 本輪只調整平台偵測接線、封裝 smoke 與驗收文件，沒有修改分析公式、門檻、ROI、濾波、校準或 worker 數值路徑。
 
 ### 後續工作順序
 
-1. 完成並驗證目前 Flutter 平台偵測呼叫的參數接線，再跑 `flutter analyze` 與 `flutter test test/platform_contract_test.dart`。
-2. 在 Ubuntu 完成 Linux AppImage/deb 原生建置、安裝後啟停與相機 smoke，記錄 OS/硬體/命令/結果。
-3. 依驗收矩陣補齊 Windows/macOS 本輪安裝與硬體項目紀錄，明確指出未覆蓋的設備或權限情境。
-4. 再開始 Android 原生 runtime；先落地 permission/camera/model lifecycle plugin，再依固定 replay/golden 契約比對數值並做實機驗收。
+1. 在 Windows 目標主機執行 NSIS 原生 build、安裝 smoke 與解除安裝驗收，記錄 OS/硬體/命令/結果。
+2. 在 Ubuntu/Linux 目標主機執行 AppImage/deb 原生 build、安裝後啟停、相機與資料目錄 smoke，記錄 OS/硬體/命令/結果。
+3. 依驗收矩陣補齊 macOS BLE、Overlay、休眠/喚醒與相機權限的硬體／OS 情境紀錄。
+4. Phase 2 外部主機驗收完成後，再開始 Android 原生 runtime；先落地 permission/camera/model lifecycle plugin，再依固定 replay/golden 契約比對數值並做實機驗收。
 5. iOS runtime 與 Phase 6 release gate 在 Android 契約穩定後進行；任何沒有原生 runtime、簽署或實機證據的平台維持未完成狀態。
