@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
+import '../models/backend_contract.dart';
+
 const _backendBaseUrl = String.fromEnvironment(
   'NCFD_BACKEND_URL',
   defaultValue: 'http://127.0.0.1:5000',
@@ -39,7 +41,11 @@ class BackendService {
   }
 
   Stream<Map<String, dynamic>> connectMetrics() {
-    final controller = StreamController<Map<String, dynamic>>.broadcast(
+    return connectMetricSnapshots().map((snapshot) => snapshot.toJson());
+  }
+
+  Stream<MetricsSnapshot> connectMetricSnapshots() {
+    final controller = StreamController<MetricsSnapshot>.broadcast(
       onCancel: () {
         _socket?.disconnect();
         _socket?.dispose();
@@ -58,7 +64,9 @@ class BackendService {
       _socket = socket;
       socket.on('metrics_update', (dynamic payload) {
         final packet = _packet(payload);
-        if (packet != null && !controller.isClosed) controller.add(packet);
+        if (packet != null && !controller.isClosed) {
+          controller.add(MetricsSnapshot.fromJson(packet));
+        }
       });
       socket.on('frame_update', (dynamic payload) {
         final frame = payload is Map ? payload['frame'] : null;
@@ -75,17 +83,19 @@ class BackendService {
   }
 
   Future<List<Map<String, dynamic>>> recordings() async {
+    final values = await recordingMetadata();
+    return values.map((row) => row.toJson()).toList();
+  }
+
+  Future<List<RecordingMetadata>> recordingMetadata() async {
     final response = await _client.get(Uri.parse('$baseUrl/api/recordings'));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError('Backend returned HTTP ${response.statusCode}.');
     }
     final body = jsonDecode(response.body);
     final data = body is Map ? body['data'] : null;
-    if (data is! List) return <Map<String, dynamic>>[];
-    return data
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
+    if (data is! List) return <RecordingMetadata>[];
+    return data.whereType<Map>().map(RecordingMetadata.fromJson).toList();
   }
 
   Future<Map<String, dynamic>> playback(String dbPath,
@@ -107,17 +117,27 @@ class BackendService {
   }
 
   Future<Map<String, dynamic>> controlState() async {
-    return _controlRequest('GET', '/api/control/state');
+    return (await controlStateModel()).toJson();
+  }
+
+  Future<ControlState> controlStateModel() async {
+    return ControlState.fromJson(
+      await _controlRequest('GET', '/api/control/state'),
+    );
   }
 
   Future<Map<String, dynamic>> metricsSnapshot() async {
+    return (await metricsSnapshotModel()).toJson();
+  }
+
+  Future<MetricsSnapshot> metricsSnapshotModel() async {
     final response = await _client.get(Uri.parse('$baseUrl/api/metrics'));
     final payload = jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError(_errorMessage(payload, response.statusCode));
     }
     final packet = _packet(payload);
-    return packet ?? <String, dynamic>{};
+    return MetricsSnapshot.fromJson(packet);
   }
 
   Future<Map<String, dynamic>> command(
@@ -157,14 +177,16 @@ class BackendService {
     return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
-  void _startPolling(StreamController<Map<String, dynamic>> controller) {
+  void _startPolling(StreamController<MetricsSnapshot> controller) {
     if (_poller != null) return;
     _poller = Timer.periodic(const Duration(seconds: 2), (_) async {
       try {
         final response = await _client.get(Uri.parse('$baseUrl/api/metrics'));
         if (response.statusCode == 200) {
           final packet = _packet(jsonDecode(response.body));
-          if (packet != null && !controller.isClosed) controller.add(packet);
+          if (packet != null && !controller.isClosed) {
+            controller.add(MetricsSnapshot.fromJson(packet));
+          }
         }
       } catch (_) {
         // The UI keeps the last sample and exposes its disconnected state.
@@ -180,10 +202,6 @@ class BackendService {
   }
 
   String _errorMessage(dynamic payload, int statusCode) {
-    final error = payload is Map ? payload['error'] : null;
-    if (error is Map && error['message'] is String) {
-      return error['message'] as String;
-    }
-    return error?.toString() ?? 'Backend returned HTTP $statusCode.';
+    return ApiError.fromPayload(payload, statusCode).message;
   }
 }

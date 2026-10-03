@@ -52,11 +52,15 @@ mobile shell
 - 每個平台原生建立 sidecar、模型資源與設定資料目錄；加入安裝後 smoke、啟動/停止/相機/解除安裝驗收。
 - macOS 作為主要開發與驗收平台，先完成相機、BLE、Overlay、休眠/喚醒與權限流程。
 
-### Phase 3：行動共用資料契約
+### Phase 3：行動共用資料契約（第一批已完成）
 
 - 將 Flutter UI 使用的 metrics、control state、錯誤碼與 recording metadata 抽成 platform-neutral Dart models。
 - 明確標示手機不提供的桌面能力（Tauri external shell、全域快捷鍵、Python sidecar、桌面 Overlay），以 capability gating 隱藏或替代 UI。
 - 建立 Android/iOS plugin interface：camera frames、permission、model lifecycle、foreground state、local storage。
+
+目前已完成第一批共用資料契約：PlatformCapabilities 集中五平台 runtime/artifact/capability 描述，MetricsSnapshot、ControlState、RecordingMetadata 與 ApiError 保留未知欄位並提供 typed access；既有 Map<String, dynamic> Flutter API 仍保留，避免桌面 UI 行為改變。Android/iOS 入口目前採 fail-closed，因 Flutter 專案尚無 native inference runtime、camera permission adapter、model lifecycle 或 Android/iOS 原生專案，不能啟動 Python desktop engine。
+
+下一批工作是將 camera、permission、model lifecycle、foreground state 與 local storage 抽成 plugin interface，並在沒有 native runtime 前持續以 capability gating 隱藏桌面專屬控制。
 
 ### Phase 4：Android 原生 runtime
 

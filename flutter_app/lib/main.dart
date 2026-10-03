@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'models/platform_contract.dart';
 import 'services/backend_service.dart';
 import 'services/tauri_bridge.dart';
 
@@ -31,6 +31,11 @@ class FatigueMonitorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const ink = kInk;
+    final capabilities = currentPlatformCapabilities(
+      isWeb: kIsWeb,
+      isAndroid: defaultTargetPlatform == TargetPlatform.android,
+      isIos: defaultTargetPlatform == TargetPlatform.iOS,
+    );
     return MaterialApp(
       title: '疲勞監測操作台',
       debugShowCheckedModeBanner: false,
@@ -56,9 +61,50 @@ class FatigueMonitorApp extends StatelessWidget {
           titleMedium: TextStyle(color: ink, fontWeight: FontWeight.w700),
         ),
       ),
-      home: Uri.base.queryParameters['overlay'] == '1'
-          ? const OverlayShell()
-          : const MonitorShell(),
+      home: capabilities.requiresNativeRuntime
+          ? MobileRuntimeUnavailableShell(capabilities: capabilities)
+          : Uri.base.queryParameters['overlay'] == '1'
+              ? const OverlayShell()
+              : const MonitorShell(),
+    );
+  }
+}
+
+class MobileRuntimeUnavailableShell extends StatelessWidget {
+  const MobileRuntimeUnavailableShell({required this.capabilities, super.key});
+
+  final PlatformCapabilities capabilities;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBackgroundDeep,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.phone_android, size: 48, color: kAccentBright),
+                const SizedBox(height: 20),
+                const Text(
+                  '此行動平台尚未可用',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  capabilities.unavailableReason,
+                  style: const TextStyle(color: kMutedInk, height: 1.5),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -191,7 +237,8 @@ class _MonitorShellState extends State<MonitorShell> {
         _showNewDesktopNotice(state);
         _requestOverlaySync(state);
         setState(() => _engineState = state);
-        final message = shellActionIssue ?? _commandSuccessMessage(command, args);
+        final message =
+            shellActionIssue ?? _commandSuccessMessage(command, args);
         if (message != null) {
           _showCommandMessage(message, isError: shellActionIssue != null);
         }
