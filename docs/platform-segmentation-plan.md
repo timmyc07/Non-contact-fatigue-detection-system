@@ -60,7 +60,7 @@ mobile shell
 
 目前已完成第一批共用資料契約：PlatformCapabilities 集中五平台 runtime/artifact/capability 描述，MetricsSnapshot、ControlState、RecordingMetadata 與 ApiError 保留未知欄位並提供 typed access；既有 Map<String, dynamic> Flutter API 仍保留，避免桌面 UI 行為改變。Android/iOS 入口目前採 fail-closed，因 Flutter 專案尚無 native inference runtime、camera permission adapter、model lifecycle 或 Android/iOS 原生專案，不能啟動 Python desktop engine。
 
-下一批工作是將 camera、permission、model lifecycle、foreground state 與 local storage 抽成 plugin interface，並在沒有 native runtime 前持續以 capability gating 隱藏桌面專屬控制。
+本批已建立 MobileRuntimeAdapter 介面，涵蓋 camera frames、permission、model lifecycle、foreground state 與 local storage；UnsupportedMobileRuntimeAdapter 在原生 plugin 尚未接入時對相機、權限、模型與儲存操作 fail-closed，不會回退到 Python desktop engine。下一批工作是分別接入 Android Kotlin 與 iOS Swift/Objective-C plugin，並以同一資料契約回傳影像與生命週期事件。
 
 ### Phase 4：Android 原生 runtime
 

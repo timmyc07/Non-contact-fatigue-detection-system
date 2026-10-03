@@ -1,5 +1,7 @@
 import 'package:fatigue_monitor_ui/models/backend_contract.dart';
+import 'package:fatigue_monitor_ui/models/mobile_runtime_contract.dart';
 import 'package:fatigue_monitor_ui/models/platform_contract.dart';
+import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -57,5 +59,54 @@ void main() {
     expect(structured.message, 'Bad value');
     expect(legacy.code, 'http_503');
     expect(legacy.message, 'Engine is starting.');
+  });
+
+  test('unsupported mobile runtime fails closed without desktop fallback',
+      () async {
+    final adapter = createMobileRuntime(PlatformCapabilities.android);
+    expect(adapter.isAvailable, isFalse);
+    expect(adapter.platform.platform, AppPlatform.android);
+    expect(adapter.modelState, ModelRuntimeState.unloaded);
+
+    await expectLater(
+      adapter.startCamera(
+          const CameraConfiguration(width: 640, height: 480, fps: 30)),
+      throwsA(isA<UnsupportedPlatformRuntimeError>()),
+    );
+    await expectLater(
+      adapter.loadModel('face_landmarker'),
+      throwsA(isA<UnsupportedPlatformRuntimeError>()),
+    );
+    await expectLater(
+      adapter.requestPermission(RuntimePermission.camera),
+      throwsA(isA<UnsupportedPlatformRuntimeError>()),
+    );
+    await adapter.dispose();
+  });
+
+  test('mobile frame contract preserves bytes and timing metadata', () {
+    final frame = CameraFrame(
+      bytes: Uint8List.fromList(const [1, 2, 3]),
+      width: 2,
+      height: 1,
+      timestampMicros: 1234,
+      format: CameraPixelFormat.rgba8888,
+    );
+    expect(frame.bytes, orderedEquals(const [1, 2, 3]));
+    expect(frame.timestampMicros, 1234);
+    expect(frame.format, CameraPixelFormat.rgba8888);
+  });
+
+  test('unsupported adapter still reports lifecycle state changes', () async {
+    final adapter = createMobileRuntime(PlatformCapabilities.ios);
+    final states = <ForegroundState>[];
+    final subscription = adapter.foregroundStates.listen(states.add);
+
+    await adapter.setForegroundState(ForegroundState.active);
+    expect(adapter.foregroundState, ForegroundState.active);
+    expect(states, contains(ForegroundState.active));
+
+    await subscription.cancel();
+    await adapter.dispose();
   });
 }
