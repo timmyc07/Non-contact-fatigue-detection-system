@@ -100,6 +100,9 @@ Windows 與 macOS 的硬體/runtime policy 分別位於 `gui/platforms/windows.p
 既有相機列舉與開啟機制仍由 `gui/camera_devices.py` 共用。模型、
 `config/mediapipe_tuning.json`、rPPG 與疲勞演算法維持共用。啟動腳本會先執行
 `python -m scripts.runtime_preflight`，避免不相容的原生套件等到按下「開始監測」才終止 engine。
+五平台的 runtime、能力與 artifact 契約集中於 `gui/platforms/registry.py`。Windows、macOS、Linux
+目前使用 Python/Tauri desktop engine；Android、iOS 仍是 `planned`，尚無可執行的原生推論 runtime。
+因此不能把桌面免安裝檔直接複製到手機運行，必須完成各自的原生 runtime、APK/IPA 與實機驗收後才會標記可用。
 
 若 macOS 在按下「開始監測」後整個 engine 消失，先檢查 MediaPipe 版本：
 

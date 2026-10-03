@@ -12,6 +12,7 @@ from gui.platforms import (
     OPENCV_RUNTIME_DISTRIBUTION,
     OPENCV_RUNTIME_VERSION,
     get_desktop_platform_runtime,
+    get_platform_descriptor,
     validate_mediapipe_runtime,
 )
 
@@ -36,6 +37,12 @@ def installed_opencv_distributions() -> dict[str, str]:
 
 def check_runtime() -> list[str]:
     errors: list[str] = []
+    platform = get_platform_descriptor()
+    if not platform.desktop_engine_supported:
+        return [
+            f"{platform.key} 尚未提供 Python/Tauri desktop engine；"
+            "請使用對應的原生行動 runtime。"
+        ]
     loaded: dict[str, object] = {}
     for module_name in ("cv2", "mediapipe", "PySide6", "numpy"):
         try:

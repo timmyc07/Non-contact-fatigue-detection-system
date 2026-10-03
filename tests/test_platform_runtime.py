@@ -10,11 +10,18 @@ import pytest
 
 import scripts.runtime_preflight as runtime_preflight
 from gui.platforms import (
+    CAPABILITY_IDS,
+    DESKTOP_PLATFORM_IDS,
     MEDIAPIPE_RUNTIME_VERSION,
+    MOBILE_PLATFORM_IDS,
     OPENCV_RUNTIME_DISTRIBUTION,
     OPENCV_RUNTIME_VERSION,
+    UnsupportedDesktopEngineError,
     create_face_landmarker_base_options,
     get_desktop_platform_runtime,
+    get_platform_descriptor,
+    normalize_platform_name,
+    require_desktop_engine_support,
     validate_mediapipe_runtime,
 )
 from gui.worker_safety import fail_closed_worker
@@ -43,6 +50,24 @@ def test_windows_and_macos_runtime_policies_are_separate() -> None:
     assert macos.key == "macos"
     assert macos.preferred_camera_api_names[0] == "CAP_AVFOUNDATION"
     assert macos.force_mediapipe_cpu_delegate is True
+
+
+def test_five_platform_registry_is_explicit_and_mobile_is_fail_closed() -> None:
+    assert set(DESKTOP_PLATFORM_IDS) == {"windows", "macos", "linux"}
+    assert set(MOBILE_PLATFORM_IDS) == {"android", "ios"}
+    assert normalize_platform_name("win32") == "windows"
+    assert normalize_platform_name("darwin") == "macos"
+    assert get_platform_descriptor("android").status == "planned"
+    assert get_platform_descriptor("ios").native_inference_ready is False
+    for platform_name in ("windows", "macos", "linux", "android", "ios"):
+        descriptor = get_platform_descriptor(platform_name)
+        assert descriptor.key == platform_name
+        assert descriptor.capabilities <= CAPABILITY_IDS
+        assert descriptor.artifact_types
+    with pytest.raises(UnsupportedDesktopEngineError, match="android"):
+        require_desktop_engine_support("android")
+    with pytest.raises(UnsupportedDesktopEngineError, match="ios"):
+        get_desktop_platform_runtime("ios")
 
 
 def test_mediapipe_runtime_version_is_locked_for_cross_platform_parity() -> None:

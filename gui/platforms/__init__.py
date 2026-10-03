@@ -15,16 +15,32 @@ from .base import (
 from .generic import RUNTIME as GENERIC_RUNTIME
 from .linux import RUNTIME as LINUX_RUNTIME
 from .macos import RUNTIME as MACOS_RUNTIME
+from .registry import (
+    CAPABILITY_IDS,
+    DESKTOP_PLATFORM_IDS,
+    MOBILE_PLATFORM_IDS,
+    PLATFORM_IDS,
+    PLATFORM_REGISTRY,
+    PlatformDescriptor,
+    UnsupportedDesktopEngineError,
+    get_platform_descriptor,
+    normalize_platform_name,
+    require_desktop_engine_support,
+)
 from .windows import RUNTIME as WINDOWS_RUNTIME
 
 
 def get_desktop_platform_runtime(platform_name: str | None = None) -> DesktopPlatformRuntime:
-    name = (platform_name or sys.platform).lower()
-    if name.startswith("win"):
+    name = normalize_platform_name(platform_name or sys.platform)
+    if name in MOBILE_PLATFORM_IDS:
+        raise UnsupportedDesktopEngineError(
+            f"{name} 尚未提供 Python/Tauri desktop engine；請使用原生行動 runtime。"
+        )
+    if name == "windows":
         return WINDOWS_RUNTIME
-    if name == "darwin":
+    if name == "macos":
         return MACOS_RUNTIME
-    if name.startswith("linux"):
+    if name == "linux":
         return LINUX_RUNTIME
     return GENERIC_RUNTIME
 
@@ -67,12 +83,22 @@ def create_face_landmarker_base_options(
 
 
 __all__ = [
+    "CAPABILITY_IDS",
     "MEDIAPIPE_RUNTIME_VERSION",
     "OPENCV_RUNTIME_DISTRIBUTION",
     "OPENCV_RUNTIME_VERSION",
     "DesktopPlatformRuntime",
+    "DESKTOP_PLATFORM_IDS",
+    "MOBILE_PLATFORM_IDS",
+    "PLATFORM_IDS",
+    "PLATFORM_REGISTRY",
+    "PlatformDescriptor",
+    "UnsupportedDesktopEngineError",
     "create_face_landmarker_base_options",
+    "get_platform_descriptor",
     "get_desktop_platform_runtime",
     "installed_mediapipe_version",
+    "normalize_platform_name",
+    "require_desktop_engine_support",
     "validate_mediapipe_runtime",
 ]
