@@ -38,21 +38,25 @@ mobile shell
 - 以 `scripts.video_replay`、既有 pytest 與 UTA-RLDD golden 建立目前輸出基線。
 - 保留 `gui/platforms/{windows,macos,linux}.py` 的硬體 policy；確認數值模組不依賴平台模組。
 
-### Phase 1：共用契約與平台註冊（本次開始）
+### Phase 1：共用契約與平台註冊（核心實作已完成）
 
 - 建立單一平台清單、能力名稱、runtime 類型與 artifact 類型的機械可驗證契約。
 - 將 desktop/mobile 的能力差異集中在 registry，讓啟動、測試與文件能使用同一來源。
 - 為 Windows/macOS/Linux 建立既有 runtime 的正式註冊；Android/iOS 註冊為 `planned`，直到原生 runtime 完成前明確拒絕 desktop engine 啟動。
 - 新增契約測試，確保五平台都有定義、能力名稱不漂移、數值核心不匯入平台 UI/原生 adapter。
 
-### Phase 2：桌面三平台封裝隔離（進行中）
+已完成：`gui/platforms/registry.py` 定義 Windows/macOS/Linux/Android/iOS 五平台 runtime、能力與 artifact；Android/iOS 標記 `planned`，desktop engine 啟動採 fail-closed。`tests/test_platform_runtime.py` 覆蓋五平台登錄、能力名稱與行動平台拒絕 desktop engine。Flutter 端也已建立對應的 `PlatformCapabilities` 型別與契約測試。桌面能力是否在目標設備可用，仍以 Phase 2/6 的原生驗收為準。
+
+### Phase 2：桌面三平台封裝隔離（設定與腳本已建立，原生驗收未完成）
 
 - 將 Windows NSIS、macOS App/DMG、Linux AppImage/deb（或選定的 Tauri target）分別放入平台建置設定。
 - Linux 已建立 AppImage/deb Tauri 設定與 Ubuntu 啟動/建置腳本；Linux 原生建置與安裝後 smoke 尚待目標設備驗收。
 - 每個平台原生建立 sidecar、模型資源與設定資料目錄；加入安裝後 smoke、啟動/停止/相機/解除安裝驗收。
 - macOS 作為主要開發與驗收平台，先完成相機、BLE、Overlay、休眠/喚醒與權限流程。
 
-### Phase 3：行動共用資料契約（第一批已完成）
+已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows/macOS 有既有安裝 smoke 與桌面驗證紀錄。這些設定不等於目前 checkout 已在三種作業系統各自完成新一輪建置及安裝驗收。Linux 尤其仍待 Ubuntu 目標設備原生 build、安裝後 smoke 與相機流程驗收；macOS 權限、BLE、Overlay、休眠/喚醒等項目也需依下方矩陣逐項確認。
+
+### Phase 3：行動共用資料契約（第一批已完成；plugin 接線未開始）
 
 - 將 Flutter UI 使用的 metrics、control state、錯誤碼與 recording metadata 抽成 platform-neutral Dart models。
 - 明確標示手機不提供的桌面能力（Tauri external shell、全域快捷鍵、Python sidecar、桌面 Overlay），以 capability gating 隱藏或替代 UI。
@@ -61,6 +65,8 @@ mobile shell
 目前已完成第一批共用資料契約：PlatformCapabilities 集中五平台 runtime/artifact/capability 描述，MetricsSnapshot、ControlState、RecordingMetadata 與 ApiError 保留未知欄位並提供 typed access；既有 Map<String, dynamic> Flutter API 仍保留，避免桌面 UI 行為改變。Android/iOS 入口目前採 fail-closed，因 Flutter 專案尚無 native inference runtime、camera permission adapter、model lifecycle 或 Android/iOS 原生專案，不能啟動 Python desktop engine。
 
 本批已建立 MobileRuntimeAdapter 介面，涵蓋 camera frames、permission、model lifecycle、foreground state 與 local storage；UnsupportedMobileRuntimeAdapter 在原生 plugin 尚未接入時對相機、權限、模型與儲存操作 fail-closed，不會回退到 Python desktop engine。下一批工作是分別接入 Android Kotlin 與 iOS Swift/Objective-C plugin，並以同一資料契約回傳影像與生命週期事件。
+
+目前 adapter factory 仍一律建立 `UnsupportedMobileRuntimeAdapter`；因此介面與拒絕路徑有了，平台 plugin、camera frame 串流、原生模型推論與生命週期整合仍未實作。
 
 ### Phase 4：Android 原生 runtime
 
@@ -98,3 +104,20 @@ mobile shell
 ## 交付與版本控制
 
 每一階段以獨立 commit 推送；commit 內容只包含該階段的程式、測試、文件與可重現命令。二進位安裝包不直接納入 git，改由 CI/release artifact 保存。每次交付回報修改檔案、測試命令、平台限制、數值行為影響與尚未完成項目。
+
+## 目前進度（2026-10-03）
+
+- **已完成：** Phase 0 基線與桌面平台 policy；Phase 1 五平台 registry、行動平台 fail-closed 與契約測試；Phase 3 第一批 Dart metrics/control/error/recording models 與 `MobileRuntimeAdapter` 抽象介面。既有 Flutter Map API 保留。
+- **部分完成：** Phase 2 三平台封裝設定、build/start 腳本與部分 Windows/macOS smoke 已存在；Linux 封裝設定和 Ubuntu 腳本已建立，但 Linux 原生建置及安裝驗收未完成，其他桌面平台也須按矩陣確認本輪完整驗收。
+- **未完成：** Android Kotlin 與 iOS Swift/Objective-C runtime/plugin、真實相機權限與影格、模型載入/推論、前景生命週期與裝置驗收；Phase 6 五平台 release gate。不得將 Android/iOS 標示為可運行。
+- **目前問題：** 工作樹已有未提交修改 `flutter_app/lib/models/platform_contract.dart`，為 `currentPlatformCapabilities` 增加三個必填平台參數及 unsupported-native 分支；目前 `flutter_app/lib/main.dart` 與既有契約測試呼叫尚未同步。執行 `cd flutter_app && flutter analyze` 得 9 個 missing-required-argument errors；`flutter test test/platform_contract_test.dart` 編譯失敗，錯誤相同。這是現存工作樹狀態，需在該修改完成接線後重跑。
+- **Python 驗證：** `.venv/bin/python -m pytest tests/test_platform_runtime.py tests/test_desktop_shell_config.py -q` 通過（30 passed）。Flutter 檢查仍因目前未提交的平台偵測修改與呼叫點不同步而失敗，需完成接線後重跑。
+- **數值行為影響：** 本次僅更新狀態文件，沒有修改分析公式、門檻、ROI、濾波或校準行為。
+
+### 後續工作順序
+
+1. 完成並驗證目前 Flutter 平台偵測呼叫的參數接線，再跑 `flutter analyze` 與 `flutter test test/platform_contract_test.dart`。
+2. 在 Ubuntu 完成 Linux AppImage/deb 原生建置、安裝後啟停與相機 smoke，記錄 OS/硬體/命令/結果。
+3. 依驗收矩陣補齊 Windows/macOS 本輪安裝與硬體項目紀錄，明確指出未覆蓋的設備或權限情境。
+4. 再開始 Android 原生 runtime；先落地 permission/camera/model lifecycle plugin，再依固定 replay/golden 契約比對數值並做實機驗收。
+5. iOS runtime 與 Phase 6 release gate 在 Android 契約穩定後進行；任何沒有原生 runtime、簽署或實機證據的平台維持未完成狀態。
