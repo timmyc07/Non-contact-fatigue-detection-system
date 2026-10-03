@@ -108,11 +108,11 @@ mobile shell
 ## 目前進度（2026-10-04）
 
 - **已完成：** Phase 0 基線與桌面平台 policy；Phase 1 五平台 registry、行動平台 fail-closed 與契約測試；Phase 3 第一批 Dart metrics/control/error/recording models 與 `MobileRuntimeAdapter` 抽象介面。既有 Flutter Map API 保留。
-- **已完成：** Phase 2 的三平台封裝隔離實作。Windows NSIS、macOS App/DMG、Linux AppImage/deb 的 Tauri 設定、sidecar/model/resource/data-directory 邊界、build/start 腳本與安裝 smoke 入口均已具備；新增 Linux AppImage smoke，並修正 macOS／Windows smoke 可直接以檔案路徑執行及使用指定 backend port。macOS Apple Silicon 已完成原生建置與 packaged smoke：API version `2`、camera count `1`、engine shutdown、port release 均通過。
+- **已完成：** Phase 2 的三平台封裝隔離實作。Windows NSIS、macOS App/DMG、Linux AppImage/deb 的 Tauri 設定、sidecar/model/resource/data-directory 邊界、build/start 腳本與安裝 smoke 入口均已具備；新增 Linux AppImage smoke，並修正 macOS／Windows smoke 可直接以檔案路徑執行及使用指定 backend port。macOS Apple Silicon 已完成原生建置與 packaged smoke：API version `2`、camera count `1`、engine shutdown、port release 均通過。另以內建相機完成 raw 與 combined source-engine 硬體 smoke，結果保存於 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-raw.json` 與 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-combined.json`。
 - **待外部主機驗收：** Windows NSIS 與 Linux AppImage/deb 尚未在 Windows／Ubuntu Linux 原生主機重新建置、安裝、啟動、相機、資料目錄與解除安裝；目前主機為 macOS arm64，不能以跨平台產物或 macOS 結果宣稱通過。macOS 的 BLE、Overlay、休眠/喚醒與相機權限仍屬硬體／作業系統情境測試，未納入本輪 packaged smoke。
 - **未完成：** Android Kotlin 與 iOS Swift/Objective-C runtime/plugin、真實相機權限與影格、模型載入/推論、前景生命週期與裝置驗收；Phase 6 五平台 release gate。不得將 Android/iOS 標示為可運行。
 - **目前問題：** Windows/Linux 原生驗收受限於目前工作主機沒有對應作業系統與硬體；macOS build 的 Flutter Wasm dry-run、MaterialIcons 與 notarization 會顯示非阻斷警告，正式 `.app/.dmg` 仍可建立並已通過 adhoc codesign verify。工作樹中的 `flutter_app/lib/models/platform_contract.dart` 是既有平台契約修改，本輪已補齊 `main.dart` 與契約測試的必要參數接線。
-- **Python 驗證：** Phase 2 子集 `57 passed, 2 skipped`；完整 Python 測試 `794 passed, 2 skipped`；`pip check`、受影響 scripts/gui/platforms 的 `compileall` 與 build/start shell syntax check 均通過。Flutter `analyze` 通過，Flutter `test` 共 `38 tests` 通過。
+- **Python／原生 shell 驗證：** Phase 2 子集 `57 passed, 2 skipped`；完整 Python 測試 `794 passed, 2 skipped`；`pip check`、受影響 scripts/gui/platforms 的 `compileall`、Tauri Rust `cargo test`（13 passed）、bundle JSON parse 與 build/start shell syntax check 均通過。Flutter `analyze` 通過，Flutter `test` 共 `38 tests` 通過。
 - **數值行為影響：** 本輪只調整平台偵測接線、封裝 smoke 與驗收文件，沒有修改分析公式、門檻、ROI、濾波、校準或 worker 數值路徑。
 
 ### 後續工作順序
