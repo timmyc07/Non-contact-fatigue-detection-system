@@ -8,7 +8,15 @@ void main() {
   test('desktop and mobile capabilities stay fail-closed', () {
     expect(PlatformCapabilities.macos.canStartMonitoring, isTrue);
     expect(PlatformCapabilities.macos.supports('tauri_shell'), isTrue);
+    expect(PlatformCapabilities.macos.supports('python_sidecar'), isTrue);
+    expect(PlatformCapabilities.macos.supportsAny(const [
+      PlatformCapabilityNames.globalHotkey,
+      PlatformCapabilityNames.desktopOverlay,
+    ]), isTrue);
     expect(PlatformCapabilities.android.canStartMonitoring, isFalse);
+    expect(PlatformCapabilities.android.isMobile, isTrue);
+    expect(PlatformCapabilities.android.supports('tauri_shell'), isFalse);
+    expect(PlatformCapabilities.android.supports('python_sidecar'), isFalse);
     expect(PlatformCapabilities.ios.requiresNativeRuntime, isTrue);
     expect(PlatformCapabilities.android.unavailableReason, contains('原生推論'));
   });
@@ -75,7 +83,8 @@ void main() {
 
   test('unsupported mobile runtime fails closed without desktop fallback',
       () async {
-    final adapter = createMobileRuntime(PlatformCapabilities.android);
+    final adapter =
+        UnsupportedMobileRuntimeAdapter(PlatformCapabilities.android);
     expect(adapter.isAvailable, isFalse);
     expect(adapter.platform.platform, AppPlatform.android);
     expect(adapter.modelState, ModelRuntimeState.unloaded);
@@ -110,7 +119,7 @@ void main() {
   });
 
   test('unsupported adapter still reports lifecycle state changes', () async {
-    final adapter = createMobileRuntime(PlatformCapabilities.ios);
+    final adapter = UnsupportedMobileRuntimeAdapter(PlatformCapabilities.ios);
     final states = <ForegroundState>[];
     final subscription = adapter.foregroundStates.listen(states.add);
 

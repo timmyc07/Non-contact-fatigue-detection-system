@@ -28,7 +28,18 @@ class PlatformCapabilities {
   final Set<String> capabilities;
   final List<String> artifactTypes;
 
-  bool supports(String capability) => capabilities.contains(capability);
+  bool supports(String capability) {
+    if (requiresNativeRuntime &&
+        PlatformCapabilityNames.desktopOnly.contains(capability)) {
+      return false;
+    }
+    return capabilities.contains(capability);
+  }
+
+  bool supportsAny(Iterable<String> requested) => requested.any(supports);
+
+  bool get isMobile =>
+      platform == AppPlatform.android || platform == AppPlatform.ios;
 
   bool get requiresNativeRuntime =>
       platform == AppPlatform.android || platform == AppPlatform.ios;
@@ -45,7 +56,15 @@ class PlatformCapabilities {
     status: 'available',
     desktopEngineSupported: true,
     nativeInferenceReady: true,
-    capabilities: {'camera', 'ble', 'overlay', 'tauri_shell'},
+    capabilities: {
+      'camera',
+      'ble',
+      'overlay',
+      'desktop_overlay',
+      'tauri_shell',
+      'global_hotkey',
+      'python_sidecar',
+    },
     artifactTypes: ['nsis'],
   );
 
@@ -55,7 +74,15 @@ class PlatformCapabilities {
     status: 'available',
     desktopEngineSupported: true,
     nativeInferenceReady: true,
-    capabilities: {'camera', 'ble', 'overlay', 'tauri_shell'},
+    capabilities: {
+      'camera',
+      'ble',
+      'overlay',
+      'desktop_overlay',
+      'tauri_shell',
+      'global_hotkey',
+      'python_sidecar',
+    },
     artifactTypes: ['app', 'dmg'],
   );
 
@@ -65,7 +92,13 @@ class PlatformCapabilities {
     status: 'available',
     desktopEngineSupported: true,
     nativeInferenceReady: true,
-    capabilities: {'camera', 'tauri_shell'},
+    capabilities: {
+      'camera',
+      'desktop_overlay',
+      'tauri_shell',
+      'global_hotkey',
+      'python_sidecar',
+    },
     artifactTypes: ['appimage', 'deb'],
   );
 
@@ -95,7 +128,7 @@ class PlatformCapabilities {
     status: 'available',
     desktopEngineSupported: true,
     nativeInferenceReady: false,
-    capabilities: {'camera', 'tauri_shell'},
+    capabilities: {'camera', 'desktop_overlay', 'tauri_shell'},
     artifactTypes: [],
   );
 
@@ -127,6 +160,23 @@ class PlatformCapabilities {
         return unsupportedNative;
     }
   }
+}
+
+/// Capability names that can only be provided by the desktop shell.
+class PlatformCapabilityNames {
+  const PlatformCapabilityNames._();
+
+  static const tauriShell = 'tauri_shell';
+  static const globalHotkey = 'global_hotkey';
+  static const pythonSidecar = 'python_sidecar';
+  static const desktopOverlay = 'desktop_overlay';
+
+  static const desktopOnly = <String>{
+    tauriShell,
+    globalHotkey,
+    pythonSidecar,
+    desktopOverlay,
+  };
 }
 
 PlatformCapabilities currentPlatformCapabilities({

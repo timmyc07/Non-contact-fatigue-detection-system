@@ -10,3 +10,23 @@ This directory is the new presentation layer. It runs as Flutter Web inside the 
 4. For browser-only work, start `.venv\Scripts\python main.py --engine` separately, then use `flutter run -d chrome`.
 
 The browser build keeps the same layout and uses the HTTP snapshot fallback when Socket.IO is unavailable. Inside Tauri, `lib/services/tauri_bridge.dart` calls `window.__TAURI__.core.invoke`.
+
+## Phase 3 mobile runtime boundary
+
+The shared mobile contract lives in
+`lib/models/mobile_runtime_contract.dart`. `MobileRuntimeChannelAdapter` uses:
+
+- Method channel: `tw.fatigue_monitor/mobile_runtime`
+- Event channel: `tw.fatigue_monitor/mobile_runtime/events`
+- Methods for permission, camera lifecycle, model lifecycle, foreground state,
+  and local string storage
+- Typed camera frame events with width, height, pixel format, and monotonic
+  microsecond timestamps
+
+`createMobileRuntime` selects this channel adapter only for Android/iOS. Desktop
+and unsupported platforms keep the fail-closed adapter and never fall back to
+the Python desktop engine. The matching Kotlin and Swift channel stubs are in
+`native/mobile_runtime/`; they expose lifecycle/storage transport while
+returning `runtime_unavailable` for camera, permission, and inference until
+Phases 4 and 5 implement the native runtimes. Android/iOS are therefore not
+declared runnable by the current app.
