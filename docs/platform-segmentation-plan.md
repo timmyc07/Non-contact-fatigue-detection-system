@@ -56,13 +56,13 @@ mobile shell
 
 已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows、macOS、Linux 各有對應的安裝 smoke 入口。macOS 已在本機 Apple Silicon 完成 PyInstaller sidecar、Flutter Web release、Tauri `.app/.dmg` 建置，並通過 bundle codesign 檢查與 API v2／相機列舉／`app.shutdown`／非預設埠 smoke。Linux smoke 支援 `APPIMAGE_EXTRACT_AND_RUN=1`，可在沒有 FUSE 的 runner 執行；Windows smoke 維持隔離安裝、主視窗、engine shutdown 與解除安裝檢查。`scripts/desktop_hardware_smoke.py` 現在也可直接以檔案路徑執行，raw 與 combined 相機驗收命令已在 macOS 重新跑通。Phase 2 在目前 macOS 主機可執行的實作與驗收已完工；Windows/Linux 的新一輪原生 build、安裝與相機流程仍必須在各自目標主機完成，不能由 macOS 結果代替。
 
-### Phase 3：行動共用資料契約（契約與 channel layer 已完成；原生推論待 Phase 4/5）
+### Phase 3：行動共用資料契約（已完成；原生推論待 Phase 4/5）
 
 - 將 Flutter UI 使用的 metrics、control state、錯誤碼與 recording metadata 抽成 platform-neutral Dart models。
 - 明確標示手機不提供的桌面能力（Tauri external shell、全域快捷鍵、Python sidecar、桌面 Overlay），以 capability gating 隱藏或替代 UI。
 - 建立 Android/iOS plugin interface：camera frames、permission、model lifecycle、foreground state、local storage。
 
-本階段已完成共用資料契約：`PlatformCapabilities` 集中五平台 runtime/artifact/capability 描述，`MetricsSnapshot`、`ControlState`、`RecordingMetadata` 與 `ApiError` 保留未知欄位並提供 typed access；既有 `Map<String, dynamic>` Flutter API 仍保留，避免桌面 UI 行為改變。桌面專屬能力（`tauri_shell`、`global_hotkey`、`python_sidecar`、`desktop_overlay`）集中在 capability registry，行動平台自動 gating。
+本階段已完成共用資料契約：`PlatformCapabilities` 集中五平台 runtime/artifact/capability 描述，`MetricsSnapshot`、`ControlState`、`RecordingMetadata` 與 `ApiError` 保留未知欄位並提供 typed access；結構化錯誤對 malformed 欄位採 fail-closed，仍可 lossless 重序列化；既有 `Map<String, dynamic>` Flutter API 仍保留，避免桌面 UI 行為改變。桌面專屬能力（`tauri_shell`、`global_hotkey`、`python_sidecar`、`desktop_overlay`）集中在 capability registry，行動平台自動 gating。
 
 `MobileRuntimeChannelAdapter` 已以 `MethodChannel`/`EventChannel` 接上 permission、camera start/stop、model load/unload、foreground state、local storage 與 camera frame metadata；channel 名稱、method/event 名稱與 enum 序列化集中在 `MobileRuntimeChannelContract`。`createMobileRuntime` 只對 Android/iOS 建立 channel adapter，desktop/unsupported platform 維持 `UnsupportedMobileRuntimeAdapter`，plugin 缺失或 native 回報 unavailable 時 fail-closed，絕不回退到 Python desktop engine。
 
@@ -107,13 +107,13 @@ mobile shell
 
 ## 目前進度（2026-10-04）
 
-- **已完成：** Phase 0 基線與桌面平台 policy；Phase 1 五平台 registry、行動平台 fail-closed 與契約測試；Phase 3 共用 Dart models、capability gating、`MobileRuntimeAdapter`、`MethodChannel`/`EventChannel` adapter 與 Android Kotlin/iOS Swift channel stub。既有 Flutter Map API 保留。
+- **已完成：** Phase 0 基線與桌面平台 policy；Phase 1 五平台 registry、行動平台 fail-closed 與契約測試；Phase 3 共用 Dart models、capability gating、`MobileRuntimeAdapter`、`MethodChannel`/`EventChannel` adapter 與 Android Kotlin/iOS Swift channel stub。`ApiError` 也已完成未知欄位保留、typed parsing 與 lossless `toJson()`；既有 Flutter Map API 保留。
 - **已完成：** Phase 2 的三平台封裝隔離實作與本機 macOS 驗證。Windows NSIS、macOS App/DMG、Linux AppImage/deb 的 Tauri 設定、sidecar/model/resource/data-directory 邊界、build/start 腳本與安裝 smoke 入口均已具備；新增 Linux AppImage smoke，並修正 macOS／Windows／硬體 smoke 可直接以檔案路徑執行及使用指定 backend port。2026-10-04 在 macOS Apple Silicon 重新完成 sidecar、Flutter Web release、Tauri `.app/.dmg` 原生建置；packaged smoke 通過 API version `2`、camera count `1`、raw camera pipeline start/metrics/stop、app data directory 建立、engine shutdown、backend port release 與 shell exit code `0`，bundle 也通過 `codesign --verify --deep --strict`，DMG 通過 `hdiutil imageinfo` 檢查。內建相機 raw 與 combined source-engine smoke 均通過，兩份結果保存於 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-raw.json` 與 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-combined.json`。
 - **待外部主機驗收：** Windows NSIS 與 Linux AppImage/deb 尚未在 Windows／Ubuntu Linux 原生主機重新建置、安裝、啟動、相機、資料目錄與解除安裝；目前主機為 macOS arm64，不能以跨平台產物或 macOS 結果宣稱通過。macOS 的 BLE、Overlay、休眠/喚醒與相機權限仍屬硬體／作業系統情境測試，未納入本輪 packaged smoke。
 - **未完成：** Android/iOS 真實相機權限與影格串流、MediaPipe/model inference、原生 app runner 建置簽署與裝置驗收；Phase 6 五平台 release gate。不得將 Android/iOS 標示為可運行。
 - **目前問題：** Windows/Linux 原生驗收受限於目前工作主機沒有對應作業系統與硬體；macOS build 的 Flutter Wasm dry-run、MaterialIcons 與 notarization 會顯示非阻斷警告，正式 `.app/.dmg` 仍可建立並已通過 adhoc codesign verify。Phase 3 的原生 stub 尚未接入可簽署的 Android/iOS runner，且明確以 `runtime_unavailable` 阻止誤啟動；這些是 Phase 4/5 的預定工作，不是 desktop fallback。
-- **Python／原生 shell／Flutter 驗證：** Phase 2 子集 `58 passed`（平台設定、硬體 smoke 與安裝 smoke）；完整 Python 測試 `800 passed, 2 skipped`；受影響 scripts/gui/platforms 的 `compileall`、`pip check`、bundle JSON parse、build/start shell syntax check 均通過。Tauri Rust `cargo test` 為 `13 passed`；Flutter `analyze` 通過，Phase 3 契約測試 `11 passed`，完整 Flutter `test` 為 `43 passed`，`flutter build web --no-pub` 成功（Wasm dry-run/MaterialIcons 警告仍為非阻斷）；macOS packaged smoke、raw/combined 相機 hardware smoke 與 `codesign --verify --deep --strict --verbose=2` 均通過。
-- **本輪修正：** 完成 macOS packaged smoke 的 shell exit 驗收；backend port 釋放後會要求 bundle quit 並等待 process 結束，避免 shell 殘留造成誤判，並新增回歸測試。既有 `MobileRuntimeChannelAdapter`、共用 channel/enum/frame payload 契約、desktop-only capability gating、Android Kotlin/iOS Swift channel stub 與 method/event/storage/lifecycle 契約測試維持通過。
+- **Python／原生 shell／Flutter 驗證：** Phase 2 子集 `58 passed`（平台設定、硬體 smoke 與安裝 smoke）；完整 Python 測試 `800 passed, 2 skipped`；受影響 scripts/gui/platforms 的 `compileall`、`pip check`、bundle JSON parse、build/start shell syntax check 均通過。Tauri Rust `cargo test` 為 `13 passed`；Flutter `analyze` 通過，Phase 3 契約測試 `13 passed`，完整 Flutter `test` 為 `44 passed`，`flutter build web --no-pub` 成功（Wasm dry-run/MaterialIcons 警告仍為非阻斷）；macOS packaged smoke、raw/combined 相機 hardware smoke 與 `codesign --verify --deep --strict --verbose=2` 均通過。
+- **本輪修正：** 完成 macOS packaged smoke 的 shell exit 驗收；backend port 釋放後會要求 bundle quit 並等待 process 結束，避免 shell 殘留造成誤判，並新增回歸測試。Phase 3 補強 `ApiError` 未知欄位保存、malformed 欄位 fail-closed 與 `toJson()` round-trip，既有 `MobileRuntimeChannelAdapter`、共用 channel/enum/frame payload 契約、desktop-only capability gating、Android Kotlin/iOS Swift channel stub 與 method/event/storage/lifecycle 契約測試維持通過。
 - **數值行為影響：** 本輪只新增平台資料契約、plugin channel 邊界、能力 gating 與測試，沒有修改分析公式、門檻、ROI、濾波、校準或 worker 數值路徑。
 
 ### 後續工作順序

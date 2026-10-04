@@ -9,10 +9,12 @@ void main() {
     expect(PlatformCapabilities.macos.canStartMonitoring, isTrue);
     expect(PlatformCapabilities.macos.supports('tauri_shell'), isTrue);
     expect(PlatformCapabilities.macos.supports('python_sidecar'), isTrue);
-    expect(PlatformCapabilities.macos.supportsAny(const [
-      PlatformCapabilityNames.globalHotkey,
-      PlatformCapabilityNames.desktopOverlay,
-    ]), isTrue);
+    expect(
+        PlatformCapabilities.macos.supportsAny(const [
+          PlatformCapabilityNames.globalHotkey,
+          PlatformCapabilityNames.desktopOverlay,
+        ]),
+        isTrue);
     expect(PlatformCapabilities.android.canStartMonitoring, isFalse);
     expect(PlatformCapabilities.android.isMobile, isTrue);
     expect(PlatformCapabilities.android.supports('tauri_shell'), isFalse);
@@ -69,7 +71,12 @@ void main() {
   test('structured and legacy errors share one contract', () {
     final structured = ApiError.fromPayload(
       const {
-        'error': {'code': 'invalid_settings', 'message': 'Bad value'}
+        'error': {
+          'code': 'invalid_settings',
+          'message': 'Bad value',
+          'field': 'volume',
+          'future_hint': {'retryable': true},
+        }
       },
       400,
     );
@@ -77,8 +84,37 @@ void main() {
         ApiError.fromPayload(const {'error': 'Engine is starting.'}, 503);
     expect(structured.code, 'invalid_settings');
     expect(structured.message, 'Bad value');
+    expect(structured.field, 'volume');
+    expect(structured['future_hint'], <String, dynamic>{'retryable': true});
+    expect(structured.toJson()['future_hint'],
+        <String, dynamic>{'retryable': true});
     expect(legacy.code, 'http_503');
     expect(legacy.message, 'Engine is starting.');
+  });
+
+  test('malformed structured error fields fail closed without throwing', () {
+    final error = ApiError.fromPayload(
+      const {
+        'error': {
+          'code': 123,
+          'message': 'Bad value',
+          'field': 456,
+          'path': false,
+          'future': 'preserved',
+        },
+      },
+      422,
+    );
+
+    expect(error.code, 'http_422');
+    expect(error.field, isNull);
+    expect(error.path, isNull);
+    expect(error['future'], 'preserved');
+    expect(error.toJson(), {
+      'code': 'http_422',
+      'message': 'Bad value',
+      'future': 'preserved',
+    });
   });
 
   test('unsupported mobile runtime fails closed without desktop fallback',

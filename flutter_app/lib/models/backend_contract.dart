@@ -68,32 +68,72 @@ class ApiError {
     required this.message,
     this.field,
     this.path,
-  });
+  }) : values = const <String, dynamic>{};
+
+  ApiError._({
+    required this.code,
+    required this.message,
+    required Map<String, dynamic> values,
+    this.field,
+    this.path,
+  }) : values = Map<String, dynamic>.unmodifiable(values);
 
   final String code;
   final String message;
   final String? field;
   final String? path;
+  final Map<String, dynamic> values;
+
+  dynamic operator [](String key) => values[key];
+
+  /// Re-serializes the structured error without dropping newer backend fields.
+  Map<String, dynamic> toJson() {
+    final result = Map<String, dynamic>.from(values);
+    result['code'] = code;
+    result['message'] = message;
+    if (field == null) {
+      result.remove('field');
+    } else {
+      result['field'] = field;
+    }
+    if (path == null) {
+      result.remove('path');
+    } else {
+      result['path'] = path;
+    }
+    return result;
+  }
 
   factory ApiError.fromPayload(dynamic payload, int statusCode) {
     final raw = payload is Map ? payload['error'] : null;
     if (raw is Map) {
-      return ApiError(
-        code:
-            raw['code'] is String ? raw['code'] as String : 'http_$statusCode',
-        message: raw['message'] is String
-            ? raw['message'] as String
+      final values = <String, dynamic>{};
+      raw.forEach((key, value) {
+        if (key is String) values[key] = value;
+      });
+      return ApiError._(
+        code: values['code'] is String
+            ? values['code'] as String
+            : 'http_$statusCode',
+        message: values['message'] is String
+            ? values['message'] as String
             : 'Backend returned HTTP $statusCode.',
-        field: raw['field'] as String?,
-        path: raw['path'] as String?,
+        field: values['field'] is String ? values['field'] as String : null,
+        path: values['path'] is String ? values['path'] as String : null,
+        values: values,
       );
     }
     if (raw is String && raw.isNotEmpty) {
-      return ApiError(code: 'http_$statusCode', message: raw);
+      return ApiError._(
+        code: 'http_$statusCode',
+        message: raw,
+        values: <String, dynamic>{},
+      );
     }
-    return ApiError(
+    return ApiError._(
       code: 'http_$statusCode',
       message: 'Backend returned HTTP $statusCode.',
+      values: <String, dynamic>{},
     );
   }
 }
