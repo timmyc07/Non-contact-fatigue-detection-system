@@ -30,3 +30,9 @@ the Python desktop engine. The matching Kotlin and Swift channel stubs are in
 returning `runtime_unavailable` for camera, permission, and inference until
 Phases 4 and 5 implement the native runtimes. Android/iOS are therefore not
 declared runnable by the current app.
+
+The Android runner scaffold compiles the canonical Kotlin stub through its
+Gradle main source set and registers it from `MainActivity`. This makes the
+Phase 3 channels reachable in an Android runner while preserving the
+fail-closed behavior; it does not add camera, permission, or inference support.
+An Android SDK and Java runtime are required to build the APK.

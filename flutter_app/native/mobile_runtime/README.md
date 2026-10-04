@@ -14,7 +14,8 @@ boundary is testable. Camera capture, permission requests, and model loading
 return `runtime_unavailable` until the Android/iOS native runtimes are built in
 Phases 4 and 5. They do not invoke or bundle the desktop Python engine.
 
-The current Flutter checkout is a Web/Tauri presentation project, so these
-files are intentionally kept as plugin source for registration by the future
-native runners. Creating signed Android/iOS applications and performing device
-camera/inference validation remains outside Phase 3.
+The Android runner compiles the canonical Kotlin source from this directory and
+registers `MobileRuntimePlugin` in `MainActivity`. The iOS Swift stub remains
+plugin source for a future iOS runner. Creating signed Android/iOS releases and
+performing device camera/inference validation remains outside Phase 3; the
+Android runner can only expose the existing fail-closed Phase 3 contract.
