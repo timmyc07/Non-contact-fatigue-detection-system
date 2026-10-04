@@ -2,21 +2,21 @@
   "schema_version": 1,
   "kind": "desktop_hardware_smoke",
   "platform": "darwin",
-  "api_ready_ms": 2624.222,
+  "api_ready_ms": 2887.907,
   "analysis": {
     "mode": "raw",
     "behavior_enabled": false,
     "rppg_enabled": false
   },
   "camera": {
-    "requested_index": null,
+    "requested_index": 0,
     "index": 0,
     "label": "[0] Camera 0",
     "selected_index": 0,
     "codec": "ŸŸŸŸ",
-    "width": 1280,
-    "height": 720,
-    "fps": 30.0,
+    "width": 1920,
+    "height": 1080,
+    "fps": 15.0,
     "frame_source": "camera"
   },
   "checks": {
