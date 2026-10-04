@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from scripts import installed_desktop_smoke_macos as macos_smoke
+from scripts import installed_desktop_smoke_linux as linux_smoke
+from scripts import installed_desktop_smoke as windows_smoke
 from scripts.installed_desktop_smoke import _select_main_windows
 
 
@@ -108,3 +110,18 @@ def test_macos_packaged_smoke_requires_live_raw_camera_metrics(
     metrics: dict[str, object], expected: bool
 ) -> None:
     assert macos_smoke._camera_metrics_ready(metrics) is expected
+
+
+@pytest.mark.parametrize("smoke", [linux_smoke, windows_smoke])
+@pytest.mark.parametrize(
+    ("metrics", "expected"),
+    [
+        ({"camera_running": True, "fps": 30, "camera_width": 1280, "camera_height": 720, "frame_source": "camera"}, True),
+        ({"camera_running": False, "fps": 30, "camera_width": 1280, "camera_height": 720, "frame_source": "camera"}, False),
+        ({"camera_running": True, "fps": 30, "camera_width": 1280, "camera_height": 720, "frame_source": "combined"}, False),
+    ],
+)
+def test_installed_smokes_require_live_raw_camera_metrics(
+    smoke, metrics: dict[str, object], expected: bool
+) -> None:
+    assert smoke._camera_metrics_ready(metrics) is expected

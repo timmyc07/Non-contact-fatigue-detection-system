@@ -47,14 +47,14 @@ mobile shell
 
 已完成：`gui/platforms/registry.py` 定義 Windows/macOS/Linux/Android/iOS 五平台 runtime、能力與 artifact；Android/iOS 標記 `planned`，desktop engine 啟動採 fail-closed。`tests/test_platform_runtime.py` 覆蓋五平台登錄、能力名稱與行動平台拒絕 desktop engine。Flutter 端也已建立對應的 `PlatformCapabilities` 型別與契約測試。桌面能力是否在目標設備可用，仍以 Phase 2/6 的原生驗收為準。
 
-### Phase 2：桌面三平台封裝隔離（本地主機驗證完成；跨平台原生驗收待對應主機）
+### Phase 2：桌面三平台封裝隔離（封裝實作完成；跨平台原生驗收待對應主機）
 
 - 將 Windows NSIS、macOS App/DMG、Linux AppImage/deb（或選定的 Tauri target）分別放入平台建置設定。
 - Linux 已建立 AppImage/deb Tauri 設定、Ubuntu 啟動/建置腳本與 AppImage 安裝後 smoke；Linux 原生建置、安裝後 smoke 與相機流程仍待目標設備驗收。
-- 每個平台原生建立 sidecar、模型資源與設定資料目錄；加入安裝後 smoke、啟動/停止/相機/解除安裝驗收。
+- 每個平台原生建立 sidecar、模型資源與設定資料目錄；安裝後 smoke 已涵蓋啟動、相機選取、live metrics、停止與（Windows）解除安裝驗收。
 - macOS 作為主要開發與驗收平台，本輪已完成相機與封裝生命週期驗證；BLE、Overlay、休眠/喚醒與權限流程仍待對應硬體／作業系統情境驗收。
 
-已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows、macOS、Linux 各有對應的安裝 smoke 入口。macOS 已在本機 Apple Silicon 完成 PyInstaller sidecar、Flutter Web release、Tauri `.app/.dmg` 建置，並通過 bundle codesign 檢查與 API v2／相機列舉／`app.shutdown`／非預設埠 smoke。Linux smoke 支援 `APPIMAGE_EXTRACT_AND_RUN=1`，可在沒有 FUSE 的 runner 執行；Windows smoke 維持隔離安裝、主視窗、engine shutdown 與解除安裝檢查。`scripts/desktop_hardware_smoke.py` 現在也可直接以檔案路徑執行，raw 與 combined 相機驗收命令已在 macOS 重新跑通。Phase 2 在目前 macOS 主機可執行的實作與驗收已完工；Windows/Linux 的新一輪原生 build、安裝與相機流程仍必須在各自目標主機完成，不能由 macOS 結果代替。
+已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows、macOS、Linux 各有對應的安裝 smoke 入口。三個安裝 smoke 現在都驗證 API v2、相機選取、raw camera pipeline 的 live metrics 與停止；Windows 額外驗證隔離安裝、主視窗與靜默解除安裝，Linux 支援 `APPIMAGE_EXTRACT_AND_RUN=1` 並驗證 Tauri data directory。macOS 已在本機 Apple Silicon 完成 PyInstaller sidecar、Flutter Web release、Tauri `.app/.dmg` 建置，並通過 bundle codesign 檢查與 API v2／相機列舉／`app.shutdown`／非預設埠 smoke。`scripts/desktop_hardware_smoke.py` 現在也可直接以檔案路徑執行，raw 與 combined 相機驗收命令已在 macOS 重新跑通。Phase 2 的封裝實作與目前 macOS 可執行的驗收已完工；Windows/Linux 的新一輪原生 build、安裝與相機流程仍必須在各自目標主機完成，不能由 macOS 結果代替。
 
 ### Phase 3：行動共用資料契約（已完成；原生推論待 Phase 4/5）
 
@@ -112,8 +112,8 @@ mobile shell
 - **待外部主機驗收：** Windows NSIS 與 Linux AppImage/deb 尚未在 Windows／Ubuntu Linux 原生主機重新建置、安裝、啟動、相機、資料目錄與解除安裝；目前主機為 macOS arm64，不能以跨平台產物或 macOS 結果宣稱通過。macOS 的 BLE、Overlay、休眠/喚醒與相機權限仍屬硬體／作業系統情境測試，未納入本輪 packaged smoke。
 - **未完成：** Android/iOS 真實相機權限與影格串流、MediaPipe/model inference、原生 app runner 建置簽署與裝置驗收；Phase 6 五平台 release gate。不得將 Android/iOS 標示為可運行。
 - **目前問題：** Windows/Linux 原生驗收受限於目前工作主機沒有對應作業系統與硬體；macOS build 的 Flutter Wasm dry-run、MaterialIcons 與 notarization 會顯示非阻斷警告，正式 `.app/.dmg` 仍可建立並已通過 adhoc codesign verify。Phase 3 的原生 stub 尚未接入可簽署的 Android/iOS runner，且明確以 `runtime_unavailable` 阻止誤啟動；這些是 Phase 4/5 的預定工作，不是 desktop fallback。
-- **本輪實際驗證：** Phase 2 測試子集 `58 passed`；受影響 scripts/gui/platforms 的 `compileall`、`pip check`、四份 bundle JSON parse、build/start shell syntax check 均通過；Tauri Rust `cargo test` 為 `13 passed`。macOS packaged smoke 通過 API version `2`、camera count `1`、raw camera pipeline start/metrics/stop、data directory、engine shutdown、backend port release 與 shell exit code `0`；`codesign --verify --deep --strict` 與 `hdiutil imageinfo` 亦通過。source-engine raw 與 combined 相機 smoke 均通過，結果更新於 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-raw.json` 與 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-combined.json`。
-- **本輪更新：** 只更新 Phase 2 的 macOS smoke 證據與計畫進度，沒有新增跨平台數值邏輯，也沒有開始 Phase 4。Android/iOS channel stub、原生 runtime 與行動平台工作維持原狀，避免把未完成的行動能力混入 Phase 2 完工判定。
+- **本輪實際驗證：** Phase 2 相關測試 `90 passed, 2 skipped`，完整 Python 測試 `806 passed, 2 skipped`；受影響 scripts/gui/platforms 的 `compileall`、`pip check`、四份 bundle JSON parse、build/start shell syntax check 均通過；Tauri Rust `cargo test` 為 `13 passed`。macOS packaged smoke 通過 API version `2`、camera count `1`、raw camera pipeline start/metrics/stop、data directory、engine shutdown、backend port release 與 shell exit code `0`；`codesign --verify --deep --strict` 與 `hdiutil imageinfo` 亦通過。source-engine raw 與 combined 相機 smoke 均通過，結果更新於 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-raw.json` 與 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-combined.json`。
+- **本輪更新：** 補齊 Windows 與 Linux 安裝 smoke 的相機選取、analysis 設定、live metrics、pipeline stop 檢查；Linux 同步驗證 Tauri data directory。新增與更新的 Phase 2 相關測試共 `90 passed, 2 skipped`，沒有新增跨平台數值邏輯，也沒有開始 Phase 4。Android/iOS channel stub、原生 runtime 與行動平台工作維持原狀，避免把未完成的行動能力混入 Phase 2 完工判定。
 - **數值行為影響：** 本輪只更新驗收紀錄與文件，沒有修改分析公式、門檻、ROI、濾波、校準或 worker 數值路徑。
 
 ### 後續工作順序

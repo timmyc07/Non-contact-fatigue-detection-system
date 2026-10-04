@@ -40,6 +40,38 @@ def _wait_for_state(
     raise TimeoutError(f"desktop API did not become ready within {timeout:.1f}s")
 
 
+def _desktop_command(port: int, command: str, args: dict[str, object]) -> dict[str, object]:
+    response = request_json(
+        "POST",
+        "/api/control/command",
+        host="127.0.0.1",
+        port=port,
+        body={"command": command, "args": args},
+        timeout=5.0,
+    )
+    if not response.get("success"):
+        raise RuntimeError(f"desktop command failed ({command}): {response}")
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"desktop command returned invalid data ({command}): {response}")
+    return data
+
+
+def _camera_metrics_ready(metrics: object) -> bool:
+    if not isinstance(metrics, dict):
+        return False
+    try:
+        return (
+            bool(metrics.get("camera_running"))
+            and float(metrics.get("fps", 0.0)) > 0.0
+            and int(metrics.get("camera_width", 0)) > 0
+            and int(metrics.get("camera_height", 0)) > 0
+            and metrics.get("frame_source") == "camera"
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _windows_for_pid(pid: int) -> list[dict[str, Any]]:
     user32 = ctypes.windll.user32
     entries: list[dict[str, Any]] = []
@@ -149,7 +181,46 @@ def run_smoke(
         )
         try:
             state = _wait_for_state(port=port, process=shell, timeout=timeout)
-            time.sleep(2.0)
+            cameras = state.get("cameras")
+            if not isinstance(cameras, list) or not cameras:
+                raise RuntimeError("installed desktop API reported no camera")
+            camera = cameras[0]
+            if not isinstance(camera, dict) or not isinstance(camera.get("index"), int):
+                raise RuntimeError(f"installed desktop API returned invalid camera: {camera}")
+            selected = _desktop_command(port, "camera.select", {"index": camera["index"]})
+            configured = _desktop_command(
+                port,
+                "analysis.configure",
+                {"behavior_enabled": False, "rppg_enabled": False},
+            )
+            started_pipeline = _desktop_command(port, "pipeline.set", {"enabled": True})
+            metrics: dict[str, object] | None = None
+            metrics_deadline = time.monotonic() + timeout
+            while time.monotonic() < metrics_deadline:
+                candidate = request_json(
+                    "GET", "/api/metrics", host="127.0.0.1", port=port, timeout=2.0
+                ).get("metrics")
+                if _camera_metrics_ready(candidate):
+                    metrics = candidate
+                    break
+                time.sleep(0.2)
+            if metrics is None:
+                raise TimeoutError("installed camera pipeline produced no live metrics")
+            stopped_pipeline = _desktop_command(port, "pipeline.set", {"enabled": False})
+            camera_checks = {
+                "selected_index": selected.get("selected_camera_index"),
+                "analysis_configured": (
+                    configured.get("behavior_enabled") is False
+                    and configured.get("rppg_enabled") is False
+                ),
+                "pipeline_started": started_pipeline.get("pipeline_running") is True,
+                "camera_metrics_ready": _camera_metrics_ready(metrics),
+                "pipeline_stopped": stopped_pipeline.get("pipeline_running") is False,
+                "frame_source": metrics.get("frame_source"),
+                "width": metrics.get("camera_width"),
+                "height": metrics.get("camera_height"),
+                "fps": metrics.get("fps"),
+            }
             shutdown = request_json(
                 "POST",
                 "/api/control/command",
@@ -205,6 +276,8 @@ def run_smoke(
         return {
             "install_exit_code": install_result.returncode,
             "desktop_api_version": state["desktop_api_version"],
+            "camera_count": len(state.get("cameras", [])),
+            "camera_pipeline": camera_checks,
             "visible_tauri_window_count": len(visible_windows),
             "main_window_title": visible_windows[0]["title"],
             "main_window_class": visible_windows[0]["class_name"],
