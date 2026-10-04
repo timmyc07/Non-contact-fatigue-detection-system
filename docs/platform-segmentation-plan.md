@@ -47,14 +47,14 @@ mobile shell
 
 已完成：`gui/platforms/registry.py` 定義 Windows/macOS/Linux/Android/iOS 五平台 runtime、能力與 artifact；Android/iOS 標記 `planned`，desktop engine 啟動採 fail-closed。`tests/test_platform_runtime.py` 覆蓋五平台登錄、能力名稱與行動平台拒絕 desktop engine。Flutter 端也已建立對應的 `PlatformCapabilities` 型別與契約測試。桌面能力是否在目標設備可用，仍以 Phase 2/6 的原生驗收為準。
 
-### Phase 2：桌面三平台封裝隔離（實作完成；Windows/Linux 原生驗收待對應主機）
+### Phase 2：桌面三平台封裝隔離（本機可驗證項目完成；跨平台原生驗收待對應主機）
 
 - 將 Windows NSIS、macOS App/DMG、Linux AppImage/deb（或選定的 Tauri target）分別放入平台建置設定。
 - Linux 已建立 AppImage/deb Tauri 設定、Ubuntu 啟動/建置腳本與 AppImage 安裝後 smoke；Linux 原生建置、安裝後 smoke 與相機流程仍待目標設備驗收。
 - 每個平台原生建立 sidecar、模型資源與設定資料目錄；加入安裝後 smoke、啟動/停止/相機/解除安裝驗收。
 - macOS 作為主要開發與驗收平台，先完成相機、BLE、Overlay、休眠/喚醒與權限流程。
 
-已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows、macOS、Linux 各有對應的安裝 smoke 入口。macOS 已在本機 Apple Silicon 完成 PyInstaller sidecar、Flutter Web release、Tauri `.app/.dmg` 建置，並通過 bundle codesign 檢查與 API v2／相機列舉／`app.shutdown`／非預設埠 smoke。Linux smoke 支援 `APPIMAGE_EXTRACT_AND_RUN=1`，可在沒有 FUSE 的 runner 執行；Windows smoke 仍維持隔離安裝、主視窗、engine shutdown 與解除安裝檢查。Windows/Linux 的新一輪原生 build、安裝與相機流程必須在各自目標主機完成，不能由 macOS 結果代替。
+已具備 Windows NSIS、macOS App/DMG、Linux AppImage/deb 的平台 Tauri 設定與各平台 sidecar/build 啟動流程；Windows、macOS、Linux 各有對應的安裝 smoke 入口。macOS 已在本機 Apple Silicon 完成 PyInstaller sidecar、Flutter Web release、Tauri `.app/.dmg` 建置，並通過 bundle codesign 檢查與 API v2／相機列舉／`app.shutdown`／非預設埠 smoke。Linux smoke 支援 `APPIMAGE_EXTRACT_AND_RUN=1`，可在沒有 FUSE 的 runner 執行；Windows smoke 維持隔離安裝、主視窗、engine shutdown 與解除安裝檢查。`scripts/desktop_hardware_smoke.py` 現在也可直接以檔案路徑執行，raw 與 combined 相機驗收命令已在 macOS 重新跑通。Windows/Linux 的新一輪原生 build、安裝與相機流程仍必須在各自目標主機完成，不能由 macOS 結果代替。
 
 ### Phase 3：行動共用資料契約（第一批已完成；plugin 接線未開始）
 
@@ -108,12 +108,13 @@ mobile shell
 ## 目前進度（2026-10-04）
 
 - **已完成：** Phase 0 基線與桌面平台 policy；Phase 1 五平台 registry、行動平台 fail-closed 與契約測試；Phase 3 第一批 Dart metrics/control/error/recording models 與 `MobileRuntimeAdapter` 抽象介面。既有 Flutter Map API 保留。
-- **已完成：** Phase 2 的三平台封裝隔離實作。Windows NSIS、macOS App/DMG、Linux AppImage/deb 的 Tauri 設定、sidecar/model/resource/data-directory 邊界、build/start 腳本與安裝 smoke 入口均已具備；新增 Linux AppImage smoke，並修正 macOS／Windows smoke 可直接以檔案路徑執行及使用指定 backend port。macOS Apple Silicon 已完成原生建置與 packaged smoke：API version `2`、camera count `1`、engine shutdown、port release 均通過。另以內建相機完成 raw 與 combined source-engine 硬體 smoke，結果保存於 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-raw.json` 與 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-combined.json`。
+- **已完成：** Phase 2 的三平台封裝隔離實作與本機 macOS 驗證。Windows NSIS、macOS App/DMG、Linux AppImage/deb 的 Tauri 設定、sidecar/model/resource/data-directory 邊界、build/start 腳本與安裝 smoke 入口均已具備；新增 Linux AppImage smoke，並修正 macOS／Windows／硬體 smoke 可直接以檔案路徑執行及使用指定 backend port。2026-10-04 在 macOS Apple Silicon 重新完成 sidecar、Flutter Web release、Tauri `.app/.dmg` 原生建置；packaged smoke 通過 API version `2`、camera count `1`、engine shutdown、port release，bundle 也通過 `codesign --verify --deep --strict`。內建相機 raw 與 combined source-engine smoke 均通過，兩份結果保存於 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-raw.json` 與 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-combined.json`。
 - **待外部主機驗收：** Windows NSIS 與 Linux AppImage/deb 尚未在 Windows／Ubuntu Linux 原生主機重新建置、安裝、啟動、相機、資料目錄與解除安裝；目前主機為 macOS arm64，不能以跨平台產物或 macOS 結果宣稱通過。macOS 的 BLE、Overlay、休眠/喚醒與相機權限仍屬硬體／作業系統情境測試，未納入本輪 packaged smoke。
 - **未完成：** Android Kotlin 與 iOS Swift/Objective-C runtime/plugin、真實相機權限與影格、模型載入/推論、前景生命週期與裝置驗收；Phase 6 五平台 release gate。不得將 Android/iOS 標示為可運行。
-- **目前問題：** Windows/Linux 原生驗收受限於目前工作主機沒有對應作業系統與硬體；macOS build 的 Flutter Wasm dry-run、MaterialIcons 與 notarization 會顯示非阻斷警告，正式 `.app/.dmg` 仍可建立並已通過 adhoc codesign verify。工作樹中的 `flutter_app/lib/models/platform_contract.dart` 是既有平台契約修改，本輪已補齊 `main.dart` 與契約測試的必要參數接線。
-- **Python／原生 shell 驗證：** Phase 2 子集 `57 passed, 2 skipped`；完整 Python 測試 `794 passed, 2 skipped`；`pip check`、受影響 scripts/gui/platforms 的 `compileall`、Tauri Rust `cargo test`（13 passed）、bundle JSON parse 與 build/start shell syntax check 均通過。Flutter `analyze` 通過，Flutter `test` 共 `38 tests` 通過。
-- **數值行為影響：** 本輪只調整平台偵測接線、封裝 smoke 與驗收文件，沒有修改分析公式、門檻、ROI、濾波、校準或 worker 數值路徑。
+- **目前問題：** Windows/Linux 原生驗收受限於目前工作主機沒有對應作業系統與硬體；macOS build 的 Flutter Wasm dry-run、MaterialIcons 與 notarization 會顯示非阻斷警告，正式 `.app/.dmg` 仍可建立並已通過 adhoc codesign verify。這些限制不阻斷 Phase 2 的本機 macOS 交付，但在對應主機驗收前不能把 Windows/Linux 標示為完成。
+- **Python／原生 shell 驗證：** Phase 2 子集 `52 passed`（本輪重跑，含平台設定、硬體 smoke 與安裝 smoke）；完整 Python 測試 `795 passed, 2 skipped`；受影響 scripts/gui/platforms 的 `compileall`、`pip check`、bundle JSON parse、build/start shell syntax check 均通過。Tauri Rust `cargo test` 為 `13 passed`；Flutter `analyze` 通過，Flutter `test` 共 `38 tests` 通過；macOS `bash scripts/build_desktop_macos.sh`、packaged smoke 與 `codesign --verify --deep --strict --verbose=2` 均通過。
+- **本輪修正：** `scripts/desktop_hardware_smoke.py` 增加直接檔案執行的 import fallback，避免依計畫文件命令執行時因 `ModuleNotFoundError: scripts` 中斷；新增回歸測試覆蓋此入口。
+- **數值行為影響：** 本輪只調整硬體 smoke 的啟動入口、benchmark 紀錄與驗收文件，沒有修改分析公式、門檻、ROI、濾波、校準或 worker 數值路徑。
 
 ### 後續工作順序
 

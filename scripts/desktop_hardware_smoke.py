@@ -18,12 +18,22 @@ import time
 from pathlib import Path
 from typing import Any
 
-from scripts.desktop_engine_client import (
-    control_state,
-    request_json,
-    start_source_engine,
-    stop_engine,
-)
+try:
+    from scripts.desktop_engine_client import (
+        control_state,
+        request_json,
+        start_source_engine,
+        stop_engine,
+    )
+except ModuleNotFoundError:
+    # 允許以 `python scripts/desktop_hardware_smoke.py` 直接執行。
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.desktop_engine_client import (
+        control_state,
+        request_json,
+        start_source_engine,
+        stop_engine,
+    )
 
 ANALYSIS_MODES = ("raw", "fatigue", "rppg", "combined")
 

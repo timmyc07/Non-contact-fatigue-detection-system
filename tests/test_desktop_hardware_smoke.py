@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -73,6 +74,15 @@ def test_analysis_flags_reject_unknown_mode() -> None:
 )
 def test_expected_frame_source_matches_mode(mode: str, source: str) -> None:
     assert smoke._expected_frame_source(mode) == source
+
+
+def test_hardware_smoke_supports_direct_script_execution() -> None:
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "desktop_hardware_smoke.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "except ModuleNotFoundError:" in source
+    assert "Path(__file__).resolve().parents[1]" in source
 
 
 def test_run_smoke_exercises_commands_and_always_stops_engine(monkeypatch: pytest.MonkeyPatch) -> None:

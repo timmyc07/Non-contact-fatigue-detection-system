@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "desktop_hardware_smoke",
   "platform": "darwin",
-  "api_ready_ms": 2295.104,
+  "api_ready_ms": 2624.222,
   "analysis": {
     "mode": "raw",
     "behavior_enabled": false,
