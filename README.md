@@ -396,8 +396,9 @@ rPPG BPM 校準以 bias 模型 `scale*bpm+offset` 修正 rPPG 心率；日常疲
 
 即時列印每筆 BPM／RR-Interval、狀態轉換（掃描中→已連線→重連中）、電量與接觸不良警告；未收到任何心率 notification 時以非零 exit code 結束。
 
-On macOS, camera enumeration prefers AVFoundation and falls back to OpenCV `CAP_ANY`. If the
-camera is denied, enable it under System Settings → Privacy & Security → Camera.
+On macOS, camera enumeration prefers AVFoundation and falls back to OpenCV `CAP_ANY`. If no
+camera is detected, use the desktop panel's `開啟相機權限設定` button; it opens System Settings →
+Privacy & Security → Camera. The app bundle declares the required camera and Bluetooth usage descriptions.
 
 On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
 ```bash

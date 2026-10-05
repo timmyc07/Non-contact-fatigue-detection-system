@@ -155,6 +155,39 @@ fn open_external_target(target: &std::ffi::OsStr) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_camera_privacy_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("failed to open macOS camera privacy settings: {error}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return Command::new("cmd")
+            .args(["/C", "start", "", "ms-settings:privacy-webcam"])
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("failed to open Windows camera privacy settings: {error}"));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return Command::new("xdg-open")
+            .arg("settings://privacy")
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("failed to open Linux privacy settings: {error}"));
+    }
+
+    #[allow(unreachable_code)]
+    Err("camera privacy settings are not supported on this platform".to_owned())
+}
+
+#[tauri::command]
 fn open_external_path(path: String) -> Result<(), String> {
     let directory = validate_external_directory(&path)?;
     open_external_target(directory.as_os_str())
@@ -627,6 +660,7 @@ fn run() {
             toggle_always_on_top,
             open_external_path,
             open_external_url,
+            open_camera_privacy_settings,
             pick_replay_folder,
             set_overlay_window,
             get_overlay_geometry

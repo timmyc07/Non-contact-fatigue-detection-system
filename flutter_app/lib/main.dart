@@ -1489,6 +1489,32 @@ class DesktopControlPanel extends StatelessWidget {
                   }
                 },
         ),
+        if (cameraRows.isEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            '尚未偵測到攝影機。請確認系統相機權限與裝置連線。',
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: .62), fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      try {
+                        await TauriBridge.instance.openCameraPrivacySettings();
+                      } catch (_) {
+                        // Browser development and unsupported shells have no
+                        // native privacy-settings command.
+                      }
+                    },
+              icon: const Icon(Icons.lock_outline, size: 17),
+              label: const Text('開啟相機權限設定'),
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: busy || (!running && selected == null)

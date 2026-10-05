@@ -118,7 +118,7 @@ mobile shell
 
 - **已完成：** Phase 0 基線與桌面平台 policy；Phase 1 五平台 registry、行動平台 fail-closed 與契約測試；Phase 3 共用 Dart models、capability gating、`MobileRuntimeAdapter`、`MethodChannel`/`EventChannel` adapter 與 Android Kotlin/iOS Swift channel stub。`ApiError` 也已完成未知欄位保留、typed parsing 與 lossless `toJson()`；既有 Flutter Map API 保留。
 - **已完成：** Phase 2 的三平台封裝隔離實作與本機 macOS 驗證。Windows NSIS、macOS App/DMG、Linux AppImage/deb 的 Tauri 設定、sidecar/model/resource/data-directory 邊界、build/start 腳本與安裝 smoke 入口均已具備；新增 Linux AppImage smoke，並修正 macOS／Windows／硬體 smoke 可直接以檔案路徑執行及使用指定 backend port。2026-10-04 在 macOS Apple Silicon 重新完成 sidecar、Flutter Web release、Tauri `.app/.dmg` 原生建置；packaged smoke 通過 API version `2`、camera count `1`、raw camera pipeline start/metrics/stop、app data directory 建立、engine shutdown、backend port release 與 shell exit code `0`，bundle 也通過 `codesign --verify --deep --strict`，DMG 通過 `hdiutil imageinfo` 檢查。內建相機 raw 與 combined source-engine smoke 均通過，兩份結果保存於 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-raw.json` 與 `docs/benchmarks/desktop-hardware-smoke-2026-10-04-macos-combined.json`。
-- **待外部主機驗收：** Windows NSIS 與 Linux AppImage/deb 尚未在 Windows／Ubuntu Linux 原生主機重新建置、安裝、啟動、相機、資料目錄與解除安裝；目前主機為 macOS arm64，不能以跨平台產物或 macOS 結果宣稱通過。macOS 的 BLE、Overlay、休眠/喚醒與相機權限仍屬硬體／作業系統情境測試，未納入本輪 packaged smoke。
+- **待外部主機驗收：** Windows NSIS 與 Linux AppImage/deb 尚未在 Windows／Ubuntu Linux 原生主機重新建置、安裝、啟動、相機、資料目錄與解除安裝；目前主機為 macOS arm64，不能以跨平台產物或 macOS 結果宣稱通過。macOS 的 BLE、Overlay、休眠/喚醒與相機拒絕／重新授權情境仍待硬體／作業系統點測；權限用途宣告與「開啟相機權限設定」引導已納入桌面流程。
 - **Windows VM 補充證據：** Parallels Windows 11 ARM64 已完成 x64 Python/MediaPipe 環境的依賴檢查、PyInstaller sidecar build 與兩項 packaged runtime preflight；完整 Python 測試也已通過。工具鏈檢查顯示 VM 尚無可用的 Node/npm、Flutter、Rust/cargo 或 NSIS，背景 `winget` 安裝未完成，因此本輪不能在 VM 產生 Tauri/NSIS bundle。相機裝置只能證明 VM 的裝置列舉；Windows 的 installer、WebView2、主視窗、停止、資料目錄、解除安裝與 live camera metrics 仍標記未驗收。
 - **未完成：** Android/iOS 真實相機權限與影格串流、MediaPipe/model inference、原生 app runner 建置簽署與裝置驗收；Phase 6 五平台 release gate。不得將 Android/iOS 標示為可運行。
 - **目前問題：** Windows/Linux 原生驗收受限於目前工作主機沒有對應作業系統與硬體；macOS build 的 Flutter Wasm dry-run、MaterialIcons 與 notarization 會顯示非阻斷警告，正式 `.app/.dmg` 仍可建立並已通過 adhoc codesign verify。Android runner 的 plugin source-set 與 registration 已完成程式接線，但本機缺 Android SDK 與 Java runtime，`flutter build apk --debug` 因此無法進入 Gradle/Kotlin 編譯；尚未取得 APK build、模擬器或 Android 裝置驗收證據。iOS runner 尚未接線，Phase 4/5 runtime 仍以 `runtime_unavailable` 阻止誤啟動，不是 desktop fallback。
@@ -145,5 +145,5 @@ mobile shell
 
 1. 在 Windows 目標主機執行 NSIS 原生 build、安裝 smoke 與解除安裝驗收，記錄 OS/硬體/命令/結果。
 2. 在 Ubuntu/Linux 目標主機執行 AppImage/deb 原生 build、安裝後啟停、相機與資料目錄 smoke，記錄 OS/硬體/命令/結果。
-3. 依驗收矩陣補齊 macOS BLE、Overlay、休眠/喚醒與相機權限的硬體／OS 情境紀錄；上述外部驗收完成前，Phase 2 維持「實作完成、跨主機驗收待補」。
+3. 依驗收矩陣補齊 macOS BLE、Overlay、休眠/喚醒與相機拒絕／重新授權的硬體／OS 情境紀錄；權限處理已完成，情境驗收完成前 Phase 2 維持「實作完成、跨主機驗收待補」。
 4. Phase 4 Android、Phase 5 iOS 與 Phase 6 五平台 release gate 不在本輪範圍，維持未開始／未完成標記。

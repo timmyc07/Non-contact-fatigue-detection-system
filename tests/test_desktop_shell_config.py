@@ -97,6 +97,13 @@ def test_tauri_shell_enforces_single_instance() -> None:
     assert "tauri_plugin_single_instance::init" in source
 
 
+def test_tauri_shell_exposes_camera_privacy_settings_command() -> None:
+    source = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+    assert "fn open_camera_privacy_settings()" in source
+    assert "Privacy_Camera" in source
+    assert "open_camera_privacy_settings" in source
+
+
 def test_desktop_build_propagates_tauri_failure() -> None:
     script = (ROOT / "scripts" / "build_desktop.ps1").read_text(encoding="utf-8")
 

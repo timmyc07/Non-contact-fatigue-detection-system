@@ -41,6 +41,10 @@ class TauriBridge {
     await invoke('open_external_url', <String, dynamic>{'url': url});
   }
 
+  Future<void> openCameraPrivacySettings() async {
+    await invoke('open_camera_privacy_settings');
+  }
+
   Future<void> setOverlayWindow({
     required bool visible,
     required bool locked,
