@@ -148,8 +148,7 @@ class VideoRecorderWorker(QObject):
                     dtype=np.uint8,
                     count=img.bytesPerLine() * height,
                 )
-                arr = arr.reshape((height, img.bytesPerLine() // 3, 3))
-                frame = arr[:, :width, :]
+                frame = arr.reshape(height, img.bytesPerLine())[:, :width * 3].reshape(height, width, 3)
                 # RGB→BGR via reversed view is non-contiguous; some cv2 builds
                 # require C-contiguous input for VideoWriter.write().
                 frame = np.ascontiguousarray(frame[:, :, ::-1])

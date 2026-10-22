@@ -11,12 +11,16 @@ import sys
 import threading
 import time
 from collections import deque
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Optional, Callable, cast
+from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, Response, send_file, abort
 from flask_socketio import SocketIO, emit
+from werkzeug.serving import make_server
 import gzip
 import re
 import sqlite3
@@ -25,8 +29,6 @@ from gui.file_browser_client import FileBrowserClient
 from gui.desktop_control import DesktopControlError
 
 logger = logging.getLogger(__name__)
-
-_ws_connected_clients: set = set()
 
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _DESKTOP_UI_ORIGINS = {
@@ -375,7 +377,6 @@ def create_app(
     playback_manager: PlaybackManager,
     recording_manager: Optional[Any] = None,
     get_latest_packet: Optional[Callable] = None,
-    shutdown_token: Optional[str] = None,
     allowed_origins: Optional[list[str]] = None,
     access_token: Optional[str] = None,
     control_handler: Optional[Callable[[str, dict[str, Any]], dict[str, Any]]] = None,
@@ -396,6 +397,8 @@ def create_app(
 
     app = Flask(__name__, template_folder=None, static_folder=None)
     app.config["SECRET_KEY"] = secrets.token_hex(32)
+    connected_clients: set[str] = set()
+    app.extensions["ncfd_connected_clients"] = connected_clients
 
     socketio = SocketIO(
         app,
@@ -443,8 +446,12 @@ def create_app(
     def _restrict_fb_endpoints() -> Optional[Response]:
         # File Browser 端點操作伺服器端共用的遠端憑證；限制為本機發起，
         # 避免同網段其他裝置盜用已登入的 File Browser session。
-        if request.path.startswith("/api/fb/") and not _is_local_request():
-            abort(403)
+        if request.path.startswith(("/api/fb/", "/api/control/")):
+            if not _is_local_request() or urlsplit("//" + request.host).hostname not in _LOCAL_HOSTS:
+                abort(403)
+            origin = request.headers.get("Origin")
+            if origin and origin not in _DESKTOP_UI_ORIGINS and origin != request.host_url.rstrip("/"):
+                abort(403)
         return None
 
     latest_packet_error_logged = False
@@ -849,6 +856,9 @@ def create_app(
     def fb_upload():
         if not _fb_client.is_authenticated():
             return jsonify({"success": False, "error": "尚未連線 File Browser"}), 401
+        latest = get_latest_metrics_packet() or {}
+        if latest.get("recording") is True or latest.get("recording_finalizing") is True:
+            return jsonify({"success": False, "error": "請先停止錄製，待影片完成後再上傳"}), 409
         data = request.get_json(silent=True) or {}
         recording_name = str(data.get("recording_name") or "").strip()
         if not recording_name:
@@ -882,11 +892,17 @@ def create_app(
                 pass
 
         try:
-            _fb_client.upload_file(
-                db_file,
-                db_file.name,
-                progress_cb=lambda p: _emit_progress(db_file.name, p),
-            )
+            # 線上錄製仍有 WAL；SQLite backup 才能取得完整且一致的資料庫。
+            with TemporaryDirectory(prefix="ncfd-upload-") as temporary_dir:
+                snapshot = Path(temporary_dir) / db_file.name
+                with closing(sqlite3.connect(db_file.resolve().as_uri() + "?mode=ro", uri=True)) as source:
+                    with closing(sqlite3.connect(snapshot)) as target:
+                        source.backup(target)
+                _fb_client.upload_file(
+                    snapshot,
+                    db_file.name,
+                    progress_cb=lambda p: _emit_progress(db_file.name, p),
+                )
             uploaded.append(db_file.name)
         except Exception as exc:
             errors.append(f"{db_file.name}: {exc}")
@@ -966,7 +982,7 @@ def create_app(
                 return False
         sid = getattr(request, "sid", None)
         if sid is not None:
-            _ws_connected_clients.add(sid)
+            connected_clients.add(sid)
         latest = get_latest_metrics_packet()
         if latest is not None:
             emit("metrics_update", {"metrics": latest})
@@ -976,7 +992,7 @@ def create_app(
     def handle_disconnect():
         sid = getattr(request, "sid", None)
         if sid is not None:
-            _ws_connected_clients.discard(sid)
+            connected_clients.discard(sid)
 
     @socketio.on("request_metrics")
     def handle_metrics_request():
@@ -987,26 +1003,6 @@ def create_app(
         emit("metrics_history", payload)
         if latest is not None:
             emit("metrics_update", {"metrics": latest})
-
-    @app.post("/__server/shutdown")
-    def shutdown_server():
-        if not shutdown_token:
-            abort(404)
-        if not _is_local_request():
-            abort(403)
-        data = request.get_json(silent=True) or {}
-        if not secrets.compare_digest(str(data.get("token") or ""), shutdown_token):
-            abort(403)
-        # threading + Werkzeug 模式下 socketio.stop() 會拋出
-        # RuntimeError('Cannot stop unknown web server')，導致舊伺服器殘留。
-        shutdown = request.environ.get("werkzeug.server.shutdown")
-        if shutdown is None:
-            return jsonify({
-                "success": False,
-                "error": "werkzeug shutdown unavailable",
-            }), 503
-        shutdown()
-        return jsonify({"success": True})
 
     return app, socketio
 
@@ -1040,58 +1036,50 @@ class WebServerThread(threading.Thread):
         if host not in _LOCAL_HOSTS:
             self.access_token = access_token or secrets.token_urlsafe(16)
 
-        self._shutdown_token = secrets.token_urlsafe(32)
         self.app, self.socketio = create_app(
             metrics_buffer,
             playback_manager,
             recording_manager,
             get_latest_packet,
-            shutdown_token=self._shutdown_token,
             allowed_origins=_build_allowed_origins(host, port),
             access_token=self.access_token,
             control_handler=control_handler,
         )
         self._stop_flag = threading.Event()
         self._stopped_event = threading.Event()
+        wsgi_app = self.app.wsgi_app
+
+        def dispatch(environ, start_response):
+            if self._stop_flag.is_set():
+                return Response("Web server is stopping", status=503)(environ, start_response)
+            return wsgi_app(environ, start_response)
+
+        self.app.wsgi_app = dispatch
 
     def run(self) -> None:
         try:
-            self.socketio.run(
-                self.app,
-                host=self.host,
-                port=self.port,
-                debug=False,
-                use_reloader=False,
-                allow_unsafe_werkzeug=True,
-            )
-        except Exception as e:
-            print(f"Web服務器啟動出錯: {e}")
+            with make_server(self.host, self.port, self.app, threaded=True) as server:
+                server.timeout = 0.2
+                self.port = server.server_port
+                while not self._stop_flag.is_set():
+                    server.handle_request()
+        except Exception:
+            logger.exception("Web 服務器執行失敗")
         finally:
-            self._stopped_event.set()
+            try:
+                # 不等待 polling client 再次取件，避免半開連線阻塞停服。
+                engineio = self.socketio.server.eio
+                for client in list(engineio.sockets.values()):
+                    client.close(wait=False, abort=True)
+                engineio.sockets.clear()
+                self.socketio.server.shutdown()
+            finally:
+                self._stopped_event.set()
 
     def stop(self, *, join_timeout: float = 5.0) -> bool:
         self._stop_flag.set()
-        if self._stopped_event.is_set():
+        if self.ident is None:
             return True
-        try:
-            import requests
-
-            response = requests.post(
-                f"http://127.0.0.1:{self.port}/__server/shutdown",
-                json={"token": self._shutdown_token},
-                timeout=2.0,
-            )
-            if response.status_code != 200:
-                if not getattr(self, "_stop_err_logged", False):
-                    print(
-                        f"[WebServer] stop request returned HTTP {response.status_code}: "
-                        f"{response.text[:200]}"
-                    )
-                    self._stop_err_logged = True
-        except Exception as e:
-            if not getattr(self, "_stop_err_logged", False):
-                print(f"[WebServer] stop request failed: {e}")
-                self._stop_err_logged = True
         return self._stopped_event.wait(timeout=join_timeout)
 
     def broadcast_metrics(self, metrics: dict) -> None:
@@ -1109,7 +1097,7 @@ class WebServerThread(threading.Thread):
 
     @property
     def client_count(self) -> int:
-        return len(_ws_connected_clients)
+        return len(self.app.extensions["ncfd_connected_clients"])
 
     def broadcast_frame(self, frame_b64: str) -> None:
         try:

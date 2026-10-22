@@ -73,10 +73,14 @@ def check_runtime() -> list[str]:
     cv2 = loaded.get("cv2")
     runtime = get_desktop_platform_runtime()
     if cv2 is not None:
+        registry = getattr(cv2, "videoio_registry", None)
+        camera_apis = registry.getCameraBackends() if registry is not None else ()
         available_apis = [
             name
             for name in runtime.preferred_camera_api_names
             if isinstance(getattr(cv2, name, None), int)
+            and getattr(cv2, name) in camera_apis
+            and registry.hasBackend(getattr(cv2, name))
         ]
         if not available_apis:
             errors.append(

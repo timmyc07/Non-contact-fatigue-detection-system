@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from types import SimpleNamespace
 
@@ -261,6 +262,33 @@ def test_belt_client_rejects_notifications_after_stop():
     client._on_battery_notification(None, bytearray([50]))
     assert hub.latest() is None
     assert client.status().battery_level is None
+
+
+def test_stop_timeout_keeps_ownership_and_rejects_restart(monkeypatch):
+    from gui.belt_runtime import BeltRuntime
+
+    monkeypatch.setitem(sys.modules, "bleak", SimpleNamespace())
+    hub = WatchHrHub()
+    client = HrBeltBleClient(hub)
+    alive = True
+    thread = SimpleNamespace(is_alive=lambda: alive, join=lambda **_: None)
+    client._thread = thread
+    runtime = BeltRuntime()
+    runtime._belt = client
+
+    with pytest.raises(TimeoutError, match="停止中"):
+        runtime.stop_belt()
+    assert client._thread is thread
+    assert runtime.belt_running
+    assert "停止中" in runtime.start_belt()
+    assert client._stop_event.is_set()
+    client._on_hr_notification(None, bytearray([0x00, 70]))
+    assert hub.latest() is None
+
+    alive = False
+    runtime.stop_belt()
+    assert runtime._belt is None
+    assert client._thread is None
 
 
 # ── 設定檔載入（config/hr_belt.json）────────────────────────────────────────

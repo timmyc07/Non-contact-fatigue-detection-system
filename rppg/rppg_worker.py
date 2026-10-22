@@ -842,7 +842,7 @@ def draw_rois(
 
 
 def pos_pulse(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Wang et al. POS on temporally normalised channels."""
+    """每色頻 z-score 後套用 CHROM 類投影；保留既有 pos_pulse API 名稱。"""
     r = (r - np.mean(r)) / (np.std(r) + 1e-8)
     g = (g - np.mean(g)) / (np.std(g) + 1e-8)
     b = (b - np.mean(b)) / (np.std(b) + 1e-8)

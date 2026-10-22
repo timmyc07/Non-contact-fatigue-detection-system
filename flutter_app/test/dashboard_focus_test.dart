@@ -39,6 +39,51 @@ Future<void> _pumpDashboard(
 }
 
 void main() {
+  test('fatigue presentation maps severity and prioritizes the fusion result',
+      () {
+    for (final (status, label) in [
+      ('LOW_VIGILANCE', '輕度疲勞'),
+      ('DROWSY', '中度疲勞'),
+      ('CRITICAL', '高度疲勞'),
+      ('MICROSLEEP', '極度危險'),
+    ]) {
+      final (text, color) = fatiguePresentation({'status': status});
+      expect(text, label);
+      expect(color, isNot(kAccent));
+    }
+    expect(fatiguePresentation({'status': 'OK', 'fusion_state_zh': '極度危險'}).$1,
+        '極度危險');
+    expect(
+        fatiguePresentation({'status': 'MICROSLEEP', 'fusion_state_zh': '清醒'})
+            .$1,
+        '極度危險');
+    expect(
+        fatiguePresentation({'status': 'CRITICAL', 'fusion_state_zh': '清醒'}).$1,
+        '高度疲勞');
+    expect(
+        fatiguePresentation({'status': 'CALIBRATING', 'fusion_state_zh': '清醒'})
+            .$1,
+        '校準中');
+    expect(
+        fatiguePresentation({'status': 'NO_FACE', 'fusion_state_zh': '清醒'}).$1,
+        '未偵測到臉部');
+  });
+
+  testWidgets('focus dashboard shows the fusion severity', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: DashboardView(
+      metrics: const {'status': 'OK', 'fusion_state_zh': '極度危險'},
+      engineState: const {'monitor_focus': true, 'pipeline_running': true},
+      previewFrame: null,
+      connected: true,
+      busy: false,
+      error: null,
+      onRetry: () async {},
+      onCommand: (_, [__]) async {},
+    ))));
+    expect(find.text('極度危險'), findsOneWidget);
+  });
   testWidgets('split dashboard keeps controls and metric sections',
       (tester) async {
     await _pumpDashboard(tester, focus: false, onCommand: (_, [__]) async {});

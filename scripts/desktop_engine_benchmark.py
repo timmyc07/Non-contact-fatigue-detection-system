@@ -100,6 +100,12 @@ def _windows_process_parent_map() -> dict[int, int]:
 def _process_tree_pids(root_pid: int) -> list[int]:
     if sys.platform.startswith("win"):
         return _expand_process_tree(root_pid, _windows_process_parent_map())
+    if sys.platform == "darwin":
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,ppid="], text=True, timeout=2.0,
+        )
+        parents = {int(pid): int(parent) for pid, parent in (line.split() for line in output.splitlines())}
+        return _expand_process_tree(root_pid, parents)
     return [int(root_pid)]
 
 
@@ -122,6 +128,14 @@ def _distribution(values: list[float]) -> dict[str, float]:
 
 
 def _rss_bytes(pid: int) -> int | None:
+    if sys.platform == "darwin":
+        try:
+            output = subprocess.check_output(
+                ["ps", "-o", "rss=", "-p", str(pid)], text=True, timeout=2.0,
+            )
+            return int(output.strip()) * 1024
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
     if sys.platform.startswith("linux"):
         try:
             for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():

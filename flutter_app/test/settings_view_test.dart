@@ -3,6 +3,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('unsupported macOS hotkeys cannot be configured', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SettingsView(
+      state: const {
+        'hotkey_registration': {'supported': false}
+      },
+      busy: false,
+      onCommand: (_, [__]) async {},
+    ))));
+    final button = tester
+        .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '快捷鍵'));
+    expect(button.onPressed, isNull);
+  });
+
   testWidgets('overlay opacity sends one command when dragging ends',
       (tester) async {
     final calls = <(String, Map<String, dynamic>?)>[];
@@ -77,6 +92,7 @@ void main() {
             height: 900,
             child: SettingsView(
               state: const <String, dynamic>{
+                'hotkey_registration': {'supported': true},
                 'hotkeys': {
                   'toggle_metrics': 'Ctrl+Alt+O',
                   'toggle_preview': 'Ctrl+Alt+P',
@@ -123,7 +139,10 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SettingsView(
-            state: const <String, dynamic>{'hotkeys': {}},
+            state: const <String, dynamic>{
+              'hotkeys': {},
+              'hotkey_registration': {'supported': true}
+            },
             busy: false,
             onCommand: (command, [args]) async => calls.add((command, args)),
           ),
@@ -263,7 +282,9 @@ void main() {
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
             body: SettingsView(
-                state: const {},
+                state: const {
+          'hotkey_registration': {'supported': true}
+        },
                 busy: false,
                 onCommand: (command, [args]) async =>
                     calls.add((command, args))))));

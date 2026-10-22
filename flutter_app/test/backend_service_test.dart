@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:fatigue_monitor_ui/services/backend_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:socket_io_client/socket_io_client.dart' as io;
 
 class _TrackingClient extends http.BaseClient {
   bool closed = false;
@@ -18,6 +21,52 @@ class _TrackingClient extends http.BaseClient {
 }
 
 void main() {
+  test('fallback polling is single flight and stops on reconnect or cancel',
+      () async {
+    var requests = 0;
+    final pending = Completer<http.Response>();
+    final socket = io.io('http://127.0.0.1:1', <String, dynamic>{
+      'autoConnect': false,
+      'reconnection': false,
+      'forceNew': true,
+    });
+    final service = BackendService(
+        socket: socket,
+        client: MockClient((_) {
+          requests++;
+          return requests == 1
+              ? pending.future
+              : Future.value(http.Response('{"metrics":{"fps":30}}', 200));
+        }));
+    final subscription = service.connectMetricSnapshots().listen((_) {});
+    socket.emitEvent(['connect_error', 'offline']);
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(requests, 1);
+    await Future<void>.delayed(const Duration(seconds: 4));
+    expect(requests, 1);
+    pending.complete(http.Response('{"metrics":{"fps":30}}', 200));
+    await Future<void>.delayed(Duration.zero);
+    socket.emitEvent(['connect', null]);
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(requests, 1);
+    socket.emitEvent(['disconnect', 'offline']);
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(requests, 2);
+    await subscription.cancel();
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(requests, 2);
+    await service.dispose();
+  });
+
+  test('playback sends explicit pagination offset', () async {
+    final service = BackendService(client: MockClient((request) async {
+      expect(request.url.queryParameters['offset'], '200');
+      expect(request.url.queryParameters['limit'], '200');
+      return http.Response('{"success":true,"total":401,"data":[]}', 200);
+    }));
+    await service.playback('/tmp/test.db', offset: 200, limit: 200);
+    await service.dispose();
+  });
   test('command exposes the structured backend error message', () async {
     final service = BackendService(
       client: MockClient(

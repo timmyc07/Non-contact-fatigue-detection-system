@@ -465,6 +465,21 @@ def test_belt_calibration_preference_rolls_back_when_ble_start_fails(
     assert state["settings_dirty"] is False
 
 
+def test_stopping_belt_cannot_restart_calibration_via_adapter(settings_window, monkeypatch):
+    runtime = settings_window._engine_controller.belt_runtime
+    monkeypatch.setattr(type(runtime), "belt_running", property(lambda _: True))
+    monkeypatch.setattr(runtime, "start_belt", lambda _: "心跳帶仍在停止中")
+    started = []
+    monkeypatch.setattr(settings_window._engine_runtime, "start_periodic_timer", lambda *args: started.append(args))
+    settings_window._capture_preferences.configure(belt_calibration=True)
+
+    settings_window._start_belt_calibration()
+
+    assert not settings_window._capture_preferences.snapshot().belt_calibration
+    assert settings_window._belt_calibrator is None
+    assert started == []
+
+
 def test_other_capture_changes_survive_belt_soft_failure_and_mark_dirty(
     settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
@@ -614,6 +629,7 @@ def test_belt_calibration_failure_preserves_preexisting_belt_runtime(
     settings_window._engine_controller.start_pipeline()
     belt_runtime = settings_window._engine_controller.belt_runtime
     monkeypatch.setattr(type(belt_runtime), "belt_running", property(lambda _self: True))
+    monkeypatch.setattr(belt_runtime, "start_belt", lambda _config=None: "")
     stop_calls: list[bool] = []
     monkeypatch.setattr(belt_runtime, "stop_belt", lambda: stop_calls.append(True))
     monkeypatch.setattr(

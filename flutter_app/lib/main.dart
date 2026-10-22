@@ -20,6 +20,27 @@ const kSurfaceElevated = Color(0xff2b1d46);
 const kLine = Color(0x36ffffff);
 const kAccentLine = Color(0x70ded5ff);
 
+(String, Color) fatiguePresentation(Map<String, dynamic> metrics,
+    {String fallback = '--'}) {
+  final status = metrics['status']?.toString() ?? '';
+  final fusion = metrics['fusion_state_zh']?.toString().trim() ?? '';
+  final waiting = status == 'CALIBRATING' ||
+      (status == 'NO_FACE' && metrics['behavior_enabled'] != false);
+  final urgent =
+      status == 'MICROSLEEP' || (status == 'CRITICAL' && fusion != '極度危險');
+  final value = !waiting && !urgent && fusion.isNotEmpty ? fusion : status;
+  return switch (value) {
+    'OK' || '清醒' => ('清醒', kAccent),
+    'LOW_VIGILANCE' || '輕度疲勞' => ('輕度疲勞', const Color(0xffe9c46a)),
+    'DROWSY' || '中度疲勞' => ('中度疲勞', const Color(0xfff4a261)),
+    'CRITICAL' || '高度疲勞' => ('高度疲勞', const Color(0xffe77b78)),
+    'MICROSLEEP' || '極度危險' => ('極度危險', const Color(0xffef5350)),
+    'NO_FACE' => ('未偵測到臉部', kMutedInk),
+    'CALIBRATING' => ('校準中', kMutedInk),
+    _ => (value.isEmpty ? fallback : value, kAccent),
+  };
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const FatigueMonitorApp());
@@ -154,7 +175,12 @@ class _MonitorShellState extends State<MonitorShell> {
   List<Map<String, dynamic>> _recordings = <Map<String, dynamic>>[];
   Map<String, dynamic>? _selectedRecording;
   List<Map<String, dynamic>> _playbackRows = <Map<String, dynamic>>[];
+  int _playbackOffset = 0;
+  int _playbackTotal = 0;
+  int _playbackRequestId = 0;
+  double _playbackStart = 0;
   bool _playbackBusy = false;
+  bool _stateRefreshInFlight = false;
   Uint8List? _previewFrame;
   String? _error;
   bool _connected = false;
@@ -204,6 +230,8 @@ class _MonitorShellState extends State<MonitorShell> {
   }
 
   Future<void> _refreshEngineState({bool silent = false}) async {
+    if (_stateRefreshInFlight) return;
+    _stateRefreshInFlight = true;
     try {
       final state = await _backend.controlState();
       if (!mounted) return;
@@ -221,6 +249,8 @@ class _MonitorShellState extends State<MonitorShell> {
         _connected = false;
         if (!silent) _error = 'Python engine 尚未就緒：$error';
       });
+    } finally {
+      _stateRefreshInFlight = false;
     }
   }
 
@@ -454,29 +484,45 @@ class _MonitorShellState extends State<MonitorShell> {
     }
   }
 
-  Future<void> _openRecording(Map<String, dynamic> recording) async {
+  Future<void> _openRecording(Map<String, dynamic> recording,
+      {int offset = 0}) async {
     final path = recording['path']?.toString();
     if (path == null || path.isEmpty) return;
+    final requestId = ++_playbackRequestId;
     setState(() {
       _selectedRecording = recording;
       _playbackRows = <Map<String, dynamic>>[];
       _playbackBusy = true;
+      _playbackOffset = offset;
+      if (offset == 0) {
+        _playbackTotal = 0;
+        _playbackStart = 0;
+      }
     });
     try {
-      final payload = await _backend.playback(path, limit: 200);
-      if (mounted) {
+      final payload = await _backend.playback(path, limit: 200, offset: offset);
+      if (mounted && requestId == _playbackRequestId) {
         setState(() {
           _playbackRows = (payload['data'] as List?)
                   ?.whereType<Map>()
                   .map((row) => Map<String, dynamic>.from(row))
                   .toList() ??
               <Map<String, dynamic>>[];
+          _playbackTotal = (payload['total'] as num?)?.toInt() ?? 0;
+          if (offset == 0 && _playbackRows.isNotEmpty) {
+            _playbackStart =
+                (_playbackRows.first['timestamp'] as num?)?.toDouble() ?? 0;
+          }
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = '無法讀取回放指標：$error');
+      if (mounted && requestId == _playbackRequestId) {
+        setState(() => _error = '無法讀取回放指標：$error');
+      }
     } finally {
-      if (mounted) setState(() => _playbackBusy = false);
+      if (mounted && requestId == _playbackRequestId) {
+        setState(() => _playbackBusy = false);
+      }
     }
   }
 
@@ -567,7 +613,15 @@ class _MonitorShellState extends State<MonitorShell> {
         onCommand: _runCommand,
         onRefresh: _loadRecordings,
         onOpen: _openRecording,
-        onClose: () => setState(() => _selectedRecording = null),
+        offset: _playbackOffset,
+        total: _playbackTotal,
+        startTimestamp: _playbackStart,
+        onPage: (offset) => _openRecording(_selectedRecording!, offset: offset),
+        onClose: () => setState(() {
+          _playbackRequestId++;
+          _selectedRecording = null;
+          _playbackBusy = false;
+        }),
         onPickReplayFolder: _bridge.pickReplayFolder,
       );
     }
@@ -687,6 +741,7 @@ class _OverlayShellState extends State<OverlayShell> {
   Map<String, dynamic> _state = <String, dynamic>{};
   Uint8List? _frame;
   bool _hiddenAfterDisconnect = false;
+  bool _refreshInFlight = false;
 
   @override
   void initState() {
@@ -707,6 +762,8 @@ class _OverlayShellState extends State<OverlayShell> {
   }
 
   Future<void> _refresh() async {
+    if (_refreshInFlight) return;
+    _refreshInFlight = true;
     try {
       final state = await _backend.controlState();
       Map<String, dynamic>? metrics;
@@ -727,6 +784,8 @@ class _OverlayShellState extends State<OverlayShell> {
         _hiddenAfterDisconnect = true;
         unawaited(_hideOverlayWindow());
       }
+    } finally {
+      _refreshInFlight = false;
     }
   }
 
@@ -850,7 +909,8 @@ class _OverlayShellState extends State<OverlayShell> {
                         Expanded(
                           child: _OverlayMetric(
                             label: '狀態',
-                            value: _metricText('status'),
+                            value: fatiguePresentation(_metrics).$1,
+                            color: fatiguePresentation(_metrics).$2,
                           ),
                         ),
                       ],
@@ -867,10 +927,12 @@ class _OverlayShellState extends State<OverlayShell> {
 }
 
 class _OverlayMetric extends StatelessWidget {
-  const _OverlayMetric({required this.label, required this.value});
+  const _OverlayMetric(
+      {required this.label, required this.value, this.color = kAccentBright});
 
   final String label;
   final String value;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -895,7 +957,7 @@ class _OverlayMetric extends StatelessWidget {
               style: Theme.of(context)
                   .textTheme
                   .titleMedium
-                  ?.copyWith(color: kAccentBright),
+                  ?.copyWith(color: color),
             ),
           ),
         ),
@@ -1179,10 +1241,8 @@ class DashboardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fatigue = _text('status', connected ? '等待資料' : '尚未連線');
-    final fatigueColor = fatigue.contains('警') || fatigue.contains('疲')
-        ? const Color(0xffe77b78)
-        : kAccent;
+    final (fatigue, fatigueColor) =
+        fatiguePresentation(metrics, fallback: connected ? '等待資料' : '尚未連線');
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(30, 26, 30, 34),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1632,7 +1692,7 @@ class _ConnectionPill extends StatelessWidget {
               height: 7,
               decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 7),
-          Text(connected ? '資料串流中' : '等待後端',
+          Text(connected ? '引擎已連線' : '等待後端',
               style: TextStyle(
                   color: color, fontSize: 11, fontWeight: FontWeight.w700))
         ]));
@@ -2264,6 +2324,10 @@ class PlaybackView extends StatelessWidget {
       required this.onOpen,
       required this.onClose,
       required this.onPickReplayFolder,
+      required this.offset,
+      required this.total,
+      required this.startTimestamp,
+      required this.onPage,
       super.key});
   final List<Map<String, dynamic>> recordings;
   final Map<String, dynamic>? selected;
@@ -2275,6 +2339,10 @@ class PlaybackView extends StatelessWidget {
   final Future<void> Function(Map<String, dynamic>) onOpen;
   final VoidCallback onClose;
   final Future<String?> Function() onPickReplayFolder;
+  final int offset;
+  final int total;
+  final double startTimestamp;
+  final Future<void> Function(int) onPage;
 
   @override
   Widget build(BuildContext context) {
@@ -2339,6 +2407,10 @@ class PlaybackView extends StatelessWidget {
                   recording: selected!,
                   rows: rows,
                   busy: busy,
+                  offset: offset,
+                  total: total,
+                  startTimestamp: startTimestamp,
+                  onPage: onPage,
                   onClose: onClose),
         ),
       ]),
@@ -2538,11 +2610,19 @@ class _PlaybackDetail extends StatelessWidget {
       {required this.recording,
       required this.rows,
       required this.busy,
+      required this.offset,
+      required this.total,
+      required this.startTimestamp,
+      required this.onPage,
       required this.onClose});
   final Map<String, dynamic> recording;
   final List<Map<String, dynamic>> rows;
   final bool busy;
   final VoidCallback onClose;
+  final int offset;
+  final int total;
+  final double startTimestamp;
+  final Future<void> Function(int) onPage;
 
   @override
   Widget build(BuildContext context) {
@@ -2578,7 +2658,7 @@ class _PlaybackDetail extends StatelessWidget {
                       SizedBox(
                           width: 90,
                           child: Text(
-                              '${((row['timestamp'] as num?)?.toDouble() ?? 0).toStringAsFixed(1)} s',
+                              '${(((row['timestamp'] as num?)?.toDouble() ?? startTimestamp) - startTimestamp).toStringAsFixed(1)} s',
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: .5)))),
                       Expanded(
@@ -2594,6 +2674,24 @@ class _PlaybackDetail extends StatelessWidget {
                   );
                 },
               ),
+      ),
+      Wrap(
+        spacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+              '${rows.isEmpty ? 0 : offset + 1}–${offset + rows.length} / $total 筆'),
+          TextButton(
+              onPressed: busy || offset == 0
+                  ? null
+                  : () => onPage((offset - 200).clamp(0, total)),
+              child: const Text('上一頁')),
+          TextButton(
+              onPressed: busy || offset + rows.length >= total
+                  ? null
+                  : () => onPage(offset + rows.length),
+              child: const Text('下一頁')),
+        ],
       ),
     ]);
   }
@@ -2614,6 +2712,8 @@ class SettingsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
     final opacity = (state['overlay_opacity'] as num?)?.toDouble() ?? 55;
+    final hotkeysSupported =
+        (state['hotkey_registration'] as Map?)?['supported'] == true;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(30, 28, 30, 30),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2773,7 +2873,7 @@ class SettingsView extends StatelessWidget {
               icon: const Icon(Icons.folder_open_outlined),
               label: const Text('開啟記錄目錄')),
           OutlinedButton.icon(
-              onPressed: busy
+              onPressed: busy || !hotkeysSupported
                   ? null
                   : () => _showHotkeysDialog(context, state, onCommand),
               icon: const Icon(Icons.keyboard_outlined),
@@ -2798,7 +2898,7 @@ class SettingsView extends StatelessWidget {
               icon: const Icon(Icons.open_in_browser_outlined),
               label: const Text('診斷服務')),
           OutlinedButton.icon(
-              onPressed: busy
+              onPressed: busy || !hotkeysSupported
                   ? null
                   : () => _confirmSettingsReset(
                       context, const ['hotkeys'], onCommand),

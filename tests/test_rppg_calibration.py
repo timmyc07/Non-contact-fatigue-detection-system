@@ -115,6 +115,72 @@ def test_version_store_save_and_switch(tmp_path: Path):
     assert len(manifest["versions"]) >= 2
 
 
+def test_versions_saved_in_same_second_keep_both_parameter_sets(tmp_path, monkeypatch):
+    from datetime import datetime
+    import rppg.calibration as calibration
+
+    frozen = datetime(2026, 10, 22, 12, 0, 0)
+
+    class FrozenClock:
+        @staticmethod
+        def now():
+            return frozen
+
+    monkeypatch.setattr(calibration, "datetime", FrozenClock)
+    store = CalibrationVersionStore(root=tmp_path)
+    first = store.save_new_version("first", offset_bpm=1.0)
+    second = store.save_new_version("second", offset_bpm=2.0)
+
+    assert first.id != second.id
+    assert store.get_version(first.id).params.bpm_offset == 1.0
+    assert store.get_version(second.id).params.bpm_offset == 2.0
+    assert len({row["id"] for row in store.list_versions()}) == 3
+
+
+def test_atomic_calibration_write_keeps_old_file_on_replace_failure(tmp_path, monkeypatch):
+    import rppg.calibration as calibration
+
+    path = tmp_path / "manifest.json"
+    path.write_text('{"active_version_id":"old"}')
+
+    def fail_replace(*_):
+        raise OSError("disk failure")
+
+    monkeypatch.setattr(calibration.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="disk failure"):
+        CalibrationVersionStore._write_json(path, {"active_version_id": "new"})
+    assert json.loads(path.read_text()) == {"active_version_id": "old"}
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("action", ["save", "activate", "delete"])
+def test_failed_manifest_write_does_not_publish_cache_or_delete_version(tmp_path, monkeypatch, action):
+    import rppg.calibration as calibration
+
+    store = CalibrationVersionStore(root=tmp_path)
+    existing = store.save_new_version("existing", offset_bpm=1.0)
+    before = json.loads(store.manifest_path.read_text())
+    replace = calibration.os.replace
+
+    def fail_manifest(source, target):
+        if Path(target) == store.manifest_path:
+            raise OSError("manifest failure")
+        return replace(source, target)
+
+    monkeypatch.setattr(calibration.os, "replace", fail_manifest)
+    with pytest.raises(OSError, match="manifest failure"):
+        if action == "save":
+            store.save_new_version("new", offset_bpm=2.0)
+        elif action == "activate":
+            store.set_active_version(ORIGIN_VERSION_ID)
+        else:
+            store.delete_version(existing.id)
+    assert store.get_active_version_id() == before["active_version_id"]
+    assert store.list_versions() == before["versions"]
+    assert json.loads(store.manifest_path.read_text()) == before
+    assert store.get_version(existing.id).params.bpm_offset == 1.0
+
+
 def test_default_store_and_live_feed_use_configured_data_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -357,6 +357,21 @@ def test_dispatch_belt_truth_capture_forwards_to_both_workers():
     assert calls["rppg"] == [writer]
 
 
+@pytest.mark.parametrize("bad_fields", [
+    {"roi_means": []}, {"roi_means": None}, {"roi_means": "bad"},
+    {"t": float("nan")}, {"belt_bpm": float("inf")},
+    {"roi_means": {"forehead": [1, 2, float("nan")]}},
+])
+def test_loader_skips_invalid_fields_and_keeps_next_valid_line(tmp_path, bad_fields):
+    valid = {"t": 1.0, "roi_means": {"forehead": [1, 2, 3]}, "belt_bpm": 70.0}
+    path = tmp_path / "malformed.jsonl"
+    path.write_text(json.dumps({**valid, **bad_fields}) + "\n" + json.dumps(valid))
+    records = load_belt_truth_capture(path)
+    assert len(records) == 1
+    assert records[0].t == 1.0
+    assert records[0].roi_means == {"forehead": (1.0, 2.0, 3.0)}
+
+
 def test_dispatch_belt_truth_capture_tolerates_no_active_worker():
     from gui.main_window import EngineApplication
 

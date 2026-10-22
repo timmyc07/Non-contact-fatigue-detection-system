@@ -12,23 +12,28 @@ const _backendBaseUrl = String.fromEnvironment(
 );
 
 class BackendService {
-  BackendService({this.baseUrl = _backendBaseUrl, http.Client? client})
+  BackendService(
+      {this.baseUrl = _backendBaseUrl, http.Client? client, io.Socket? socket})
       : _client = client ?? http.Client(),
-        _ownsClient = client == null;
+        _ownsClient = client == null,
+        _socket = socket;
 
   final String baseUrl;
   final http.Client _client;
   final bool _ownsClient;
   io.Socket? _socket;
   Timer? _poller;
+  bool _pollingInFlight = false;
+  bool _disposed = false;
+  static const _requestTimeout = Duration(seconds: 12);
   final StreamController<String> _previewFrames =
       StreamController<String>.broadcast();
 
   Stream<String> get previewFrames => _previewFrames.stream;
 
   Future<void> dispose() async {
-    _poller?.cancel();
-    _poller = null;
+    _disposed = true;
+    _stopPolling();
     _socket?.disconnect();
     _socket?.dispose();
     _socket = null;
@@ -49,18 +54,21 @@ class BackendService {
       onCancel: () {
         _socket?.disconnect();
         _socket?.dispose();
-        _poller?.cancel();
+        _socket = null;
+        _stopPolling();
       },
     );
     try {
-      final socket = io.io(
-        baseUrl,
-        <String, dynamic>{
-          'transports': ['websocket', 'polling'],
-          'autoConnect': true,
-          'reconnection': true,
-        },
-      );
+      final socket = _socket ??
+          io.io(
+            baseUrl,
+            <String, dynamic>{
+              'transports': ['websocket', 'polling'],
+              'autoConnect': true,
+              'reconnection': true,
+              'forceNew': true,
+            },
+          );
       _socket = socket;
       socket.on('metrics_update', (dynamic payload) {
         final packet = _packet(payload);
@@ -74,8 +82,12 @@ class BackendService {
           _previewFrames.add(frame);
         }
       });
-      socket.on('connect', (_) => socket.emit('request_metrics'));
+      socket.on('connect', (_) {
+        _stopPolling();
+        socket.emit('request_metrics');
+      });
       socket.on('connect_error', (_) => _startPolling(controller));
+      socket.on('disconnect', (_) => _startPolling(controller));
     } catch (_) {
       _startPolling(controller);
     }
@@ -88,7 +100,9 @@ class BackendService {
   }
 
   Future<List<RecordingMetadata>> recordingMetadata() async {
-    final response = await _client.get(Uri.parse('$baseUrl/api/recordings'));
+    final response = await _client
+        .get(Uri.parse('$baseUrl/api/recordings'))
+        .timeout(_requestTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError('Backend returned HTTP ${response.statusCode}.');
     }
@@ -99,14 +113,15 @@ class BackendService {
   }
 
   Future<Map<String, dynamic>> playback(String dbPath,
-      {int limit = 100}) async {
+      {int limit = 100, int offset = 0}) async {
     final uri = Uri.parse('$baseUrl/api/playback').replace(
       queryParameters: <String, String>{
         'db_path': dbPath,
         'limit': limit.toString(),
+        'offset': offset.toString(),
       },
     );
-    final response = await _client.get(uri);
+    final response = await _client.get(uri).timeout(_requestTimeout);
     final payload = jsonDecode(response.body);
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
@@ -131,7 +146,9 @@ class BackendService {
   }
 
   Future<MetricsSnapshot> metricsSnapshotModel() async {
-    final response = await _client.get(Uri.parse('$baseUrl/api/metrics'));
+    final response = await _client
+        .get(Uri.parse('$baseUrl/api/metrics'))
+        .timeout(_requestTimeout);
     final payload = jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError(_errorMessage(payload, response.statusCode));
@@ -160,13 +177,16 @@ class BackendService {
     Map<String, dynamic>? body,
   }) async {
     final uri = Uri.parse('$baseUrl$path');
-    final response = method == 'POST'
-        ? await _client.post(
-            uri,
-            headers: const <String, String>{'Content-Type': 'application/json'},
-            body: jsonEncode(body),
-          )
-        : await _client.get(uri);
+    final response = await (method == 'POST'
+            ? _client.post(
+                uri,
+                headers: const <String, String>{
+                  'Content-Type': 'application/json'
+                },
+                body: jsonEncode(body),
+              )
+            : _client.get(uri))
+        .timeout(_requestTimeout);
     final payload = jsonDecode(response.body);
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
@@ -178,20 +198,34 @@ class BackendService {
   }
 
   void _startPolling(StreamController<MetricsSnapshot> controller) {
-    if (_poller != null) return;
+    if (_poller != null || _disposed || controller.isClosed) return;
     _poller = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_pollingInFlight) return;
+      _pollingInFlight = true;
       try {
-        final response = await _client.get(Uri.parse('$baseUrl/api/metrics'));
+        final response = await _client
+            .get(Uri.parse('$baseUrl/api/metrics'))
+            .timeout(_requestTimeout);
         if (response.statusCode == 200) {
           final packet = _packet(jsonDecode(response.body));
-          if (packet != null && !controller.isClosed) {
+          if (packet != null &&
+              !_disposed &&
+              controller.hasListener &&
+              _poller != null) {
             controller.add(MetricsSnapshot.fromJson(packet));
           }
         }
       } catch (_) {
-        // The UI keeps the last sample and exposes its disconnected state.
+        // 下一輪重試，保留最後一筆資料。
+      } finally {
+        _pollingInFlight = false;
       }
     });
+  }
+
+  void _stopPolling() {
+    _poller?.cancel();
+    _poller = null;
   }
 
   Map<String, dynamic>? _packet(dynamic payload) {

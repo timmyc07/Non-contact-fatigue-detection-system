@@ -949,6 +949,9 @@ class EngineApplication(QObject):
             "pipeline_running": pipeline_running,
             "camera_running": bool(self._cam_worker is not None),
             "recording": pipeline.recording,
+            "recording_finalizing": not pipeline.recording and (
+                self._video_thread is not None or self._video_worker is not None
+            ),
             "fps": float(self._last_fps or 0.0),
             "camera_label": self._engine_controller.selected_camera_label(),
             "camera_codec": str(info.get("codec") or ""),
@@ -1672,7 +1675,7 @@ class EngineApplication(QObject):
         if self._metrics_recorder is not None:
             return
         rec_dir = self._recordings_dir()
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         db_path = rec_dir / f"metrics_{stamp}.db"
         self._metrics_recorder = MetricsRecorder(str(db_path))
         self._recording_db_path = db_path
@@ -2352,13 +2355,15 @@ class EngineApplication(QObject):
     def _start_belt_calibration(self) -> None:
         belt_cfg = load_hr_belt_config()
         self._belt_cfg = belt_cfg
-        if not self._engine_controller.belt_running:
+        belt_was_running = self._engine_controller.belt_running
+        if not belt_was_running:
             self._engine_controller.clear_belt_samples()
-            err = self._engine_controller.start_belt(belt_cfg)
-            if err:
-                self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
-                self._capture_preferences.configure(belt_calibration=False)
-                return
+        err = self._engine_controller.start_belt(belt_cfg)
+        if err:
+            self._append_log(f"⚠ 心跳帶校準啟動失敗：{err}")
+            self._capture_preferences.configure(belt_calibration=False)
+            return
+        if not belt_was_running:
             target = (
                 f"位址 {belt_cfg.address}" if belt_cfg.address
                 else f"名稱前綴「{belt_cfg.name_prefix}」" if belt_cfg.name_prefix

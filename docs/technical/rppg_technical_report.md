@@ -157,9 +157,9 @@ GUI 啟動攝影機後，資料流如下：
 
 目前 transformation matrix 的幾何補償採保守策略：已落地 roll 補償與姿態診斷，尚未導入完整 3D mesh warp。這樣做的原因是完整 warp 會改變 ROI 取樣分布與 rPPG 數值行為，仍需要固定資料集回放驗證後再擴充。
 
-## 5. POS 脈搏波演算法
+## 5. CHROM 類脈搏波投影
 
-本專案使用 POS（Plane-Orthogonal-to-Skin）類型演算法，程式位於 `pos_pulse(r, g, b)`。
+本專案的 `pos_pulse(r, g, b)` 保留歷史 API 名稱，實作為每色頻 z-score 正規化加 CHROM 類投影，不是標準 Wang POS。係數可對照 [rPPG-Toolbox CHROM](https://github.com/ubicomplab/rPPG-Toolbox/blob/main/unsupervised_methods/methods/CHROME_DEHAAN.py)；[Wang POS](https://github.com/ubicomplab/rPPG-Toolbox/blob/main/unsupervised_methods/methods/POS_WANG.py) 使用不同的正規化、投影矩陣與滑窗重疊相加。此次只更正技術歸屬，沒有替換公式。
 
 輸入是 ROI 平均 RGB 時間序列。首先對每個色彩通道做時間標準化：
 
@@ -183,7 +183,7 @@ GUI 啟動攝影機後，資料流如下：
 
 `pulse = x - alpha * y`
 
-解釋：POS 的概念是把 RGB 皮膚顏色變化投影到與膚色方向正交的平面，盡量削弱光照與膚色基線的影響，保留與血液容積變化相關的週期成分。本專案採用時間窗內標準化與 alpha 動態縮放，讓 x/y 兩個投影分量在不同光照與膚色下能維持相對平衡。
+本專案以時間窗內標準化與 alpha 動態縮放組合上述兩個色度分量；效果必須由資料集與裝置驗證，不能套用標準 POS 或原版 CHROM 論文的準確度聲明。
 
 ## 6. 時間窗、取樣率與暖機
 

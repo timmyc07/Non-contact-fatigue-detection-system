@@ -7,7 +7,14 @@ This directory is the new presentation layer. It runs as Flutter Web inside the 
 1. Install the Flutter SDK and make sure `flutter --version` works.
 2. Run `flutter pub get` in this directory. The repository already contains the Flutter Web scaffold; do not run `flutter create` over it.
 3. Run `npm run desktop` from the repository root. Tauri starts the hidden Python engine and the Flutter Web panel together.
-4. For browser-only work, start `.venv\Scripts\python main.py --engine` separately, then use `flutter run -d chrome`.
+4. For browser-only work, start the engine from the repository root in a separate terminal:
+
+   - Windows: `.venv\Scripts\python main.py --engine`
+   - macOS/Linux: `.venv/bin/python main.py --engine`
+
+   From this directory, use `flutter run -d chrome --web-port 1420 --web-hostname 127.0.0.1`.
+   On macOS, also pass `--dart-define=NCFD_BACKEND_URL=http://127.0.0.1:5055`.
+   Port 1420 matches the engine's desktop Origin allowlist.
 
 The browser build keeps the same layout and uses the HTTP snapshot fallback when Socket.IO is unavailable. Inside Tauri, `lib/services/tauri_bridge.dart` calls `window.__TAURI__.core.invoke`.
 

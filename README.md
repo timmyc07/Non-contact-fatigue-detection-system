@@ -155,6 +155,8 @@ PyInstaller packages the engine; Tauri bundles it with the model and tuning reso
 
 Current macOS local packages use ad-hoc signing. Public distribution still requires Developer ID signing and notarization. See the [operations guide](docs/guides/operations.md) for packaging, diagnostics, and acceptance procedures.
 
+The [macOS REA and module audit](docs/technical/macos_rea_audit_2026-10-22.md) records the installed binary evidence, module contracts, fixes, and remaining hardware validation. The validated Web stack requires `Flask-SocketIO>=5.6.1`, `python-socketio>=5.16.4`, and `python-engineio>=4.14.0`. File Browser uploads require recording and video finalization to finish; databases are uploaded through a consistent SQLite snapshot.
+
 ## Technical design
 
 ### One camera, two complementary analysis paths

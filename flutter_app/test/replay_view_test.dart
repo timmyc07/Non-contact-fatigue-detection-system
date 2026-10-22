@@ -3,6 +3,39 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('history shows relative elapsed time and later pages',
+      (tester) async {
+    final pages = <int>[];
+    await tester.binding.setSurfaceSize(const Size(1200, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: PlaybackView(
+      recordings: const [],
+      selected: const {'session_name': 'test'},
+      rows: const [
+        {'timestamp': 1792641605.0, 'status': 'OK'}
+      ],
+      offset: 200,
+      total: 401,
+      startTimestamp: 1792641600.0,
+      onPage: (offset) async => pages.add(offset),
+      busy: false,
+      state: const {},
+      onCommand: (_, [__]) async {},
+      onRefresh: () async {},
+      onOpen: (_) async {},
+      onClose: () {},
+      onPickReplayFolder: () async => null,
+    ))));
+    expect(find.text('5.0 s'), findsOneWidget);
+    expect(find.text('201–201 / 401 筆'), findsOneWidget);
+    await tester.tap(find.text('下一頁'));
+    expect(pages, [201]);
+    await tester.tap(find.text('上一頁'));
+    expect(pages, [201, 0]);
+  });
+
   testWidgets('folder picker selection configures the replay path',
       (tester) async {
     final calls = <(String, Map<String, dynamic>?)>[];
@@ -14,6 +47,10 @@ void main() {
             recordings: const [],
             selected: null,
             rows: const [],
+            offset: 0,
+            total: 0,
+            startTimestamp: 0,
+            onPage: (_) async {},
             busy: false,
             state: const <String, dynamic>{},
             onCommand: (command, [args]) async => calls.add((command, args)),
@@ -47,6 +84,10 @@ void main() {
             recordings: const [],
             selected: null,
             rows: const [],
+            offset: 0,
+            total: 0,
+            startTimestamp: 0,
+            onPage: (_) async {},
             busy: false,
             state: const <String, dynamic>{},
             onCommand: (command, [args]) async => calls.add((command, args)),
@@ -75,6 +116,10 @@ void main() {
             recordings: const [],
             selected: null,
             rows: const [],
+            offset: 0,
+            total: 0,
+            startTimestamp: 0,
+            onPage: (_) async {},
             busy: false,
             state: const <String, dynamic>{},
             onCommand: (command, [args]) async => calls.add((command, args)),
@@ -105,6 +150,10 @@ void main() {
             recordings: const [],
             selected: null,
             rows: const [],
+            offset: 0,
+            total: 0,
+            startTimestamp: 0,
+            onPage: (_) async {},
             busy: false,
             state: const <String, dynamic>{},
             onCommand: (command, [args]) async => calls.add((command, args)),

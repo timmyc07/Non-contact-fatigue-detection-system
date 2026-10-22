@@ -2,6 +2,8 @@
 
 更新日期：2026-08-17
 
+2026-10-22 核對補充：`pos_pulse` 的現行公式為 z-score 加 CHROM 類投影，非標準 Wang POS；本頁其餘 POS 字樣沿用歷史名稱。Web 停服、BLE ownership、資料上傳與 Flutter 呈現的最新修正及完整介面見 [macOS REA 審核](macos_rea_audit_2026-10-22.md) 與 [模組清冊](macos_rea_module_inventory_2026-10-22.md)。
+
 本文件以「用途名稱」描述專案結構與資料流，不以實際程式檔名作為架構節點。需要回到程式時，請依「所屬區域」對照專案資料夾責任。
 
 ## 閱讀原則

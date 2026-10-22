@@ -182,6 +182,19 @@ def test_runtime_preflight_failure_exit_code_is_78(monkeypatch) -> None:
     assert runtime_preflight.main() == 78
 
 
+@pytest.mark.parametrize("camera_apis,loaded,expected", [((), False, False), ((1200,), False, False), ((1200,), True, True)])
+def test_runtime_preflight_checks_registered_camera_backend(monkeypatch, camera_apis, loaded, expected):
+    fake_cv2 = SimpleNamespace(
+        CAP_ANY=0, CAP_AVFOUNDATION=1200,
+        videoio_registry=SimpleNamespace(getCameraBackends=lambda: camera_apis, hasBackend=lambda api: loaded),
+    )
+    monkeypatch.setattr(runtime_preflight, "import_module", lambda name: fake_cv2 if name == "cv2" else object())
+    monkeypatch.setattr(runtime_preflight, "validate_mediapipe_runtime", lambda: "0.10.35")
+    monkeypatch.setattr(runtime_preflight, "installed_opencv_distributions", lambda: {OPENCV_RUNTIME_DISTRIBUTION: OPENCV_RUNTIME_VERSION})
+    monkeypatch.setattr(runtime_preflight, "get_desktop_platform_runtime", lambda: get_desktop_platform_runtime("darwin"))
+    assert (runtime_preflight.check_runtime() == []) is expected
+
+
 def test_runtime_preflight_rejects_multiple_opencv_distributions(monkeypatch) -> None:
     monkeypatch.setattr(runtime_preflight, "import_module", lambda _name: object())
     monkeypatch.setattr(runtime_preflight, "validate_mediapipe_runtime", lambda: "0.10.35")

@@ -476,8 +476,8 @@ class MetricsRecorder:
                 last_flush = time.time()
                 return
             try:
-                conn.executemany(self.INSERT_SQL, buffer_rows)
-                conn.commit()
+                with conn:
+                    conn.executemany(self.INSERT_SQL, buffer_rows)
                 total_rows += len(buffer_rows)
                 for ts in buffer_ts:
                     if ts is not None:

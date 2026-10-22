@@ -1,0 +1,60 @@
+{
+  "engine": {
+    "command": {
+      "latency_ms": {
+        "max": 21.073,
+        "mean": 19.993,
+        "min": 18.395,
+        "p50": 20.091,
+        "p95": 21.066
+      },
+      "samples": 30
+    },
+    "pid": 34827,
+    "process_tree_pids": [
+      34827
+    ],
+    "rss_bytes_at_ready": 342835200,
+    "rss_mib_at_ready": 326.953,
+    "startup_to_api_ready_ms": 2047.081
+  },
+  "noise_control": {
+    "loopback_only": true,
+    "samples": 30,
+    "warmup_discarded": 5
+  },
+  "platform": "darwin",
+  "preview": {
+    "base64_bytes": 12156,
+    "dimensions": [
+      640,
+      360
+    ],
+    "dispatch_delivered": 30,
+    "dispatch_frames_per_second": 22623.735,
+    "encode_latency_ms": {
+      "max": 0.952,
+      "mean": 0.82,
+      "min": 0.764,
+      "p50": 0.807,
+      "p95": 0.913
+    },
+    "jpeg_bytes": 9115,
+    "kind": "synthetic_in_process",
+    "limitations": "Excludes camera, network, Tauri WebView decode, and Flutter rendering",
+    "samples": 30
+  },
+  "python": "3.12.14",
+  "schema_version": 1,
+  "audit": {
+    "date": "2026-10-22",
+    "source": "codex/macos-rea-audit working tree; base 3ef4f23",
+    "scope": "source engine, read-only API commands, synthetic preview, sampled process-tree RSS",
+    "limitations": [
+      "No comparable pre-change camera benchmark was collected.",
+      "Camera smoke reported no available camera.",
+      "Excludes network, WKWebView decoding, Flutter rendering, BLE and accuracy evaluation.",
+      "Summed RSS is not exclusive physical memory or peak memory."
+    ]
+  }
+}

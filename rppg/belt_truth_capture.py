@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -191,12 +192,19 @@ def load_belt_truth_capture(path: str | Path) -> list[BeltTruthCaptureRecord]:
             try:
                 t = float(obj["t"])
                 roi_means_raw = obj["roi_means"]
+                if not isinstance(roi_means_raw, Mapping):
+                    raise ValueError("roi_means 必須是 object")
                 roi_means = {
                     str(name): (float(v[0]), float(v[1]), float(v[2]))
                     for name, v in roi_means_raw.items()
                 }
                 belt_bpm_raw = obj.get("belt_bpm")
                 belt_bpm = float(belt_bpm_raw) if belt_bpm_raw is not None else None
+                values = [t, *(v for rgb in roi_means.values() for v in rgb)]
+                if belt_bpm is not None:
+                    values.append(belt_bpm)
+                if not all(math.isfinite(value) for value in values):
+                    raise ValueError("capture 數值必須有限")
             except (KeyError, TypeError, ValueError, IndexError):
                 logger.warning(
                     "belt-truth capture %s 第 %d 行欄位缺失或型別錯誤，略過", p, lineno

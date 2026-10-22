@@ -237,7 +237,7 @@ def roi_mean_bgr(
 
 
 def pos_pulse(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Wang et al. style POS on temporally normalized channels."""
+    """每色頻 z-score 後套用 CHROM 類投影；保留既有 pos_pulse API 名稱。"""
     r = np.asarray(r, dtype=np.float64)
     g = np.asarray(g, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)

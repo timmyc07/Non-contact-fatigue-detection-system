@@ -29,7 +29,11 @@ class FileBrowserClient:
         self._heartbeat_stop = threading.Event()
 
     def configure(self, base_url: str, username: str, password: str) -> bool:
+        self._stop_heartbeat()
         with self._lock:
+            self._token = None
+            self._token_expires = 0.0
+            self._session.cookies.clear()
             self._base_url = base_url.rstrip("/")
             self._username = username
             self._password = password
@@ -147,14 +151,14 @@ class FileBrowserClient:
 
         resp = self._request(
             "POST", api_path,
-            data=_make_reader(),
+            data_factory=_make_reader,
             headers={"Content-Type": "application/octet-stream"},
             timeout=600,
         )
         if resp.status_code == 409:
             resp = self._request(
                 "POST", api_path + "?override=true",
-                data=_make_reader(),
+                data_factory=_make_reader,
                 headers={"Content-Type": "application/octet-stream"},
                 timeout=600,
             )
@@ -189,13 +193,18 @@ class FileBrowserClient:
         self._ensure_token()
         return {"X-Auth": self._token} if self._token else {}
 
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+    def _request(
+        self, method: str, path: str, *,
+        data_factory: Optional[Callable] = None, **kwargs,
+    ) -> requests.Response:
         if not self._base_url:
             raise RuntimeError("FileBrowserClient: 尚未設定連線")
 
         existing_headers = kwargs.pop("headers", {}) or {}
         headers = {**self._auth_headers(), **existing_headers}
         kwargs.setdefault("timeout", 30)
+        if data_factory is not None:
+            kwargs["data"] = data_factory()
 
         resp = self._session.request(
             method, f"{self._base_url}{path}", headers=headers, **kwargs
@@ -203,6 +212,9 @@ class FileBrowserClient:
         if resp.status_code == 401:
             with self._lock:
                 if self._do_login_locked():
+                    resp.close()
+                    if data_factory is not None:
+                        kwargs["data"] = data_factory()
                     headers = {**self._auth_headers(), **existing_headers}
                     resp = self._session.request(
                         method, f"{self._base_url}{path}", headers=headers, **kwargs

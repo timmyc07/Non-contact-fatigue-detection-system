@@ -401,6 +401,8 @@ class HrBeltBleClient:
             logger.error(msg)
             return msg
         if self.running:
+            if self._stop_event.is_set():
+                return "心跳帶仍在停止中，請等待背景執行緒結束後再啟動"
             return ""
         self._stop_event.clear()
         self._set_status(state="scanning", last_error="")
@@ -429,7 +431,6 @@ class HrBeltBleClient:
             except RuntimeError:
                 pass
         thread = self._thread
-        self._thread = None
         if thread is not None and thread.is_alive():
             thread.join(timeout=join_timeout)
             if thread.is_alive():
@@ -440,6 +441,7 @@ class HrBeltBleClient:
                     last_error="停止逾時，背景執行緒仍在收尾（已拒絕新樣本寫入）",
                 )
                 return
+        self._thread = None
         self._set_status(state="stopped", connected_since=None)
 
     # ── 內部：狀態管理 ───────────────────────────────────────────────────────

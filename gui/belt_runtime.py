@@ -36,7 +36,7 @@ class BeltRuntime:
     def start_belt(self, config: HrBeltConfig | None = None) -> str:
         """啟動 BLE 心跳帶背景連線；成功回傳空字串，失敗回傳錯誤訊息。"""
         if self.belt_running:
-            return ""
+            return self._belt.start()
         if self._belt is not None:
             self._belt.stop()
         cfg = config if config is not None else HrBeltConfig()
@@ -57,6 +57,8 @@ class BeltRuntime:
         if self._belt is None:
             return
         self._belt.stop()
+        if self._belt.running:
+            raise TimeoutError("心跳帶仍在停止中，背景執行緒尚未結束")
         self._belt = None
 
     def belt_status(self) -> HrBeltStatus | None:

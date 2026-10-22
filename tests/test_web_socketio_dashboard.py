@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import base64
+import json
+import socket
+import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+import pytest
+import requests
+import simple_websocket
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
@@ -174,15 +181,128 @@ def test_socketio_broadcast_frame_event_reaches_client(tmp_path: Path) -> None:
         client.disconnect()
 
 
-def test_shutdown_endpoint_rejects_invalid_token(tmp_path: Path) -> None:
-    app, _socketio = create_app(
-        MetricsBuffer(),
-        PlaybackManager(tmp_path),
-        shutdown_token="secret-token",
+def test_server_stop_closes_websocket_and_half_open_polling_and_releases_port(tmp_path):
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1", port=0)
+    server.start()
+    deadline = time.monotonic() + 3.0
+    while server.port == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert server.port != 0
+    base = f"http://127.0.0.1:{server.port}"
+    ws = None
+    try:
+        polling = requests.get(base + "/socket.io/?EIO=4&transport=polling", timeout=2)
+        assert polling.status_code == 200
+        ws = simple_websocket.Client.connect(base.replace("http:", "ws:") + "/socket.io/?EIO=4&transport=websocket")
+        assert ws.receive(timeout=2).startswith("0")
+        ws.send("40")
+        ws.send('42["request_metrics"]')
+        events = [ws.receive(timeout=2) for _ in range(3)]
+        assert any("metrics_history" in event for event in events)
+        assert len(server.socketio.server.eio.sockets) == 2
+        assert server.stop(join_timeout=2)
+        server.join(timeout=2)
+        assert not server.is_alive()
+        assert not server.socketio.server.eio.sockets
+        with pytest.raises(simple_websocket.ConnectionClosed):
+            ws.receive(timeout=2)
+    finally:
+        if ws is not None and ws.connected:
+            ws.close()
+        server.stop(join_timeout=2)
+    replacement = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1", port=server.port)
+    replacement.start()
+    try:
+        assert requests.get(base + "/api/metrics", timeout=2).status_code == 200
+    finally:
+        assert replacement.stop(join_timeout=2)
+
+
+def test_request_completed_after_stop_cannot_create_engineio_session(tmp_path):
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1", port=0)
+    server.start()
+    deadline = time.monotonic() + 3
+    while server.port == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    with socket.create_connection(("127.0.0.1", server.port), timeout=2) as connection:
+        connection.sendall(b"GET /socket.io/?EIO=4&transport=polling HTTP/1.1\r\n")
+        time.sleep(0.05)
+        assert server.stop(join_timeout=2)
+        connection.sendall(b"Host: localhost\r\n\r\n")
+        assert b"503" in connection.recv(4096).split(b"\r\n", 1)[0]
+        assert not server.socketio.server.eio.sockets
+
+
+@pytest.mark.parametrize("host,origin,status", [
+    ("evil.example:5055", "http://evil.example:5055", 403),
+    ("127.0.0.1:5055", "http://evil.example", 403),
+    ("127.0.0.1:5055", None, 200),
+    ("[::1]:5055", "http://[::1]:5055", 200),
+    ("localhost:5055", "http://localhost:5055", 200),
+    *(("127.0.0.1:5055", origin, 200) for origin in (
+        "http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost",
+        "http://tauri.localhost", "https://tauri.localhost",
+    )),
+])
+def test_sensitive_endpoints_validate_host_and_origin(tmp_path, host, origin, status):
+    called = []
+    app, _ = create_app(MetricsBuffer(), PlaybackManager(tmp_path), control_handler=lambda *args: called.append(args) or {})
+    headers = {"Host": host}
+    if origin is not None:
+        headers["Origin"] = origin
+    response = app.test_client().post(
+        "/api/control/command", json={"command": "app.shutdown", "args": {}},
+        headers=headers, environ_overrides={"REMOTE_ADDR": "::ffff:127.0.0.1"},
     )
-    client = app.test_client()
-    response = client.post("/__server/shutdown", json={"token": "wrong"})
-    assert response.status_code == 403
+    assert response.status_code == status
+    assert bool(called) is (status == 200)
+
+
+def test_upload_database_snapshot_includes_committed_wal(tmp_path, monkeypatch):
+    import sqlite3
+    from gui import web_server
+
+    captured = []
+
+    class FakeFileBrowser:
+        def is_authenticated(self):
+            return True
+
+        def upload_file(self, path, name, **kwargs):
+            with sqlite3.connect(path) as conn:
+                assert conn.execute("SELECT bpm FROM metrics").fetchall() == [(72.0,)]
+            captured.append((path, name))
+
+    monkeypatch.setattr(web_server, "FileBrowserClient", FakeFileBrowser)
+    db_path = tmp_path / "metrics_session.db"
+    source = sqlite3.connect(db_path)
+    try:
+        source.execute("PRAGMA journal_mode=WAL")
+        source.execute("CREATE TABLE metrics (bpm REAL)")
+        source.execute("INSERT INTO metrics VALUES (72)")
+        source.commit()
+        assert Path(str(db_path) + "-wal").exists()
+        app, _ = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
+        response = app.test_client().post("/api/fb/upload", json={"recording_name": "metrics_session"})
+        assert response.status_code == 200
+        assert response.json["uploaded"] == [db_path.name]
+        assert len(captured) == 1
+        assert captured[0][1] == db_path.name
+        assert not captured[0][0].exists()
+    finally:
+        source.close()
+
+
+@pytest.mark.parametrize("flag", ["recording", "recording_finalizing"])
+def test_upload_waits_until_video_finalization_finishes(tmp_path, monkeypatch, flag):
+    from types import SimpleNamespace
+    from gui import web_server
+
+    monkeypatch.setattr(web_server, "FileBrowserClient", lambda: SimpleNamespace(is_authenticated=lambda: True))
+    app, _ = create_app(MetricsBuffer(), PlaybackManager(tmp_path), get_latest_packet=lambda: {flag: True})
+    response = app.test_client().post("/api/fb/upload", json={"recording_name": "metrics_session"})
+    assert response.status_code == 409
+    assert "停止錄製" in response.json["error"]
 
 
 # ── LAN 模式 shared-token 認證 ──

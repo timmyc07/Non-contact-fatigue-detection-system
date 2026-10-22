@@ -16,6 +16,7 @@ import json
 import logging
 import sqlite3
 import sys
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +123,36 @@ def test_record_after_close_is_noop_not_raise(tmp_path):
     finally:
         conn.close()
     assert count == 0
+
+
+def test_failed_batch_is_rolled_back_before_next_success(tmp_path, monkeypatch):
+    failed = threading.Event()
+
+    class SignalHandler(logging.Handler):
+        def emit(self, record):
+            if "batch write failed" in record.getMessage():
+                failed.set()
+
+    handler = SignalHandler()
+    log = logging.getLogger("gui.metrics_recorder")
+    log.addHandler(handler)
+    monkeypatch.setattr(MetricsRecorder, "BATCH_SIZE", 2)
+    db_path = tmp_path / "rollback.db"
+    recorder = MetricsRecorder(str(db_path))
+    try:
+        recorder.record(_blank_payload(timestamp=1.0))
+        recorder.record(_blank_payload(timestamp=2.0, camera_label=object()))
+        assert failed.wait(2.0)
+        recorder.record(_blank_payload(timestamp=3.0))
+    finally:
+        recorder.close()
+        log.removeHandler(handler)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT timestamp FROM metrics").fetchall() == [(3.0,)]
+    assert recorder.get_recording_stats()[0] == 1
+    meta = json.loads(Path(f"{db_path}.meta.json").read_text())
+    assert (meta["rows"], meta["ts_min"], meta["ts_max"]) == (1, 3.0, 3.0)
 
 
 def test_conn_available_synchronously_after_init_for_schema_introspection(tmp_path):

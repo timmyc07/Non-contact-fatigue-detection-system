@@ -27,6 +27,7 @@ The product README, this index, and the operations guide are in **English**. Mos
 
 | Topic | Reference | Reading context |
 | :--- | :--- | :--- |
+| Current macOS source and installed runtime audit | [REA audit and fixes](technical/macos_rea_audit_2026-10-22.md), [module and contract inventory](technical/macos_rea_module_inventory_2026-10-22.md) | 2026-10-22 evidence, module decisions, regression checks, and explicit hardware limits |
 | System inputs, outputs, methods, and limits | [System technical overview](technical/system_overview_technical_report.md) | Start here for the complete monitoring pipeline |
 | Data flow, modules, and algorithm relationships | [Architecture and algorithm map](technical/system_architecture_algorithm_map.md) | Connect implementation responsibilities to their inputs and outputs |
 | ROIs, pulse separation, filtering, BPM, and HRV | [rPPG technical report v2](technical/rppg_technical_report_v2.md) | The [product README](../README.md#technical-design) records the actual `pos_pulse` formula and its naming limits; the [earlier report](technical/rppg_technical_report.md) preserves design history |

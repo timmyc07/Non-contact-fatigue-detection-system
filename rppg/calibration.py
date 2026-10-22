@@ -8,12 +8,15 @@ saved version parameters without a watch.
 from __future__ import annotations
 
 import json
+import os
 import statistics
+import tempfile
 import time
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from uuid import uuid4
 
 from gui.runtime_paths import data_path, data_root
 
@@ -412,9 +415,9 @@ class CalibrationVersionStore:
         self.reload()
         if version_id != ORIGIN_VERSION_ID and self._find_entry(version_id) is None:
             raise KeyError(f"找不到校準版本：{version_id}")
-        self._manifest["active_version_id"] = version_id
-        self._manifest["updated_at"] = _now_iso()
-        self._write_json(self.manifest_path, self._manifest)
+        manifest = {**self._manifest, "active_version_id": version_id, "updated_at": _now_iso()}
+        self._write_json(self.manifest_path, manifest)
+        self._manifest = manifest
         self._manifest_mtime = self.manifest_path.stat().st_mtime
         return self.get_version(version_id)
 
@@ -448,10 +451,10 @@ class CalibrationVersionStore:
         self._write_json(self.versions_dir / f"{version_id}.json", version.to_dict())
         entries = list(self.list_versions())
         entries.append({"id": version_id, "name": version.name, "file": rel, "created_at": created_at})
-        self._manifest["versions"] = entries
-        self._manifest["active_version_id"] = version_id
-        self._manifest["updated_at"] = created_at
-        self._write_json(self.manifest_path, self._manifest)
+        manifest = {**self._manifest, "versions": entries,
+                    "active_version_id": version_id, "updated_at": created_at}
+        self._write_json(self.manifest_path, manifest)
+        self._manifest = manifest
         self._manifest_mtime = self.manifest_path.stat().st_mtime
         return version
 
@@ -464,16 +467,17 @@ class CalibrationVersionStore:
             raise KeyError(f"找不到校準版本：{version_id}")
         rel = str(entry.get("file") or f"versions/{version_id}.json")
         path = self.root / rel
-        if path.exists():
-            path.unlink()
-        self._manifest["versions"] = [
+        entries = [
             v for v in self.list_versions() if str(v.get("id")) != version_id
         ]
-        if self.get_active_version_id() == version_id:
-            self._manifest["active_version_id"] = ORIGIN_VERSION_ID
-        self._manifest["updated_at"] = _now_iso()
-        self._write_json(self.manifest_path, self._manifest)
+        active = self.get_active_version_id()
+        manifest = {**self._manifest, "versions": entries,
+                    "active_version_id": ORIGIN_VERSION_ID if active == version_id else active,
+                    "updated_at": _now_iso()}
+        self._write_json(self.manifest_path, manifest)
+        self._manifest = manifest
         self._manifest_mtime = self.manifest_path.stat().st_mtime
+        path.unlink(missing_ok=True)
 
     def _find_entry(self, version_id: str) -> dict[str, Any] | None:
         for entry in self.list_versions():
@@ -489,7 +493,19 @@ class CalibrationVersionStore:
     @staticmethod
     def _write_json(path: Path, data: Mapping[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent, delete=False,
+            ) as output:
+                temporary = Path(output.name)
+                json.dump(data, output, ensure_ascii=False, indent=2)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 def write_live_feed(metrics: Any, *, enabled: bool | None = None) -> None:
@@ -557,4 +573,4 @@ def _now_iso() -> str:
 
 def _new_version_id() -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"v{stamp}"
+    return f"v{stamp}_{uuid4().hex}"

@@ -9,6 +9,9 @@ void main() {
     expect(PlatformCapabilities.macos.canStartMonitoring, isTrue);
     expect(PlatformCapabilities.macos.supports('tauri_shell'), isTrue);
     expect(PlatformCapabilities.macos.supports('python_sidecar'), isTrue);
+    expect(PlatformCapabilities.macos.supports('global_hotkey'), isFalse);
+    expect(PlatformCapabilities.linux.supports('global_hotkey'), isFalse);
+    expect(PlatformCapabilities.windows.supports('global_hotkey'), isTrue);
     expect(
         PlatformCapabilities.macos.supportsAny(const [
           PlatformCapabilityNames.globalHotkey,

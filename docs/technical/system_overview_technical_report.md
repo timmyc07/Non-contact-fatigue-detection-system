@@ -2,6 +2,8 @@
 
 更新日期：2026-06-16
 
+2026-10-22 實作核對與 macOS 交付／審核結果見 [REA 全模組報告](macos_rea_audit_2026-10-22.md)；歷史 `pos_pulse` 名稱的公式實為 z-score 加 CHROM 類投影，不應解讀成標準 Wang POS。
+
 本報告整理本系統的整體目的、AI 模型、訊號處理、疲勞分析、輸入輸出、系統架構、可信度驗證方式與限制。內容以聽眾能理解的用途名稱描述流程；必要技術術語會以括號補充，例如臉部特徵點（landmarks）與皮膚取樣區域（ROI）。
 
 ## 1. 系統定位
@@ -36,7 +38,7 @@
 
 rPPG 生理訊號不使用心率 AI 模型，而是由訊號處理產生：
 
-- POS 脈波分離法（Plane-Orthogonal-to-Skin，皮膚色彩正交投影法）：從 RGB 顏色時間序列萃取較接近脈搏的波形。
+- CHROM 類色度投影（現有 API 名稱 `pos_pulse`）：對各色頻做 z-score 後以 CHROM 類係數組合，從 RGB 時序估計脈搏波形；不是標準 Wang POS。
 - Butterworth 帶通濾波（band-pass filter）：保留合理心跳頻帶，降低低頻漂移與高頻雜訊。
 - Welch 頻譜分析（Welch PSD，分段平均頻譜估計）：在心率頻帶中找主要峰值估算 BPM。
 - 峰值偵測（peak detection）：從脈波波形找出相鄰心跳間隔，用於推估心率變異度。
