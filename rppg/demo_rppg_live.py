@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import platform
 import time
-import urllib.request
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +41,7 @@ from rppg.rppg_worker import (
     _pose_from_matrix,
     _roi_weights_from_pose,
     _rotate_points,
+    ensure_face_model,
     resolve_rppg_hrv_metrics,
 )
 from gui.mediapipe_tuning import load_mediapipe_tuning
@@ -70,11 +70,6 @@ ROI_SPECS = [
     ("R_cheek", RIGHT_CHEEK_ROI_IDX, 2),
     ("glabella", GLABELLA_ROI_IDX, 3),
 ]
-
-MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
-    "face_landmarker/float16/latest/face_landmarker.task"
-)
 
 
 def _video_capture_single(index: int, backend: str) -> tuple[Optional[Any], str]:
@@ -207,16 +202,6 @@ def pick_camera_interactive(backend: str = "auto") -> int:
         if choice in valid:
             return choice
         print(f"Index {choice} not in {sorted(valid)}.")
-
-
-def ensure_face_model(models_dir: Path) -> Path:
-    models_dir.mkdir(parents=True, exist_ok=True)
-    target = models_dir / "face_landmarker.task"
-    if target.exists() and target.stat().st_size > 1_000_000:
-        return target
-    print(f"[demo] Downloading Face Landmarker model to {target} ...")
-    urllib.request.urlretrieve(MODEL_URL, target)
-    return target
 
 
 def _landmark_xy(lm: Any, idx: int, w: int, h: int) -> tuple[int, int]:

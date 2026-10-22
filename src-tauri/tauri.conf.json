@@ -11,7 +11,7 @@
     },
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": {
-      "script": "flutter build web --release",
+      "script": "flutter build web --release --no-web-resources-cdn",
       "cwd": "../flutter_app",
       "wait": true
     },

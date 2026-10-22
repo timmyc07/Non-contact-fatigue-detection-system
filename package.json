@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "tauri": "tauri",
-    "desktop": "tauri dev",
+    "desktop": "node scripts/prepare_engine_sidecar.mjs --assets-only && tauri dev",
     "desktop:build": "node scripts/prepare_engine_sidecar.mjs && tauri build"
   },
   "devDependencies": {

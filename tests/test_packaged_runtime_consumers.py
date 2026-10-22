@@ -77,21 +77,13 @@ def test_alert_defaults_resolve_from_resource_root(
     )
 
 
-def test_web_ui_resolves_from_resource_root(tmp_path: Path, monkeypatch) -> None:
-    resource_root = tmp_path / "bundle"
-    monkeypatch.setattr(
-        web_server,
-        "resource_path",
-        lambda *parts: resource_root.joinpath(*parts),
-    )
-
+def test_diagnostics_does_not_require_web_ui_resources(tmp_path: Path) -> None:
     app, _socketio = web_server.create_app(
         MetricsBuffer(), PlaybackManager(tmp_path / "recordings")
     )
 
-    assert Path(app.template_folder or "") == (
-        resource_root / "gui" / "web_ui" / "templates"
-    )
-    assert Path(app.static_folder or "") == (
-        resource_root / "gui" / "web_ui" / "static"
-    )
+    assert app.template_folder is None
+    assert app.static_folder is None
+    response = app.test_client().get("/")
+    assert response.status_code == 200
+    assert response.json["interface"] == "Tauri + Flutter"

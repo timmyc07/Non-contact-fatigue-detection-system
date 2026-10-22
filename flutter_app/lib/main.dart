@@ -296,8 +296,8 @@ class _MonitorShellState extends State<MonitorShell> {
         'hotkeys' => '快捷鍵設定已完成',
         'profile' => '使用者資料設定已完成',
         'alarm' => '警報器設定已完成',
-        'web' => '已開啟 Web 儀表板',
-        'web_lan' => 'Web 區域網設定已更新',
+        'web' => '已開啟診斷服務',
+        'web_lan' => '診斷服務區域網設定已更新',
         _ => '操作已完成',
       };
     }
@@ -2796,7 +2796,7 @@ class SettingsView extends StatelessWidget {
                   : () => onCommand(
                       'settings.action', <String, dynamic>{'action': 'web'}),
               icon: const Icon(Icons.open_in_browser_outlined),
-              label: const Text('Web 儀表板')),
+              label: const Text('診斷服務')),
           OutlinedButton.icon(
               onPressed: busy
                   ? null
@@ -2839,7 +2839,7 @@ class SettingsView extends StatelessWidget {
         ]),
         const SizedBox(height: 10),
         _SettingSwitch(
-            title: '允許區域網存取 Web 儀表板',
+            title: '允許區域網存取診斷服務',
             subtitle: '僅在受信任網路啟用未加密 LAN 廣播',
             value: state['web_allow_lan'] == true,
             enabled: !busy,

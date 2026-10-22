@@ -1,0 +1,429 @@
+# 操作與驗證手冊
+
+本手冊保存安裝後的進階操作、相機診斷、校準、回測與原生封裝細節。產品定位、平台成熟度與首次安裝請先讀[專案首頁](../../README.md)；其餘文件見[文件索引](../README.md)。除另有說明，所有命令均從專案根目錄執行。
+
+## 資產與相依檢查
+
+使用 Python 3.12 及專案 `.venv`。核心相依為 `requirements.txt`；測試、封裝與 PDF 報告另需 `requirements-dev.txt`。Windows 請將下方 `.venv/bin/python` 換成 `.\.venv\Scripts\python`。
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m scripts.prepare_local_assets --download-model
+.venv/bin/python -m scripts.runtime_preflight
+```
+
+資產腳本只補缺失圖示，保留本機自訂圖示；`--download-model` 在模型缺失時，從固定官方版本取得模型並校驗 SHA-256。已有模型會保留。source 分析 worker 另保留缺模型時的固定版本補下載流程，因此斷網使用前應先完整準備資產。圖片、圖示、模型與個人校準留在本機；完整重建仍須準備本機資產，不能只依賴 Git checkout。
+
+## HTTP／Socket.IO 診斷與 LAN
+
+正式畫面為 Tauri + Flutter，engine 不提供 Flask HTML 前台。根路徑 `/` 回傳服務診斷 JSON，`/api/metrics` 與 Socket.IO 保留即時資料傳輸；開啟診斷網址不會出現舊版網頁面板。
+
+預設僅本機存取：Windows／Linux 為 `127.0.0.1:5000`，macOS 為 `127.0.0.1:5055`。設定區的「診斷服務」按鈕會開啟服務 JSON，也可在此開啟 LAN。請依面板顯示的完整網址（含 `?token=`）存取，不要猜埠號。LAN 的根路徑及 API 需 shared token，亦可使用 `X-Dashboard-Token` header；本機免 token。Socket.IO 限定本機／LAN 來源；桌面控制 API 與 `/api/fb/*` 仍僅接受本機請求。
+
+LAN 使用未加密 HTTP，影像、指標與 token 可能被同網路攔截，只在受信任網路開啟。核心監測不需 API 金鑰或 `.env`；操作偏好由 Flutter 設定區管理，只有按「儲存設定」才持久化。
+
+## 啟動與桌面整合
+
+完成資產與 runtime 檢查後，可使用下方平台啟動腳本；直接開發亦可執行 `npm run desktop`。首次使用須先 `npm ci`。
+
+原生資料夾與瀏覽器操作由 Flutter／Tauri 分派。Python 只回傳驗證過的操作意圖；單獨在瀏覽器執行 Flutter 時，開啟外部資料夾等操作會提示需要 Tauri 桌面殼層。
+
+Windows 一鍵啟動（會自動設定 Flutter PATH、檢查 Python engine 並啟動 Tauri）：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_desktop.ps1
+```
+
+macOS 一鍵啟動：
+
+```bash
+bash scripts/start_desktop_macos.sh
+```
+
+macOS 第一次啟動會要求相機權限；啟用心跳帶時也會要求 Bluetooth 權限。全域快捷鍵
+目前仍只有 Windows 原生 backend，macOS 面板會回報 `supported=false`，其餘監測、錄影、
+回放、Overlay 與 BLE 流程不受影響。
+
+Windows 與 macOS 的硬體/runtime policy 分別位於 `gui/platforms/windows.py` 與
+`gui/platforms/macos.py`；相機後端偏好順序、MediaPipe delegate 等平台決策由這一層提供，
+既有相機列舉與開啟機制仍由 `gui/camera_devices.py` 共用。模型、
+`config/mediapipe_tuning.json`、rPPG 與疲勞演算法維持共用。啟動腳本會先執行
+`python -m scripts.runtime_preflight`，避免不相容的原生套件等到按下「開始監測」才終止 engine。
+五平台的 runtime、能力與 artifact 契約集中於 `gui/platforms/registry.py`。Windows、macOS、Linux
+目前使用 Python/Tauri desktop engine；Android、iOS 仍是 `planned`，尚無可執行的原生推論 runtime。
+因此不能把桌面免安裝檔直接複製到手機運行，必須完成各自的原生 runtime、APK/IPA 與實機驗收後才會標記可用。
+
+若 macOS 在按下「開始監測」後整個 engine 消失，先檢查 MediaPipe 版本：
+
+```bash
+.venv/bin/python -c "import mediapipe; print(mediapipe.__version__)"
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m scripts.runtime_preflight
+```
+
+本專案固定使用 `mediapipe 0.10.35` 與唯一的 `opencv-contrib-python 5.0.0.93`；不要同時
+安裝 `opencv-python`，兩者會覆寫相同的 `cv2` namespace。已知 MediaPipe `1.0.1` 在目前
+macOS Face Landmarker 初始化時可能於 `DrishtiMetalHelper` 原生 Metal 路徑觸發
+`SIGABRT`，Python 例外處理無法攔截。
+若 preflight 回報兩種 OpenCV 並存，可執行：
+
+```bash
+.venv/bin/python -m pip uninstall -y opencv-python
+.venv/bin/python -m pip install --force-reinstall -r requirements.txt
+```
+
+影片回放的「選擇資料夾」由 Tauri 原生 dialog 提供；取消不會修改目前設定。若原生 picker 無法使用，面板會顯示錯誤，仍可在同一區塊手動輸入完整資料夾路徑並套用。
+
+啟用面板設定中的鏡頭或數值 Overlay 且開始管線後，Tauri 會建立獨立的透明 Overlay WebView；它與主面板共用 Python engine 的即時 metrics/preview。鎖定 Overlay 時由原生視窗啟用 click-through，解除鎖定後可拖曳視窗；位置與尺寸變更會同步到設定狀態，按「儲存設定」後於下次啟動還原（支援多螢幕負座標）。
+
+桌面重構效能基準（不需要相機；結果為 JSON）：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark
+.\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark --port 5001 --samples 10
+.\.venv\Scripts\python.exe -m scripts.desktop_engine_benchmark --synthetic-only --samples 10
+```
+
+預設量測 Python engine 啟動至 control API 就緒時間、就緒時 RSS、唯讀
+`state.get` command latency，以及固定合成影像的 JPEG payload、encode latency 與
+Socket.IO server dispatch rate。Preview 數字是無相機、in-process 微基準，不包含
+實際網路、Tauri WebView 解碼或 Flutter 繪製；比較重構前後結果時應使用相同機器、
+Python/套件版本與 `--samples`，並確保對應平台的 engine 埠沒有其他程序（Windows/Linux
+預設 5000；macOS 預設 5055）。
+
+實體 camera 的 desktop API／engine／worker lifecycle smoke（不儲存設定或錄影）：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.desktop_hardware_smoke --camera-index 0 --analysis-mode combined
+.\.venv\Scripts\python.exe -m scripts.desktop_hardware_smoke --analysis-mode raw --output docs\benchmarks\desktop-hardware-smoke.json
+```
+
+模式可選 `raw`、`fatigue`、`rppg`、`combined`。腳本會啟動 source engine、選取相機、
+確認 metrics 的 FPS/解析度與 frame source，再停止管線和 engine；它不評估 rPPG 或疲勞數值。
+BLE 裝置請另用下方的 `scripts.hr_belt_monitor` 診斷，因為實際 BPM notification 是硬體條件。
+
+產生 Windows NSIS 安裝包：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop.ps1
+```
+輸出位於 `src-tauri\target\release\bundle\nsis\`。建置流程會先用 PyInstaller 產生 `dist\ncfd-engine\`，再由 Tauri 將 engine、MediaPipe model、不可變 tuning 資源一起嵌入 installer。正式安裝時，Tauri 會把設定、錄影與校準寫入使用者資料目錄，不需要 repository 或 `.venv`；若要開發 fallback，仍可用 `NCFD_ENGINE_ROOT` 與 `NCFD_ENGINE_PYTHON` 指向 Python engine。
+
+產生 macOS `.app` 與 `.dmg`（目前為 Apple Silicon arm64）：
+
+```bash
+bash scripts/build_desktop_macos.sh
+```
+
+輸出位於 `src-tauri/target/release/bundle/macos/` 與
+`src-tauri/target/release/bundle/dmg/`。本機建置使用 ad-hoc signing，適合本機驗證；對外
+散佈仍需 Apple Developer ID、正式 codesign 與 notarization。PyInstaller 不是跨平台
+編譯器，因此 Windows installer 必須在 Windows 建，macOS app/DMG 必須在 macOS 建。
+release 嚴格只啟動 bundle 內的 engine；`NCFD_ENGINE_ROOT`/`NCFD_ENGINE_PYTHON` 僅供
+debug/source 開發，不會讓 release 靜默退回 checkout。
+
+macOS bundle API／engine shutdown smoke：
+
+```bash
+.venv/bin/python -m scripts.installed_desktop_smoke_macos
+```
+
+Ubuntu/Linux 開發啟動與免安裝封裝：
+
+```bash
+bash scripts/start_desktop_linux.sh
+bash scripts/build_desktop_linux.sh
+```
+
+建置輸出位於 `src-tauri/target/release/bundle/appimage/` 與
+`src-tauri/target/release/bundle/deb/`。需在目標 Linux 發行版原生建置，不能從 macOS
+或 Windows 複製 sidecar、Flutter/Rust 產物代替。Linux AppImage bundle smoke（需在 Linux
+主機執行）如下；`APPIMAGE_EXTRACT_AND_RUN=1` 可在沒有 FUSE 的 runner 使用：
+
+```bash
+.venv/bin/python -m scripts.installed_desktop_smoke_linux
+```
+
+AppImage 可攜性仍受目標機器的 WebKitGTK/系統函式庫相容性影響；deb 會宣告所需的
+GTK/WebKitGTK runtime dependencies。Linux 原生 build、安裝啟動、相機與資料目錄的實機
+結果需在 Ubuntu/Linux 目標主機補記，不能由 macOS build 代替。
+
+Windows 安裝版完整 smoke（隔離安裝、API v2、engine shutdown、Tauri 主視窗正常關閉與靜默解除安裝）：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.installed_desktop_smoke
+```
+
+Ubuntu engine（供 Tauri 背景服務使用）：
+```bash
+.venv/bin/python main.py --engine
+```
+
+Ubuntu engine 若出現 `Could not load the Qt platform plugin "xcb"`，先重新執行 setup 補齊 Qt xcb runtime：
+
+```bash
+bash scripts/setup_ubuntu.sh
+```
+
+若仍需追蹤 Qt plugin 載入路徑，可用：
+
+```bash
+QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=xcb .venv/bin/python main.py --engine
+```
+
+正式產品只有 Tauri v2 + Flutter Web 面板與 Overlay；Python/MediaPipe/rPPG engine 由 Tauri 背景管理。PySide6 僅作為隱藏 engine runtime（Qt worker/thread、影像、音效與 Windows 全域快捷鍵），engine mode 不建立舊版 Qt 主面板、選單或 Overlay。Python 程式啟動時仍會在建立 `QApplication` 前把 Qt platform plugin 路徑固定回 PySide6，避免 OpenCV wheel 的 `cv2/qt/plugins` 覆蓋 PySide6 的 xcb plugin。
+
+Windows 若 FPS 可達 30 但畫面延遲逐步增加，通常是相機或分析端累積舊幀。engine 會降低 OpenCV camera buffer、讓分析 worker 永遠取最新幀，並節流送往 Flutter/Tauri 的預覽事件，避免 IPC 堆積。Windows 的自動後端會優先嘗試低延遲的 `DSHOW`，再 fallback 到 `MSMF`；若仍有特定相機卡頓，可在 Flutter 面板「設定 → 攝影機」切換後端比較穩定性。
+
+若相機畫面左右相反，可在 Flutter 面板「設定 → 攝影機」啟用或關閉「水平翻轉（鏡像校正）」。此設定會同步套用到預覽、錄影與分析輸入，避免畫面與分析來源不一致。
+
+若 `setup_ubuntu.sh` 在非互動環境因 sudo 密碼失敗，請在自己的終端機直接執行：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 v4l-utils
+```
+
+rPPG 獨立診斷 demo：
+```bash
+.venv/bin/python -m rppg.demo_rppg_live
+```
+
+## Canva 系統流程圖 App
+
+`tools/canva-flowchart/` 是以 Canva CLI 建立的流程圖插入 App，用於把本專案的系統流程圖放入 Canva 設計頁面。流程圖節點以用途描述呈現，例如影像輸入、臉部推論、行為疲勞分析、rPPG 生理訊號估測、品質守門、融合評分、即時告警、記錄、Web 與回放，不以實際程式檔名作為區塊名稱。
+
+```powershell
+cd tools/canva-flowchart
+npm install
+npm start
+```
+
+Canva App ID 為 `AAHAACArWJM`，可在 [Developer Portal](https://www.canva.com/developers/app/AAHAACArWJM) 檢查設定。啟動 App 後選擇本機 PNG／JPEG，確認預覽後再上傳並插入目前 Canva 設計；不需要固定檔名或將圖片加入原始碼。插入會上傳圖片到 Canva，請先確認素材適合分享。
+
+常用檢查：
+
+```powershell
+npm run lint
+npm run lint:types
+npm test -- --runInBand
+npm run build
+canva apps config status --lite
+canva apps doctor --ci
+```
+
+## 影片回測（video replay）
+
+回測模組的本質是「**把任何影片當作可重現的『離線鏡頭』，餵進與即時攝影機相同的疲勞判斷引擎做回放驗證**」的通用工具，不會改動即時攝影機 worker。UTA-RLDD 只是其中一個拿來做門檻校正與可重現驗證的資料集，不是模組的目的。回放模式會使用影片 FPS 產生 deterministic timestamp，疲勞校準起點會對齊第一個有效人臉 frame 的時間，因此前約 5 秒為 `CALIBRATING`，後續才進入 `OK / LOW_VIGILANCE / DROWSY / CRITICAL` 等狀態統計。
+
+### 任意影片回測（無需 UTA-RLDD 結構）
+
+用 `scripts.video_replay` 直接回測「單一影片檔」或「任意影片資料夾」，不需要 UTA-RLDD 的資料夾結構或 `0/5/10` 檔名 label；無法解析成官方 label 的影片會標為 `Unlabeled`。接受 `.mp4/.mov/.avi/.mkv/.m4v/.webm`，預設輸出到 `recordings/replay_runs/<timestamp>/`，因為沒有 label 會略過驗證趨勢報表。若指到的路徑不含影片會直接回報可行動的錯誤，不再靜默產出空報表。
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.video_replay "C:\path\to\clip.mp4" --max-frames 300
+.\.venv\Scripts\python.exe -m scripts.video_replay "C:\path\to\videos_folder" --jobs 4
+```
+
+### UTA-RLDD 資料集情境
+
+UTA-RLDD 官方定義為 `0=Alert`、`5=Low Vigilant`、`10=Drowsy`，來源：[UTA-RLDD 官方資料集](https://sites.google.com/view/utarldd/home)。這個情境會依 subject/label 資料夾結構解析、額外產出把 `0/5/10` 當序位真值的驗證趨勢報表：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_replay "$env:USERPROFILE\Downloads\Fold1_part1" --max-videos 1 --max-frames 300
+```
+
+常用參數：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_replay "$env:USERPROFILE\Downloads\Fold1_part1" --subject '01,02' --label '0,5,10'
+.\.venv\Scripts\python.exe -m scripts.utarldd_replay "$env:USERPROFILE\Downloads\Fold1_part1" --output-dir recordings\utarldd_runs\test --write-annotated-video
+.\.venv\Scripts\python.exe -m scripts.utarldd_replay "$env:USERPROFILE\Downloads\Fold1_part1" --jobs 4
+```
+
+預設輸出到 `recordings/utarldd_runs/<timestamp>/`：每支影片一個 `metrics_utarldd_<subject>_<label>_<timestamp>.db`，整批會輸出好讀摘要 `utarldd_summary_<timestamp>.csv`、驗證趨勢報表 `utarldd_validation_report_<timestamp>.csv`、完整欄位 `utarldd_summary_full_<timestamp>.csv`、可視化報表 `utarldd_visual_report_<timestamp>.html` 與 `utarldd_manifest_<timestamp>.json`。`summary` 會包含有效判讀幀數、rPPG 可用率、低品質比例、PERCLOS/眨眼/瞇眼/凝視/哈欠觸發幀數、標籤對齊判讀、主要判斷依據、建議修正方向與優化旗標；`validation_report` 會整理 label 0/5/10 的整體平均，以及同一受試者三段影片是否呈現疲勞趨勢上升，適合判斷這批資料是否支持系統。只有指定 `--write-annotated-video` 才會輸出標註影片，避免容量暴增。
+
+若已經有既有 summary CSV，可不重跑影片，直接產生 HTML 可視化報表：
+
+```bash
+.venv/bin/python scripts/utarldd_csv_report.py recordings/utarldd_runs/<timestamp>/utarldd_summary_<timestamp>.csv
+```
+
+CLI 支援 `--jobs N` 以多進程平行處理多支影片，建議先從 `--jobs 2` 或 `--jobs 4` 開始，依 CPU、記憶體與溫度調整；同一支影片內仍維持逐幀順序分析，避免破壞 MediaPipe VIDEO mode 的 timestamp 與 tracking 假設。正式 Flutter 面板的「影片回測」區塊可選資料夾、開始/停止批次、設定平行數與標註影片輸出，並顯示目前 subject/label/video 進度、平行狀態與摘要檔路徑。`開始批次` 使用單工模式；`平行驗證` 依面板的平行數設定使用多進程，面板平行數上限為 4。平行驗證會自動停用 `輸出標註影片`，避免多個子行程同時寫 mp4 造成 Windows/OpenCV/MediaPipe 資源壓力；需要標註影片時請用單工 `開始批次`。若某個子行程異常中止，批次會停止派發新工作，把未完成影片寫成 `failed` 並保留 CSV/manifest。面板會顯示目前影片、完成數、平行狀態與結果路徑；這些控制只影響回放編排與顯示，不改變 SQLite、CSV 與 manifest 的逐幀分析結果。這套 replay 適合用來蒐集門檻校正資料與比較趨勢，但 UTA-RLDD label 是整段影片類別，不是逐幀 ground truth，也不能完全取代無人機駕駛場域的真人測試。
+
+### Golden-output 回歸基準
+
+`scripts/utarldd_golden.py` 以固定影片子集（`tests/golden/utarldd_golden_config.json` 定義 subject/label/幀數/欄位容差）建立數值基準，用來機械偵測演算法改動造成的數值漂移。修改 rPPG、疲勞判定、濾波、ROI 或分數邏輯後請跑 `check`：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_golden check "$env:USERPROFILE\Downloads\UTA_test\Fold1_part1"    # 0=通過, 1=數值漂移, 2=執行失敗
+.\.venv\Scripts\python.exe -m scripts.utarldd_golden create "$env:USERPROFILE\Downloads\UTA_test\Fold1_part1" --force   # 漂移屬預期時重建 baseline
+```
+
+baseline（`tests/golden/utarldd_golden_baseline.json`）與設定檔皆納入版控；漂移屬預期結果時，先在 commit 說明中逐欄解釋再以 `create --force` 重建。
+
+### 準確度量測（判斷邏輯調整後必跑）
+
+golden 只驗「數值有沒有變」，`scripts/utarldd_accuracy.py` 驗「數值對不對」：把 label 0/5/10 當序位真值，量各分數欄位隨標籤的單調性、Drowsy vs Alert 的 AUC 與尺度塌陷率。修改疲勞判斷/門檻/權重後用它確認準確度不退化：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.utarldd_accuracy "$env:USERPROFILE\Downloads\UTA_test\Fold1_part1" --subjects '01,02,03,04,05,06' --max-frames 1200 --jobs 4 --out report.json
+```
+
+2026-07-03 的準確度校準（PERCLOS 計分門檻與權重重配）把最終輸出的 Drowsy-vs-Alert AUC 從 0.53 提升到 0.75（校準集）／0.69（留出集），詳見 `docs/history/2026-07-03-fatigue-accuracy-calibration.md`。**注意 subjects 參數在 PowerShell 需加引號**（`'01,02'`），否則會被當整數陣列去掉前導零而對不上目錄。
+
+2026-06-07 的 36 支影片測試結果整理於 `docs/history/2026-06-07-utarldd-analysis.md`。該批影片處理完成率為 100%，平均人臉偵測率約 99.93%；融合分數未隨 `0 -> 5 -> 10` 穩定上升，因此不能宣稱三分類準確率接近 100%。同批次 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv` 若仍保存在本機，可轉成 `utarldd_visual_report_20260607_122601.html`，供限制分析與後續門檻校正參考。這些是歷史結果，不能替代目前版本的實測。
+
+## MediaPipe tuning 與個人化校準
+
+目前 `active_profile` 預設為 `stable_indoor`，提高 Face Landmarker tracking confidence 並加強 ROI polygon 平滑，目標是降低室內 webcam 下的 landmark 與 ROI 抖動。若環境偏暗或頭部動作較大，可切換 `low_light` 或 `high_motion` 後用固定錄影回放比較。
+
+rPPG BPM 預設將有效皮膚 ROI 等權平均後送入目前的 `pos_pulse` 色彩投影實作、band-pass 與 Welch peak，再以頻譜峰值插值、平滑與跳變確認處理輸出。該函式對各 RGB 通道作 Z-score 後投影混合；方法名稱沿用程式識別，公式見首頁，不能以名稱推定完整重現原論文 POS。顯示心率與「可參與疲勞融合」使用不同品質條件，看到 BPM 數字不代表該段生理訊號已通過融合守門。
+
+可調參數集中在 `config/mediapipe_tuning.json`：
+
+- `face_landmarker`：Face Landmarker 的 detection / presence / tracking confidence。
+- `rppg_roi`：ROI 基礎權重、姿態懲罰、遮擋門檻、最小權重、ROI polygon EMA 平滑、landmark jitter 與 ROI 面積穩定度門檻。
+- `quality`：rPPG / fatigue 統一品質分數的組合權重。
+- `blendshape`：blendshape baseline 校準秒數、最小樣本、EMA 與眼眉嘴輔助閘門。
+- `active_profile` / `profiles`：可切換 `default`、`stable_indoor`、`low_light`、`high_motion` 等 MediaPipe 場景 profile。切換後需重啟 worker / 應用程式，Face Landmarker options 不做熱更新。
+
+`canonical_roi_warp_enabled` 是實驗開關，預設關閉。啟用後會做保守的姿態導向 ROI 幾何正規化；因會改變 ROI 取樣分布，正式比較前應保持關閉。
+
+個人化 baseline 會自動儲存在 `config/mediapipe_calibration.json`，此檔案包含使用者/環境校準結果，不納入版本控制。
+
+## rPPG BPM 校準（心跳帶真值參考）
+
+rPPG BPM 校準以 bias 模型 `scale*bpm+offset` 修正 rPPG 心率；日常疲勞監測不需戴心跳帶，主程式會讀取 `config/rppg_calibration/manifest.json` 的 active 版本並套用 BPM 偏移。校準的參考真值來源為 BLE 心跳帶背景自動校準（見下節「心跳帶真值校準」）——它會在收斂後自動存成新版本並設為使用中。舊版靠手機/手錶 HTTP :8080 的手動校準對話框與「手錶模式」已移除。
+
+校準資料儲存於 `config/rppg_calibration/`（不納入版本控制）。
+
+```bash
+.venv/bin/python scripts/replay_calibration_summary.py recordings/metrics_YYYYMMDD_HHMMSS.db
+```
+
+若有對應錄影檔，可用 profile sweep 比較不同 MediaPipe profile 的偵測率、ROI 可用數、landmark jitter 與 ROI 面積穩定度：
+
+```bash
+.venv/bin/python scripts/mediapipe_profile_sweep.py recordings/video_YYYYMMDD_HHMMSS.mp4 --csv reports/mediapipe_profile_sweep.csv
+```
+
+調整 tuning 會影響新錄製資料與舊錄製資料的可比性；需要比較精準度或穩定度時，請使用同一段錄影回放 sweep。
+
+## 心跳帶真值校準（BLE Heart Rate Belt）
+
+系統以 rPPG + MediaPipe 臉部特徵為疲勞判斷主體。心跳帶（Scosche Rhythm+ 2.0 等標準 Heart Rate Service 裝置）**不是**疲勞融合的獨立權重，而是 rPPG 的「真值參考」：勾選控制列的「心跳帶真值校準（背景）」後，系統在背景連線心跳帶、持續比對它的實測心率與 rPPG 偵測到的心率，並以低增益自適應（線上 EMA）慢速微調 rPPG 的 BPM 校正量，讓 rPPG 逐漸趨近真值。**心跳帶數值只用於校準與可信度判斷，絕不直接進入疲勞分數。**
+
+- 前提：需同時啟用 rPPG（勾選「壓力／HRV（心率估測）」）才會開始比對。
+- 協定：Heart Rate Service `0x180D`，訂閱 Heart Rate Measurement `0x2A37` notification 解析 BPM 與 RR-Interval（1/1024 秒解析度），並 best-effort 讀取電量 `0x2A19` 與配戴位置 `0x2A38`。實機 GATT 對照見 `docs/technical/heart_rate_belt_bluetooth_gatt_profile.md`（Scosche Rhythm+ 2.0 / R+2.0 2248）。
+- 裝置挑選：優先連線名稱以 `R+` 開頭的裝置，否則挑選廣播 Heart Rate Service 且訊號最強者；斷線會自動重新掃描連線。
+- 校正演算法（`rppg/adaptive_calibration.py` `OnlineBpmCalibrator`，純運算）：以心跳帶 BPM 與 rPPG **原始** BPM 的中位殘差為目標，低增益 EMA 慢速調整 offset（沿用既有 `rppg/calibration.py` bias 模型 `scale*bpm+offset`，本階段只動 offset）。品質門檻（rPPG SQI／quality／warmup／ROI，心跳帶接觸與新鮮度）不過關的樣本不納入；offset 有絕對值上限防呆。比對用原始 BPM，不會自我回饋。
+- 跨 session 累積：啟動時以目前使用中的校準版本 offset 為起點；停止（取消勾選／管線停止／關閉）時，若信心足夠會存成新的「自適應校準」版本並自動設為使用中，下次沿用持續改善。
+- HRV：Scosche Rhythm+ 2.0 需以三連按進入 HRV 模式後，`2A37` 才會帶實測 RR-Interval（實測 `flags=0x16`）；一般心率模式僅帶 BPM（`flags=0x06`）。校準本身只用 BPM，不受 HRV 模式影響。
+- 可視化：Flutter 面板的心跳帶區塊顯示連線狀態／BPM／RR 數／電量／接觸狀態，以及即時校正量與收斂／分歧狀態；連線中若超過 5 秒沒有有效心率，Flutter 面板會顯示「無心率資料」警告（裝置可能未正確配戴）。
+- 使用流程：戴上心跳帶 → 在 Flutter 面板勾選「壓力／HRV」啟用 rPPG（rPPG 模式）→ 勾選「心跳帶真值校準（背景）」→ 按「開始監測」。面板顯示「掃描中… → 已連線 → 收斂中 → 已收斂」。
+
+裝置設定（選配）：建立 `config/hr_belt.json`（機器特定、不納入版控）可指定目標裝置與掃描參數，engine 每次啟動心跳帶時重新讀取：
+
+```json
+{
+  "name_prefix": "R+",
+  "address": "C1:3B:74:B8:F7:40",
+  "scan_timeout_sec": 6,
+  "reconnect_delay_sec": 3
+}
+```
+
+`address` 指定 BLE 位址時直接精確比對（跳過名稱比對，適合現場有多條心跳帶時鎖定特定裝置）；欄位皆可省略，省略時用預設值。
+
+免面板連線診斷（驗證硬體與 BLE 環境，與正式 engine 共用同一連線元件）：
+
+```powershell
+.venv\Scripts\python -m scripts.hr_belt_monitor                     # 預設掃描 R+ 前綴
+.venv\Scripts\python -m scripts.hr_belt_monitor --address C1:3B:74:B8:F7:40 --duration 60
+.venv\Scripts\python -m scripts.hr_belt_monitor --use-config        # 沿用 config/hr_belt.json
+```
+
+即時列印每筆 BPM／RR-Interval、狀態轉換（掃描中→已連線→重連中）、電量與接觸不良警告；未收到任何心率 notification 時以非零 exit code 結束。
+
+On macOS, camera enumeration prefers AVFoundation and falls back to OpenCV `CAP_ANY`. If no
+camera is detected, use the desktop panel's `開啟相機權限設定` button; it opens System Settings →
+Privacy & Security → Camera. The app bundle declares the required camera and Bluetooth usage descriptions.
+
+On Ubuntu, camera access uses V4L2 by default. If no camera appears, check device permissions:
+```bash
+ls -l /dev/video*
+groups
+```
+
+Add your user to the `video` group if needed, then log out and back in:
+```bash
+sudo usermod -aG video "$USER"
+```
+
+若相機黑屏或 Flutter 面板沒有畫面，先用專案診斷腳本分辨硬體／權限與程式問題：
+
+macOS：
+
+```bash
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend avfoundation
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend avfoundation --width 1280 --height 720 --fps 60 --seconds 5
+```
+
+Windows：
+
+```powershell
+.venv\Scripts\python scripts\diagnose_camera.py --camera 0 --backend auto
+```
+
+Ubuntu：
+
+```bash
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend v4l2
+```
+
+若 720p 僅有約 10 FPS，先檢查相機格式。許多 USB UVC webcam 在 `1280×720 YUYV`
+只支援 10 FPS，但 `1280×720 MJPG` 可達 30 FPS；engine 在 Linux 會優先要求 MJPG。
+可用下列指令確認協商結果：
+
+```bash
+v4l2-ctl --list-formats-ext -d /dev/video0
+.venv/bin/python scripts/diagnose_camera.py --camera 0 --backend v4l2 --width 1280 --height 720 --fps 30
+```
+
+可追加檢查：
+
+```bash
+v4l2-ctl --list-devices
+v4l2-ctl --all -d /dev/video0
+ls -l /dev/v4l/by-id/
+fuser /dev/video0
+.venv/bin/python -m rppg.demo_rppg_live --list-cameras --backend v4l2
+```
+
+診斷判讀：
+- `/dev/video*` 不存在：偏向硬體未枚舉、驅動或容器/權限隔離問題。
+- OpenCV 無法開啟相機：偏向權限、裝置被占用、後端不相容或硬體/驅動問題。
+- OpenCV 可讀幀但亮度接近全黑：偏向鏡頭蓋、隱私快門、光線不足或虛擬相機無來源。
+- 終端出現大量 `Camera index out of range` 或 `VIDIOC_QBUF`：通常是掃描不存在的相機 index 或把 metadata 節點當成相機；engine 會在 Linux 只掃描實際存在且具備 Video Capture capability 的 `/dev/video*`。
+- 診斷腳本可讀到非黑畫面但 Flutter 面板黑屏：偏向 IPC／WebView 顯示或相機後端協商問題，請在 Flutter 面板「設定 → 攝影機」切換該平台可用的後端再測。
+- `driver_fps` 是相機後端宣告值，`measured_fps` 是依實際收到影格時間計算的值；要求 60 FPS 但兩者都約 30 時，通常表示該相機／解析度／後端沒有接受 60 FPS，也需排除解碼、USB 頻寬與系統負載。預覽傳輸仍以 30 FPS 為上限，避免 WebView JPEG/IPC 負載影響分析。
+- 正式桌面設定的相機 FPS 固定為 30；60 FPS 只保留在診斷腳本中，用於確認硬體協商結果。固定 30 FPS 可讓分析管線在一致取樣率下比較每秒可處理的影像資訊量，模型、參數與演算法不變。
+- 可比較相機 backend 的實際輸入成本：`.venv/bin/python -m scripts.camera_backend_benchmark --backends ffmpeg auto avfoundation --seconds 5`。macOS 的 `ffmpeg` 相容設定會直接優先 AVFoundation；Windows 的 DSHOW → MSMF 順序保持不變。
+
+## 產生技術報告
+
+技術文件的 Markdown 來源位於 `docs/technical/`；完整導覽與歷史結果見[文件索引](../README.md)。PDF 為本機產物，輸出到 `docs/exports/`，不納入 Git。
+
+```bash
+# 最初版 rPPG 技術報告
+.venv/bin/python scripts/build_rppg_pdf.py
+
+# 系統／rPPG／行為疲勞／應用／優化／回放等技術報告
+.venv/bin/python scripts/build_technical_report_pdfs.py
+
+# 正式實務專題報告
+.venv/bin/python scripts/build_practical_project_report_pdf.py
+```
+
+正式報告產生器會讀取既有回測 CSV 與本機素材；缺少對應資料時，不能將輸出當成新一次實驗結果。中文字型可用性亦需在目標電腦確認。海報製作稿見[海報文件](../technical/rppg_fatigue_monitoring_poster_design.md)，預覽輸出亦保留本機。
+
+`pygrabber` 僅用於 Windows DirectShow 相機名稱；macOS 使用 AVFoundation，Ubuntu／Linux 使用 V4L2，平台專用匯入有保護。影片轉碼工具由 `imageio-ffmpeg` 支援；API 播放與實際解碼能力仍須依封裝環境驗證。

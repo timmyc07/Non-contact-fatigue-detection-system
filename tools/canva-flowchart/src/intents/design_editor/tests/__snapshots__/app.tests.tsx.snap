@@ -1,0 +1,112 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`System flowchart Canva app should have a consistent snapshot 1`] = `
+<div>
+  <div
+    class="scrollContainer"
+  >
+    <div
+      class="jv_R6g"
+      style="--NZu1Zw: 16px;"
+    >
+      <div
+        class="header"
+      >
+        <p
+          class="VgvqkQ aZskFA Yrg82w"
+        >
+          系統流程圖設計
+        </p>
+        <p
+          class="JYIidw aZskFA my05ww"
+        >
+          影像辨識、rPPG 生理訊號、品質評估與疲勞融合評分
+        </p>
+      </div>
+      <div
+        class="filePicker"
+      >
+        <label
+          for="flowchart-file"
+        >
+          選擇本機流程圖（PNG 或 JPEG）
+        </label>
+        <input
+          accept="image/png,image/jpeg"
+          aria-hidden="true"
+          class="VVvG5A"
+          tabindex="-1"
+          type="file"
+        />
+        <button
+          class="_5KtATA LQzFZw VgvqkQ _8ERLTg MCgm0w Z3nT2A LQzFZw VgvqkQ _4_iekA _3oHQrw j34Zww aqbYPg _3FvZZg"
+          id="flowchart-file"
+          type="button"
+        >
+          <span
+            class="vxQy1w"
+          >
+            <span
+              aria-hidden="true"
+              class="_6XqXLQ Pk6ZMQ"
+            >
+              <svg
+                fill="none"
+                height="24"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M5.734 8.438C6.008 5.64 8.387 3.5 11.208 3.5a5.5 5.5 0 0 1 5.422 4.562.24.24 0 0 0 .202.19c3.026.232 5.418 2.795 5.418 5.866 0 3.25-2.642 5.882-5.896 5.882H14.75a.75.75 0 0 1 0-1.5h1.604a4.389 4.389 0 0 0 4.396-4.382c0-2.287-1.788-4.199-4.033-4.371a1.738 1.738 0 0 1-1.565-1.433A4 4 0 0 0 11.208 5C9.151 5 7.425 6.563 7.227 8.584a1.69 1.69 0 0 1-1.096 1.42 4.384 4.384 0 0 0-2.881 4.114A4.389 4.389 0 0 0 7.646 18.5h.104A4.25 4.25 0 0 0 12 14.25v-.95L9.99 15.32a.75.75 0 1 1-1.063-1.059l3.276-3.29a.75.75 0 0 1 1.063 0l3.276 3.29a.75.75 0 1 1-1.063 1.059L13.5 13.33v.919A5.75 5.75 0 0 1 7.75 20h-.104c-3.254 0-5.896-2.631-5.896-5.882a5.884 5.884 0 0 1 3.865-5.523.191.191 0 0 0 .12-.157Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </span>
+          </span>
+          <span
+            class="khPe7Q"
+          >
+            Choose file
+          </span>
+        </button>
+        <p
+          class="JYIidw aZskFA my05ww"
+        >
+          請先選擇本機圖片。圖片只在本機預覽，按下插入後才會加入 Canva。
+        </p>
+      </div>
+      <div
+        class="A628dw"
+      >
+        <button
+          aria-describedby="_r_11_"
+          aria-disabled="true"
+          class="_5KtATA LQzFZw VgvqkQ _8ERLTg hw3gKA rV61VQ LQzFZw VgvqkQ _4_iekA _3oHQrw bfFHbg j34Zww aqbYPg _3FvZZg"
+          type="button"
+        >
+          <span
+            class="khPe7Q"
+          >
+            插入流程圖到 Canva
+          </span>
+        </button>
+      </div>
+      <div
+        class="summaryCard"
+      >
+        <p
+          class="_2a6tNg aZskFA Yrg82w"
+        >
+          流程圖區塊
+        </p>
+        <p
+          class="JYIidw aZskFA my05ww"
+        >
+          一般攝影機輸入、共用臉部推論、行為疲勞分析、rPPG 生理訊號估測、品質守門、融合評分、即時告警、記錄、Web 與回放。
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+`;

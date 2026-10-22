@@ -11,6 +11,20 @@ import main as launcher
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_desktop_launcher_uses_asset_preparation_and_propagates_exit_code(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: f"/tools/{name}")
+
+    def call(command, *, cwd):
+        calls.append((command, cwd))
+        return 23
+
+    monkeypatch.setattr(launcher.subprocess, "call", call)
+
+    assert launcher._launch_tauri() == 23
+    assert calls == [(["/tools/npm", "run", "desktop"], ROOT)]
+
+
 def test_legacy_panel_flag_is_rejected_without_starting_qt() -> None:
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"

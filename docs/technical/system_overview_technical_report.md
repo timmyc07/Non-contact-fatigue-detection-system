@@ -1,0 +1,297 @@
+# 系統總技術報告書
+
+更新日期：2026-06-16
+
+本報告整理本系統的整體目的、AI 模型、訊號處理、疲勞分析、輸入輸出、系統架構、可信度驗證方式與限制。內容以聽眾能理解的用途名稱描述流程；必要技術術語會以括號補充，例如臉部特徵點（landmarks）與皮膚取樣區域（ROI）。
+
+## 1. 系統定位
+
+本系統是一套以一般攝影機進行即時臉部生理與行為狀態分析的桌面工具。它同時提供兩種判讀：
+
+- 生理訊號判讀：使用 rPPG（remote photoplethysmography，遠端光體積變化描記）從臉部皮膚顏色微小變化估計心率、心率變異度與壓力趨勢。
+- 行為疲勞判讀：使用臉部特徵點、眼睛開合、視線穩定度、頭部姿態與張嘴哈欠等特徵估計疲勞程度。
+- 融合判讀：將行為疲勞分數與可用的 rPPG 生理壓力訊號合併，輸出整體疲勞分數。
+
+本系統不是醫療診斷工具，也不是安全關鍵場景中的單點決策系統。所有分數都應視為趨勢提示與工程診斷資訊。
+
+## 2. 使用模型與核心技術
+
+### 2.1 臉部 AI 模型
+
+系統唯一直接使用的 AI 模型是 MediaPipe Face Landmarker（臉部特徵點偵測模型）。它的用途是從每張攝影機影像中找出臉部位置、臉部特徵點、表情係數與臉部姿態資訊。
+
+模型 input：
+
+- 攝影機原始影像（OpenCV BGR frame，OpenCV 預設的藍綠紅色彩順序）會先轉成 RGB（紅綠藍色彩順序）。
+- 影像會包裝成 MediaPipe 影像物件（mp.Image，表示要送入 MediaPipe 模型的影像資料）。
+- 系統使用影片連續偵測模式（RunningMode.VIDEO），每張影像都帶有毫秒時間戳記（timestamp_ms，用來表示 frame 的時間順序）。
+
+模型 output：
+
+- 臉部特徵點（face landmarks）：478 個臉部位置點，用於皮膚取樣、眼睛開合、嘴部開合、視線與頭部姿態分析。
+- 表情係數（blendshape scores）：例如眨眼、瞇眼、皺眉與張嘴等表情強度，用於輔助疲勞判讀。
+- 臉部姿態轉換矩陣（facial transformation matrix）：描述臉部相對鏡頭的旋轉與位移，用於姿態補償與品質診斷。
+
+### 2.2 訊號處理技術
+
+rPPG 生理訊號不使用心率 AI 模型，而是由訊號處理產生：
+
+- POS 脈波分離法（Plane-Orthogonal-to-Skin，皮膚色彩正交投影法）：從 RGB 顏色時間序列萃取較接近脈搏的波形。
+- Butterworth 帶通濾波（band-pass filter）：保留合理心跳頻帶，降低低頻漂移與高頻雜訊。
+- Welch 頻譜分析（Welch PSD，分段平均頻譜估計）：在心率頻帶中找主要峰值估算 BPM。
+- 峰值偵測（peak detection）：從脈波波形找出相鄰心跳間隔，用於推估心率變異度。
+
+### 2.3 行為疲勞分析技術
+
+行為疲勞判讀是規則式、多門檻、個人化校準流程，不是端到端 fatigue AI classifier。核心特徵包含：
+
+- EAR（Eye Aspect Ratio，眼睛長寬比例）：用於判斷睜眼、閉眼與眨眼。
+- PERCLOS（眼睛閉合時間比例）：用於估計長時間閉眼與嗜睡趨勢。
+- Iris / gaze（虹膜與視線）：用於估計視線穩定度、掃視頻率與注視狀態。
+- Head pose（頭部姿態）：估計 pitch/yaw/roll，也就是上下點頭、左右轉頭與左右傾斜。
+- MAR（Mouth Aspect Ratio，嘴部開合比例）：用於判斷張嘴與哈欠。
+- Blendshape baseline（表情係數個人基準值）：用於降低不同使用者與不同光線下的表情係數偏移。
+
+## 3. 系統架構
+
+```text
+攝影機影像擷取流程
+  -> 即時 BGR 影像佇列
+  -> 共用臉部偵測與分流流程
+  -> MediaPipe 臉部特徵點影片模式偵測
+  -> 臉部特徵點、表情係數與姿態資訊
+  -> rPPG 生理訊號分析流程
+       -> 臉部皮膚 ROI 取樣
+       -> POS 脈波訊號分離
+       -> 帶通濾波與頻譜峰值搜尋
+       -> 心率、心率變異度、訊號品質與壓力趨勢
+  -> 行為疲勞分析流程
+       -> 眼部開合與 PERCLOS
+       -> 視線穩定度與掃視頻率
+       -> 頭部姿態、微睡眠與張嘴哈欠
+       -> 行為疲勞特徵與品質分數
+  -> 分數融合流程
+  -> 桌面畫面疊圖、網頁儀表板與 SQLite 紀錄
+```
+
+系統採用共用臉部偵測流程，讓同一份臉部特徵點同時供應 rPPG 與疲勞分析。這樣可以避免同一張影像重複跑模型，也能降低畫面疊圖與指標更新互相競爭的風險。
+
+## 4. 主要輸入與輸出
+
+### 4.1 輸入
+
+- 攝影機影像：一般 webcam 或相機裝置輸出的連續 frame。
+- 臉部 AI 模型輸出：臉部特徵點、表情係數與姿態資訊。
+- 校準與設定參數：包含信心門檻、ROI 品質門檻、眼睛與表情校準參數、融合權重與品質 gate。
+
+### 4.2 rPPG 輸出
+
+- BPM（beats per minute，每分鐘心跳數）：由頻譜峰值估算。
+- HRV（heart rate variability，心率變異度）：包含 RMSSD、SDNN 與 LF/HF 等趨勢指標。
+- SQI（signal quality index，訊號品質指標）：表示目前 rPPG 訊號可用程度。
+- 壓力趨勢：以 HRV 與 LF/HF 建立的工程 heuristic，不是臨床壓力診斷。
+- ROI 診斷：包含取樣區域可用數、穩定度、姿態與遮擋相關資訊。
+
+### 4.3 疲勞輸出
+
+- 行為疲勞特徵：眨眼、長閉眼、PERCLOS、瞇眼、皺眉、視線穩定度、頭部點頭、張嘴與哈欠。
+- 品質分數：表示當前 frame 是否適合進行疲勞判讀。
+- 整體疲勞分數：行為疲勞為主，rPPG 生理壓力訊號可用時作為輔助。
+- 狀態標籤：例如正常、疲勞提醒或明顯嗜睡狀態。
+
+## 5. 關鍵判讀邏輯
+
+### 5.1 rPPG 判讀
+
+1. 從臉部特徵點建立額頭、左右臉頰與眉心附近的皮膚取樣區域。
+2. 將每個可用 ROI 的平均顏色轉成 RGB 時間序列。
+3. 使用 POS 方法降低光照共同變動，保留與脈搏較相關的色彩變化。
+4. 使用 Butterworth 帶通濾波保留合理心率頻帶。
+5. 使用 Welch 頻譜分析尋找主要頻率峰值，換算成 BPM。
+6. 若脈波峰值足夠穩定，估算 HRV 與壓力趨勢。
+
+### 5.2 行為疲勞判讀
+
+1. 以左右眼 6 個特徵點計算 EAR，建立個人化閉眼門檻。
+2. 以滑動時間窗計算 PERCLOS，估計閉眼比例。
+3. 用虹膜位置與視線移動估計視線穩定度、注視時間與掃視頻率。
+4. 用頭部姿態偵測點頭、轉頭、抬頭與快速移動造成的品質下降。
+5. 用嘴部比例與表情係數判斷張嘴與哈欠。
+6. 將上述特徵轉成行為疲勞分數，再與可用的 rPPG 生理訊號融合。
+
+## 6. 品質控管與可信度
+
+系統會先判斷畫面與特徵是否可信，再決定是否更新指標：
+
+- 臉部必須足夠大，避免解析度不足造成特徵點不穩。
+- 頭部轉動或左右傾斜過大時，降低眼睛與 ROI 判讀信心。
+- 快速移動、遮擋、光線不足或相機曝光變動會降低品質分數。
+- rPPG 需要穩定光源、穩定頭部與足夠長的有效 buffer。
+- 疲勞判讀需要個人化校準，避免眼型、眼鏡與表情基準差異造成誤判。
+
+可信度驗證應包含自動測試、固定錄影回放、人工標註比對與現場情境測試。
+
+## 7. 測試與驗證
+
+目前驗證重點包含：
+
+- rPPG 訊號處理函式：濾波、頻譜、峰值、HRV 與品質分數。
+- MediaPipe 疲勞特徵：眼部、視線、頭部、嘴部與融合分數。
+- Ubuntu/Linux 相機支援：相機列舉、V4L2 後端與 pygrabber 平台隔離。
+- 技術報告 PDF：由 Markdown 來源重新產生 PDF，確保文件可重現。
+
+建議現場驗證情境：
+
+1. 清醒注視螢幕 2 分鐘，確認疲勞分數低且 rPPG 指標逐步穩定。
+2. 自然眨眼、快速眨眼與閉眼 2 秒，確認眨眼與長閉眼事件可區分。
+3. 持續瞇眼 5 到 10 秒，確認瞇眼與早期疲勞提醒上升。
+4. 張嘴說話與真正哈欠分開測試，確認哈欠需要持續時間與嘴部比例共同成立。
+5. 轉頭、抬頭、快速晃動與遮擋，確認品質分數下降且不輸出高信心判讀。
+
+## 8. 部署與維運重點
+
+- Windows 使用 DirectShow 相機列舉；Linux 使用 V4L2 相機後端。平台專用後端應保持隔離。
+- 模型檔是必要執行資產，載入方式需維持相對路徑可攜性。
+- 校準結果屬於個人與環境資料，不應提交版本控制。
+- 修改門檻、ROI、融合權重或模型設定時，應保留固定錄影回放比較。
+- 新增模型或更換模型時，必須記錄模型來源、版本、input/output、推論模式與 fallback。
+
+## 9. 限制與風險
+
+- rPPG 對光線、頭部動作、自動曝光、遮擋、膚色與相機 FPS 敏感。
+- 目前 rPPG 短窗較適合心率與趨勢提示，對 LF/HF 等 HRV 指標只適合作為趨勢參考。
+- 疲勞判讀會受眼鏡、瀏海、眼型、鏡頭角度與反光影響。
+- 表情係數若在不自然表情下校準，後續判讀會偏移。
+- 本系統不應作為醫療診斷、執法、安全控制或單獨自動決策依據。
+
+## 10. 參考資料與本系統採用技術
+
+1. MediaPipe Face Landmarker Python guide  
+   https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python  
+   本系統參考技術：臉部特徵點、表情係數、臉部姿態矩陣、影片連續偵測模式與每張 frame 的時間戳記。
+
+2. MediaPipe Face Landmarks Detection guide  
+   https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker  
+   本系統參考技術：3D 臉部特徵點（3D face landmarks）、表情係數（blendshape scores）與臉部姿態轉換矩陣（facial transformation matrices）的輸出定義。
+
+3. Camillo Lugaresi et al., "MediaPipe: A Framework for Building Perception Pipelines", arXiv:1906.08172, 2019  
+   https://arxiv.org/abs/1906.08172  
+   本系統參考技術：即時感知處理流程（perception pipeline）與 graph-based 處理概念；本系統以單一臉部偵測流程分流給生理與疲勞分析。
+
+4. W. Wang, A. C. den Brinker, S. Stuijk, G. de Haan, "Algorithmic Principles of Remote PPG", IEEE Transactions on Biomedical Engineering, 2017  
+   https://doi.org/10.1109/TBME.2016.2609282  
+   本系統參考技術：POS（Plane-Orthogonal-to-Skin）rPPG 方法與 RGB 色彩投影概念。
+
+5. Peter D. Welch, "The Use of Fast Fourier Transform for the Estimation of Power Spectra", IEEE Transactions on Audio and Electroacoustics, 1967  
+   https://doi.org/10.1109/TAU.1967.1161901  
+   本系統參考技術：以分段、重疊與平均估計 power spectral density；本系統用於心率頻帶峰值搜尋。
+
+6. SciPy scipy.signal API reference  
+   https://docs.scipy.org/doc/scipy/reference/signal.html  
+   本系統參考技術：Butterworth 濾波、Welch 頻譜分析、峰值偵測與一維插值。
+
+7. OpenCV VideoCapture documentation  
+   https://docs.opencv.org/4.x/d8/dfe/classcv_1_1VideoCapture.html  
+   本系統參考技術：相機 frame 擷取與不同平台相機後端支援。
+
+8. OpenCV image processing documentation  
+   https://docs.opencv.org/4.x/d6/d6e/group__imgproc__draw.html  
+   本系統參考技術：畫面疊圖標註、ROI 繪製與影像處理工具。
+## 11. 2026-06-05 修訂：疲勞判定與 rPPG 保守更新
+
+本次修訂以「汽車駕駛疲勞偵測技術可遷移到無人機駕駛員監測」為方向，但採保守落地策略：行為疲勞作為主判定，rPPG 作為生理壓力/負荷輔助。疲勞定義為操作員警覺度下降到可能影響監控、判斷或操控反應的狀態，不作醫療診斷。
+
+### 11.1 行為疲勞新增能力
+
+- 狀態分級加入 `LOW_VIGILANCE` 與 `CRITICAL`，形成 `OK -> LOW_VIGILANCE -> DROWSY -> CRITICAL / MICROSLEEP` 的介入流程。
+- 新增眨眼時序基準：以個人前 12 次有效眨眼建立 duration / amplitude / opening velocity baseline，再用 z-score 判斷是否偏離個人清醒眨眼型態。
+- PERCLOS 改為分層解讀：`0.10` 作為低警覺工程門檻，`0.25` 作為明顯嗜睡工程門檻。這些不是論文固定值，需用本專案錄影回放持續校正。
+- 皺眉不再作為 fatigue 主權重，因無人機操作情境中皺眉更可能代表任務負荷或壓力。
+
+### 11.2 rPPG 保守更新
+
+本次未替換 rPPG 核心演算法。POS、濾波、Welch、IBI/HRV 與 stress heuristic 全部維持既有行為，只新增 `raw_bpm`、`bpm_delta`、`bpm_guarded`、`bpm_guard_reason`，讓偶發大幅波動可以被診斷與回放。
+
+### 11.3 主要參考依據
+
+- MediaPipe Face Landmarker 官方文件：採用 478 landmarks、blendshape scores 與 transformation matrix 作為臉部特徵來源。
+- Soukupova and Cech, 2016：採用 EAR 與 facial landmarks 進行眼部開合/眨眼偵測的思路。
+- PERCLOS 駕駛嗜睡研究與 NHTSA 相關報告：採用「時間窗內眼睛閉合比例」作為警覺度下降指標。
+- Ghoddoosian, 2019/2022：參考 `alert / low vigilant / drowsy` 三階段與 temporal model 思路，因此新增低警覺分級。
+- Tufekci et al., 2022：參考以正常表徵建立 baseline、偏離正常視為 anomaly 的概念，因此採用個人化眨眼時序 baseline。
+- 王奕鈞，2026：參考 MediaPipe ROI、雙頰與 Lab 色彩空間在 rPPG 動態情境下的後續優化方向；本次未直接替換已接近精準的 POS 主流程。
+## 12. 2026-06-06 UTA-RLDD 影片回放測試系統
+
+本次新增 `scripts/utarldd_replay.py` 與 GUI「UTA-RLDD 影片測試」入口，讓 UTA-RLDD 影片可被當作可重現的離線鏡頭輸入。此功能不改動 live camera worker；回放核心位於 `gui/utarldd_replay.py`，逐幀讀取 `.mov/.MOV/.mp4`，使用影片 FPS 產生 deterministic timestamp，再共用同一條 `FatigueEngine`、`RppgEngine`、`FatigueFuser` 與 `MetricsRecorder` 記錄流程。疲勞校準起點使用第一個有效人臉 frame 的輸入 timestamp，因此 live camera 的 `perf_counter()` 時間軸與 replay 的影片相對時間軸都能完成前段校準，再進入正式狀態統計。
+
+資料集 label 依 UTA-RLDD 官方定義：
+
+- `0 = Alert`
+- `5 = Low Vigilant`
+- `10 = Drowsy`
+
+來源與引用：
+
+- UTA-RLDD official site, https://sites.google.com/view/utarldd/home
+- Reza Ghoddoosian, Marnim Galib, Vassilis Athitsos, "A Realistic Dataset and Baseline Temporal Model for Early Drowsiness Detection", CVPR Workshops, 2019, https://openaccess.thecvf.com/content_CVPRW_2019/html/AMFG/Ghoddoosian_A_Realistic_Dataset_and_Baseline_Temporal_Model_for_Early_Drowsiness_CVPRW_2019_paper.html
+
+本專案參考上述資料的部分，是其三分類警覺度標籤與「以長影片觀察 alert / low vigilant / drowsy 時序趨勢」的驗證思路。第一版不把 label 當作逐幀 ground truth，也不自動覆寫目前工程門檻；它的定位是蒐集趨勢統計，用來比較本系統在 Alert、Low Vigilant、Drowsy 三類影片中的 `LOW_VIGILANCE/DROWSY/CRITICAL` frame ratio、PERCLOS、blink temporal score、fused score、face rate、rPPG quality、SQI 與 BPM guard 次數。
+
+CLI 範例：
+
+```bash
+python -m scripts.utarldd_replay <dataset_root> --max-videos 1 --max-frames 300
+```
+
+輸出預設位於 `recordings/utarldd_runs/<run_timestamp>/`：
+
+- `metrics_utarldd_<subject>_<label>_<timestamp>.db`：沿用 `MetricsRecorder` schema，`camera_label` 寫入 `UTA-RLDD subject=<id> label=<0|5|10>`。
+- `utarldd_summary_<timestamp>.csv`：給人工檢視的好讀摘要，使用中文欄位、百分比欄位與快速判讀。
+- `utarldd_validation_report_<timestamp>.csv`：整批驗證趨勢報表，彙整 label 0/5/10 的平均疲勞/PERCLOS/狀態比例，並檢查同一受試者三段影片是否呈現疲勞趨勢上升。
+- `utarldd_summary_full_<timestamp>.csv`：保留每支影片的完整 summary 欄位，供後續 notebook、統計與稽核使用。
+- `utarldd_visual_report_<timestamp>.html`：由 summary CSV 產生的單檔 HTML 可視化報表，整理趨勢圖、快速判讀、主要判斷依據與優化旗標。
+- `utarldd_manifest_<timestamp>.json`：run metadata、來源 URL、label 對應與每支影片摘要。
+- 可選 `video_utarldd_<subject>_<label>_<timestamp>.mp4`：只有啟用 `--write-annotated-video` 或 GUI 勾選輸出標註影片時產生。
+
+GUI 版本會在批次進行時顯示 MediaPipe 人臉特徵與 rPPG ROI 標註預覽，讓操作者可直接確認影片是否被正確偵測，而不必等回放結束後再開標註影片。為避免主視窗卡頓，預覽會限制影像尺寸並以最高約 20 FPS 顯示；完整 SQLite、CSV 與 manifest 仍保留逐幀分析結果。
+
+為了提高大量驗證效率，CLI 支援 `--jobs N` 以 `ProcessPoolExecutor` 平行處理多支影片，GUI 也新增「平行驗證」按鈕與「平行數」設定。平行化單位是「影片」，不是「影格」：同一支影片仍依序送入 MediaPipe VIDEO mode，以維持遞增 timestamp 與 tracking 行為；不同影片則由不同 process 各自建立 Face Landmarker、FatigueEngine、RppgEngine 與 SQLite 輸出。GUI 的「開始批次」保留單工標註預覽，適合抽查；「平行驗證」停用預覽、使用多進程，適合完整資料集驗證。GUI 平行數上限為 4，且平行驗證會自動停用輸出標註影片，避免多個 process 同時解碼、推論與寫入 mp4 導致 Windows 子行程崩潰。若 `ProcessPoolExecutor` 發生 BrokenProcessPool，批次會停止派發新工作，把已知未完成影片標成 `failed`，仍寫出 CSV 與 manifest 供追蹤。平行驗證時，GUI「處理清單」會列出目前進行中的 subject/label、已完成數/總數，以及最近完成影片的 frame 數、狀態與 face rate，方便確認批次已跑到哪些影片。建議先以平行數 2 smoke test，再依主機 CPU、記憶體與散熱提高到平行數 4。
+
+Web playback 已支援列出 `recordings/utarldd_runs/*/metrics_*.db`，因此 replay DB 可以與一般錄影 DB 一樣被 dashboard 讀取。這項測試可補足目前無法短時間募集大量真人受試者的問題，但仍不能完全取代無人機駕駛員場域真人測試；最終門檻仍應用本場域資料做校正。
+
+## 13. 2026-06-16 Web dashboard 同步與即時預覽修復
+
+Web dashboard 的即時狀態同步已改為「buffer history + GUI 最新快照」模式。新開或重新整理頁面時，Socket.IO `connect` 與 `request_metrics` 會取得目前 GUI 端 `_build_web_metrics()` 的最新封包；封包包含 pipeline/camera/recording 狀態、相機 metadata、目前 frame source、record source、行為疲勞與 rPPG 啟用狀態。前端收到 `metrics_history.latest` 或 `metrics_update` 後會立即更新畫面，避免 dashboard 連上後停留在等待狀態。
+
+Web 鏡頭預覽也已從 `QImage.save(..., "JPEG")` 改為以 `QImageWriter` 寫入 JPEG，再轉成 base64 透過 Socket.IO `frame_update` 推送。live camera、combined worker、fatigue worker 與 rPPG worker 的 preview producer 上限皆為 30 FPS，Web 推播端目標同樣為 30 FPS；UTA-RLDD 離線 replay 預覽仍維持約 20 FPS，因其用途是批次抽查偵測畫面，不影響逐幀 SQLite、CSV、HTML 與 manifest 輸出。
+
+本輪同步修復後，Web contract 測試覆蓋連線初始狀態、`request_metrics` history/latest、latest 去重、callback 失敗容錯、JPEG preview 編碼與 `frame_update` 推播。
+
+## 14. 畢專主旨：無人機駕駛員疲勞狀態監測
+
+本專題的主要應用場域是無人機遠端駕駛員，而非一般汽車駕駛分類器。系統目標是在地面站或桌面監控情境中，透過一般 RGB 攝影機與 MediaPipe 臉部特徵，監測操作員長時間注視螢幕、任務負荷、疲勞累積或警覺度下降時可能出現的眼部、臉部、頭部姿態與 rPPG 輔助生理變化。
+
+因此，系統輸出應被解讀為「無人機操作員狀態提示與紀錄」，不是醫療診斷、不是安全關鍵自動接管依據，也不是已完成法規認證的疲勞分類器。UTA-RLDD replay 的定位是短期內補足回放驗證資料，協助檢查 PERCLOS、眨眼時序、狀態比例與融合分數的趨勢；最終仍需使用無人機操作場域的人工標註資料，校正 false alarm rate、miss rate 與警示提前量。
+
+## 15. 2026-06-07 UTA-RLDD 最新測試結論
+
+最新批次報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_summary_20260607_122601.csv`，同批次驗證報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_validation_report_20260607_122601.csv`，HTML 可視化報表位於 `recordings/utarldd_runs/20260607_122601/utarldd_visual_report_20260607_122601.html`。本次共處理 36 支影片，涵蓋 12 位受試者與 `0 / 5 / 10` 三類標籤，每類各 12 支，全部處理完成，失敗影片數為 0。
+
+本次可以稱為「接近滿分」的部分，只限於工程可用性：影片處理完成率為 100%，平均人臉偵測率約 99.93%。其中 Alert、Low Vigilant、Drowsy 的平均人臉偵測率分別約為 99.98%、99.89%、99.93%。這代表 replay 管線、MediaPipe 偵測與逐幀資料記錄穩定，不代表疲勞分類準確率接近 100%。
+
+疲勞分類趨勢目前仍不足。平均融合分數在 Alert、Low Vigilant、Drowsy 分別約為 0.060、0.048、0.054，95 分位融合分數分別約為 0.156、0.144、0.134，沒有隨 `0 -> 5 -> 10` 單調上升。validation report 的整體結論為「目前不支持分類有效」。因此本專案目前應定位為可即時運作、可記錄、可回放驗證的疲勞監測原型，而不是已完成高準確率三分類模型。
+
+較有支持性的結果來自眼部閉合相關指標。平均 PERCLOS 在 Alert、Low Vigilant、Drowsy 分別約為 2.46%、2.68%、5.10%；最高 PERCLOS 平均分別約為 6.67%、12.69%、17.03%；嗜睡/危急 frame 比例在 Drowsy 類別約為 3.99%，高於 Alert 與 Low Vigilant 的約 0.03%。這表示 PERCLOS 與部分狀態比例對 Drowsy 類別有反應，但目前融合權重、低警覺門檻與個人化 baseline 尚未足以穩定支持整段影片三分類。
+
+畢業專題收尾建議採保守路線：展示完整 GUI、rPPG ROI、疲勞指標、SQLite/Web dashboard 與 UTA-RLDD replay；報告中主動揭露 Alert 誤報、Drowsy 漏報、UTA-RLDD 非逐幀 ground truth，以及 rPPG 不能用此資料集驗證 BPM 絕對準確率。兩週內不建議大改演算法或導入新的深度模型，應優先完成圖表、展示影片、報告限制章節、README 操作流程與必要測試。詳細分析見 `docs/history/2026-06-07-utarldd-analysis.md`。
+
+下一輪工程修正優先順序為：持續使用新版 summary schema 中的 post-calibration / face-detected / behavior-available 有效 frame 統計，並在舊批次未重跑時清楚標註欄位版本，避免 summary 平均值被 `CALIBRATING` 或 `NO_FACE` frame 稀釋；同時隔離 UTA-RLDD replay 的 calibration namespace，避免本機既有 webcam baseline 影響資料集回放結果。這兩項風險不需要大改演算法，但能明顯提升報表可信度。
+
+## 16. 2026-06-16 專案審視與報告更新狀態
+
+本輪審視確認近期修復集中在 Web 同步、Web preview、靜態分析與報表輸出，未更動 rPPG POS、Butterworth、Welch、IBI/HRV、ROI 權重、PERCLOS、眨眼時序或融合分數公式。已更新的報告重點包含：
+
+- live Web preview 目標 30 FPS；UTA-RLDD replay 預覽仍約 20 FPS。
+- Socket.IO 初始連線與 `request_metrics` 會補送 GUI 最新狀態。
+- `20260607_122601` 回測 summary CSV 已可轉成 HTML 可視化報表。
+- `npx pyright` 已達 0 errors / 0 warnings；最新完整測試紀錄為 `68 passed`。

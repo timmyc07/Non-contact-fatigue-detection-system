@@ -1,6 +1,6 @@
 """比較不同 rPPG ROI 權重方案對心跳帶真值的擬合優劣（P6b-4 離線驗證工具）。
 
-背景（見 CLAUDE.md「心跳帶」段 P6b、docs/2026-07-04-p6b-handoff.md 第 101-104 行）：
+背景（見 docs/history/2026-07-04-p6b-handoff.md 第 101-104 行）：
 P6a/P6b 已建立「有護欄自適應」基礎層——``rppg.adaptive_calibration.RppgParamAbEvaluator``
 以心跳帶真值對現行 vs 候選 ROI 權重的 rPPG BPM 做 A/B——但 live 自適應迴圈開啟前，
 需要能在**沒有心跳帶硬體連線的情況下**離線驗證候選 ROI 權重是否真的更準。本腳本

@@ -104,7 +104,7 @@ def test_resolve_clamps_extreme_dominance() -> None:
 def test_resolve_clamps_two_sided_extreme_simultaneously() -> None:
     """兩個 ROI 給極端大值、兩個給極端小值：驗證投影演算法在「多個元素同時
     違反邊界」時仍收斂到界內且總和為 1.0（回歸測試：曾經的單輪同時 clamp
-    寫法在此案例下總和會跑掉，見 docs/2026-07-04-p6b-handoff.md 的
+    寫法在此案例下總和會跑掉，見 docs/history/2026-07-04-p6b-handoff.md 的
     clamp/正規化語意討論）。"""
     raw = {"roi_weights": {"forehead": 500.0, "L_cheek": 500.0, "R_cheek": 1e-6, "glabella": 1e-6}}
     out = resolve_roi_weights_override(raw)

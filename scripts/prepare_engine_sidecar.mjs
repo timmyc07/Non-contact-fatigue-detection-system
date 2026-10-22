@@ -14,14 +14,19 @@ if (!python || !existsSync(python)) {
   process.exit(78);
 }
 
-const result = spawnSync(
-  python,
-  [join(root, 'scripts', 'build_engine_sidecar.py')],
-  { cwd: root, stdio: 'inherit' },
-);
-
-if (result.error) {
-  process.stderr.write(`Engine sidecar 建置啟動失敗：${result.error.message}\n`);
-  process.exit(1);
+const scripts = ['scripts.prepare_local_assets'];
+if (!process.argv.includes('--assets-only')) {
+  scripts.push('scripts.build_engine_sidecar');
 }
-process.exit(result.status ?? 1);
+for (const script of scripts) {
+  const result = spawnSync(python, ['-m', script], {
+    cwd: root, stdio: 'inherit',
+  });
+  if (result.error) {
+    process.stderr.write(`${script} 啟動失敗：${result.error.message}\n`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+}

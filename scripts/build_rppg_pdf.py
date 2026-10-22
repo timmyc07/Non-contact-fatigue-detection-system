@@ -11,8 +11,8 @@ from matplotlib.figure import Figure
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "docs" / "rppg_technical_report.md"
-TARGET = ROOT / "docs" / "rppg_technical_report.pdf"
+SOURCE = ROOT / "docs" / "technical" / "rppg_technical_report.md"
+TARGET = ROOT / "docs" / "exports" / "rppg_technical_report.pdf"
 
 
 FONT_CANDIDATES = [

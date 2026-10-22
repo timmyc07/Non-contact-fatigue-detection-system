@@ -1,118 +1,96 @@
-# Python
+# Python, virtual environments and test caches
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environments
 .venv/
 venv/
 ENV/
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Packaging
+# Platform-native build outputs and dependencies
 build/
 dist/
 *.egg-info/
 node_modules/
 .dart_tool/
-
-# Tauri build outputs and generated capability schemas
 src-tauri/target/
 src-tauri/gen/
 
-# Test/coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Logs
-*.log
-
-# App data
+# Local runtime data, calibration and investigation evidence
 recordings/
+output/
+Saved/
 settings.json
+*.log
+*.sqlite3
+*.db
 config/mediapipe_calibration.json
 config/rppg_calibration/
 config/rppg_live_feed.json
 config/rppg_calibration_feed.enabled
 config/personal_profile/
-docs/
-!docs/
-!docs/rppg_technical_report.md
-!docs/rppg_technical_report.pdf
-!docs/2026-05-21-mediapipe-landmark-expansion-log.md
-
-# Claude Design 匯入的設計稿原始素材（僅供本機參考，不入版控）
-.design_import/
-
-# OS/Editor
-.DS_Store
-Thumbs.db
-.vscode/
-
-# Additional common ignores
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-
-# IDE / editors
-.idea/
-*.suo
-*.user
-
-# Packaging / build
-build/
-dist/
-*.egg-info/
-
-# Test/coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Logs, databases, caches
-*.log
-*.sqlite3
-*.db
-
-# Media / recordings
-recordings/
-*.mp4
-*.avi
-*.mkv
-*.mov
-
-# Large model / binary assets (use Git LFS if you must track these)
+config/hr_belt.json
 models/*.task
 models/*.tflite
 models/*.pb
 models/*.onnx
 
-# Documentation artifacts (project documents folder contains many large binaries)
-docs/project_documents/
-docs/images/
-*.docx
-*.pdf
-!docs/無人機駕駛員疲勞狀態監測系統_實務專題報告.pdf
-
-# Secrets / local config
+# Secrets and local agent instructions (templates contain no credentials)
 .env
-config/mediapipe_calibration.json
-config/hr_belt.json
+.env.*
+!.env.template
+!.env.example
+AGENTS.md
+CLAUDE.md
 
-# Keep specific docs if explicitly desired (example whitelist already in file)
-# !docs/rppg_technical_report.md
-# !docs/rppg_technical_report.pdf
+# Images stay local, including source diagrams and generated app icons
+*.[pP][nN][gG]
+*.[aA][pP][nN][gG]
+*.[jJ][pP][gG]
+*.[jJ][pP][eE][gG]
+*.[gG][iI][fF]
+*.[wW][eE][bB][pP]
+*.[sS][vV][gG]
+*.[sS][vV][gG][zZ]
+*.[iI][cC][oO]
+*.[iI][cC][nN][sS]
+*.[bB][mM][pP]
+*.[tT][iI][fF]
+*.[tT][iI][fF][fF]
+*.[aA][vV][iI][fF]
+*.[hH][eE][iI][cC]
+*.[hH][eE][iI][fF]
+*.[pP][sS][dD]
+*.[tT][gG][aA]
+*.[eE][xX][rR]
+*.[hH][dD][rR]
+docs/images/
 
-# 專題簡報／成果報告輔助腳本與甘特圖（本機生成，勿上傳 GitHub）
+# Generated documents, design references and recordings
+docs/exports/
+docs/project_documents/
+.design_import/
+*.docx
+*.pptx
+*.pdf
+*.mp4
+*.avi
+*.mkv
+*.mov
+
+# OS and editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Local presentation-generation utilities
 generate_gantt_supplement.py
 recreate_original_gantt.py
-進度甘特圖-1.png
-甘特圖_後期實驗驗證補充版.png
 scripts/update_achievement_report.py
 scripts/update_project_presentation.py
 scripts/update_project_presentation_expanded.py

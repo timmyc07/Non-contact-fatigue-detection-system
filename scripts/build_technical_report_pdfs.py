@@ -15,33 +15,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 REPORTS = {
     "overview": {
-        "source": ROOT / "docs" / "system_overview_technical_report.md",
-        "target": ROOT / "docs" / "system_overview_technical_report.pdf",
+        "source": ROOT / "docs" / "technical" / "system_overview_technical_report.md",
+        "target": ROOT / "docs" / "exports" / "system_overview_technical_report.pdf",
         "footer": "系統總技術報告書",
     },
     "rppg": {
-        "source": ROOT / "docs" / "rppg_technical_report_v2.md",
-        "target": ROOT / "docs" / "rppg_technical_report_v2.pdf",
+        "source": ROOT / "docs" / "technical" / "rppg_technical_report_v2.md",
+        "target": ROOT / "docs" / "exports" / "rppg_technical_report_v2.pdf",
         "footer": "rPPG 系統技術報告書",
     },
     "mediapipe-fatigue": {
-        "source": ROOT / "docs" / "mediapipe_fatigue_technical_report.md",
-        "target": ROOT / "docs" / "mediapipe_fatigue_technical_report.pdf",
+        "source": ROOT / "docs" / "technical" / "mediapipe_fatigue_technical_report.md",
+        "target": ROOT / "docs" / "exports" / "mediapipe_fatigue_technical_report.pdf",
         "footer": "MediaPipe 疲勞偵測系統技術報告書",
     },
     "drone-operator-application": {
-        "source": ROOT / "docs" / "drone_operator_fatigue_application_report.md",
-        "target": ROOT / "docs" / "drone_operator_fatigue_application_report.pdf",
+        "source": ROOT / "docs" / "technical" / "drone_operator_fatigue_application_report.md",
+        "target": ROOT / "docs" / "exports" / "drone_operator_fatigue_application_report.pdf",
         "footer": "無人機操作員疲勞監測應用定位報告",
     },
     "drone-operator-optimization": {
-        "source": ROOT / "docs" / "drone_operator_system_optimization_report.md",
-        "target": ROOT / "docs" / "drone_operator_system_optimization_report.pdf",
+        "source": ROOT / "docs" / "technical" / "drone_operator_system_optimization_report.md",
+        "target": ROOT / "docs" / "exports" / "drone_operator_system_optimization_report.pdf",
         "footer": "無人機操作員疲勞監測系統優化建議報告",
     },
     "utarldd-replay-validation": {
-        "source": ROOT / "docs" / "utarldd_replay_validation_report.md",
-        "target": ROOT / "docs" / "utarldd_replay_validation_report.pdf",
+        "source": ROOT / "docs" / "technical" / "utarldd_replay_validation_report.md",
+        "target": ROOT / "docs" / "exports" / "utarldd_replay_validation_report.pdf",
         "footer": "UTA-RLDD 影片回放驗證系統技術報告",
     },
 }

@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Callable, cast
 
-from flask import Flask, render_template, jsonify, request, Response, send_file, abort
+from flask import Flask, jsonify, request, Response, send_file, abort
 from flask_socketio import SocketIO, emit
 import gzip
 import re
@@ -23,7 +23,6 @@ import sqlite3
 
 from gui.file_browser_client import FileBrowserClient
 from gui.desktop_control import DesktopControlError
-from gui.runtime_paths import resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -395,15 +394,7 @@ def create_app(
             return candidate
         return None
 
-    template_dir = resource_path("gui", "web_ui", "templates")
-    static_dir = resource_path("gui", "web_ui", "static")
-
-    app = Flask(
-        __name__,
-        template_folder=str(template_dir),
-        static_folder=str(static_dir),
-        static_url_path="/static",
-    )
+    app = Flask(__name__, template_folder=None, static_folder=None)
     app.config["SECRET_KEY"] = secrets.token_hex(32)
 
     socketio = SocketIO(
@@ -482,7 +473,12 @@ def create_app(
 
     @app.route("/")
     def index():
-        return render_template("dashboard.html")
+        return jsonify({
+            "success": True,
+            "service": "NCFD engine",
+            "interface": "Tauri + Flutter",
+            "metrics_url": "/api/metrics",
+        })
 
     @app.route("/api/recordings")
     def get_recordings():

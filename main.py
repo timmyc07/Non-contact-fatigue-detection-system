@@ -123,17 +123,17 @@ def _run_face_landmarker_preflight() -> int:
 
 
 def _launch_tauri() -> int:
-    npx = shutil.which("npx")
+    npm = shutil.which("npm")
     flutter = shutil.which("flutter")
     root = Path(__file__).resolve().parent
-    if npx is None or flutter is None or not (root / "src-tauri" / "tauri.conf.json").exists():
+    if npm is None or flutter is None or not (root / "src-tauri" / "tauri.conf.json").exists():
         print(
             "[Launcher] Flutter/Tauri toolchain unavailable. "
             "Install Flutter and Node.js, then run `npm run desktop`."
         )
         return 78
     try:
-        return subprocess.call([npx, "tauri", "dev"], cwd=root)
+        return subprocess.call([npm, "run", "desktop"], cwd=root)
     except OSError as exc:
         print(f"[Launcher] Unable to start Tauri: {exc}")
         return 78

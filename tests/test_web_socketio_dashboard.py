@@ -244,6 +244,19 @@ def test_lan_homepage_requires_token(tmp_path: Path) -> None:
     assert response.status_code == 401
 
 
+def test_lan_diagnostics_with_token_returns_json_without_template(tmp_path: Path) -> None:
+    app, _socketio = create_app(
+        MetricsBuffer(), PlaybackManager(tmp_path), access_token="secret-lan-token"
+    )
+    response = app.test_client().get(
+        "/?token=secret-lan-token",
+        environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+    )
+    assert response.status_code == 200
+    assert response.is_json
+    assert response.json["metrics_url"] == "/api/metrics"
+
+
 def test_local_request_bypasses_token_even_when_lan_token_set(tmp_path: Path) -> None:
     """127.0.0.1 來源一律免 token，維持單機模式零改變。"""
     app, _socketio = create_app(

@@ -96,7 +96,7 @@ class FuserConfig:
     # 權重依 UTA-RLDD 18 片（subject 01-06 × label 0/5/10）各通道分辨力（AUC）重配：
     # PERCLOS AUC 0.79 為唯一強訊號 → 主導；微睡（AUC 0.42）與 blink_temporal（0.42）
     # 在此資料上為反訊號 → 大幅降權但保留（對真實無人機場景的點頭/慢眨眼仍有價值）。
-    # 詳見 docs/2026-07-03-fatigue-accuracy-calibration.md（2026-07-03 準確度校準）
+    # 詳見 docs/history/2026-07-03-fatigue-accuracy-calibration.md（2026-07-03 準確度校準）
     beh_w_perclos:    float = 0.55
     beh_w_blink_temporal: float = 0.12
     beh_w_microsleep: float = 0.10

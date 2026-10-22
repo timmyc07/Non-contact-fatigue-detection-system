@@ -22,7 +22,6 @@ import os
 import queue
 import sys
 import time
-import urllib.request
 from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -41,6 +40,7 @@ from scipy.signal import butter, filtfilt, find_peaks, sosfiltfilt, welch
 
 from gui.frame_queue import get_latest
 from gui.mediapipe_tuning import MediaPipeTuning, load_mediapipe_tuning
+from gui.model_assets import MODEL_URL, download_face_model
 from gui.runtime_paths import data_path, resource_path
 from gui.platforms import (
     create_face_landmarker_base_options,
@@ -266,10 +266,6 @@ FACE_STABILITY_IDXS = sorted(set(
     + [33, 263, NOSE_TIP_IDX]
 ))
 
-MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
-    "face_landmarker/float16/latest/face_landmarker.task"
-)
 _MODELS_DIR = resource_path("models")
 
 
@@ -1134,8 +1130,8 @@ def ensure_face_model(
             return target
     models_dir.mkdir(parents=True, exist_ok=True)
     if status_cb:
-        status_cb("正在下載 MediaPipe 臉部模型…（首次執行約 20-30 MB）")
-    urllib.request.urlretrieve(MODEL_URL, target)
+        status_cb("正在下載 MediaPipe 臉部模型…（約 4 MB）")
+    download_face_model(target)
     if status_cb:
         status_cb("模型下載完成")
     return target

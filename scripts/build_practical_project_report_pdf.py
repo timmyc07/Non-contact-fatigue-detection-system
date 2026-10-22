@@ -1,6 +1,6 @@
 """Build the formal practical project report as a PDF.
 
-The layout follows ``docs/電子工程系實務專題報告格式及內容.pdf``:
+The layout follows ``docs/exports/電子工程系實務專題報告格式及內容.pdf``:
 A4 paper, 2.54/2.91/3.17/3.17 cm margins, 16/14/12 pt heading
 hierarchy, and 12 pt body text with at least 16 pt line height.
 """
@@ -37,10 +37,10 @@ from reportlab.platypus import (
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs"
-OUTPUT_PDF = DOCS_DIR / "無人機駕駛員疲勞狀態監測系統_實務專題報告.pdf"
+OUTPUT_PDF = DOCS_DIR / "exports" / "無人機駕駛員疲勞狀態監測系統_實務專題報告.pdf"
 SUMMARY_CSV = ROOT / "recordings" / "utarldd_runs" / "20260607_122601" / "utarldd_summary_20260607_122601.csv"
 VALIDATION_CSV = ROOT / "recordings" / "utarldd_runs" / "20260607_122601" / "utarldd_validation_report_20260607_122601.csv"
-FLOWCHART_PREVIEW = DOCS_DIR / "system_flowchart_canva_preview.png"
+FLOWCHART_PREVIEW = DOCS_DIR / "images" / "system_flowchart_canva_preview.png"
 
 CH_FONT = "MicrosoftJhengHei"
 CH_BOLD = "MicrosoftJhengHei-Bold"
@@ -342,16 +342,16 @@ def add_cover_and_front_matter(story: list[Any], styles: dict[str, ParagraphStyl
             p("說明：本頁保留個人欄位供送審前填寫；技術內容、測試數據與系統限制依本 repo 既有程式、文件與回測資料撰寫。", styles),
             PageBreak(),
             heading("中文摘要", styles, 1),
-            p("本專題完成一套面向無人機遠端駕駛員的非接觸式疲勞與警覺度監測系統。系統使用一般 RGB 攝影機擷取操作員臉部影像，透過 MediaPipe Face Landmarker 取得臉部特徵點、虹膜位置、表情係數與姿態資訊，再分別進行行為疲勞分析與 rPPG 遠端生理訊號估測。行為疲勞分析包含 EAR 眼睛開合、PERCLOS 閉眼時間比例、眨眼時序、視線穩定度、頭部姿態、微睡眠與哈欠等特徵；rPPG 子系統則以臉部皮膚 ROI、POS 訊號分離、Butterworth 帶通濾波、Welch 頻譜峰值搜尋與 IBI/HRV 估算提供 BPM、SQI 與壓力趨勢輔助資訊。", styles),
-            p("系統以 PySide6 建立桌面 GUI，整合 OpenCV 攝影機擷取、即時標註預覽、SQLite 指標紀錄、影片錄製、警報器設定與 Flask-SocketIO Web dashboard。為避免 rPPG 與疲勞分析重複推論同一影格，主流程使用單一 MediaPipe Face Landmarker 將結果分流到兩條分析管線，再由融合評分器以行為疲勞為主、rPPG 為輔輸出整體疲勞分數。系統另建立 UTA-RLDD 影片回放驗證流程，可將資料集影片視為可重現離線鏡頭，產生 SQLite、CSV、HTML 與 manifest 報表。", styles),
+            p("本專題完成一套面向無人機遠端駕駛員的非接觸式疲勞與警覺度監測系統。系統使用一般 RGB 攝影機擷取操作員臉部影像，透過 MediaPipe Face Landmarker 取得臉部特徵點、虹膜位置、表情係數與姿態資訊，再分別進行行為疲勞分析與 rPPG 遠端生理訊號估測。行為疲勞分析包含 EAR 眼睛開合、PERCLOS 閉眼時間比例、眨眼時序、視線穩定度、頭部姿態、微睡眠與哈欠等特徵；rPPG 子系統則以臉部皮膚 ROI、色彩投影脈波分離、Butterworth 帶通濾波、Welch 頻譜峰值搜尋與 IBI/HRV 估算提供 BPM、SQI 與壓力趨勢輔助資訊。", styles),
+            p("系統以 Tauri v2 與 Flutter Web 提供桌面操作台及 Overlay，Python engine 中的 PySide6 負責隱藏 runtime、工作執行緒與音效，並整合 OpenCV 攝影機擷取、SQLite 指標紀錄、影片錄製、警報設定及 Flask-SocketIO 診斷 API。為避免 rPPG 與疲勞分析重複推論同一影格，主流程使用單一 MediaPipe Face Landmarker 將結果分流到兩條分析管線，再由融合評分器以行為疲勞為主、rPPG 為輔輸出整體疲勞分數。系統另建立 UTA-RLDD 影片回放驗證流程，可將資料集影片視為可重現離線鏡頭，產生 SQLite、CSV、HTML 與 manifest 報表。", styles),
             p("測試結果顯示，2026-06-07 批次共處理 36 支 UTA-RLDD 影片，完成率 100%，平均人臉偵測率約 99.93%。PERCLOS 與嗜睡/危急 frame 比例在 Drowsy 類別較高，表示眼部閉合特徵對部分嗜睡影片有反應；但平均融合分數未隨 Alert、Low Vigilant、Drowsy 單調上升，因此目前不能宣稱已完成高準確率三分類模型。結論上，本專題已完成可即時運作、可記錄、可回放驗證的疲勞監測原型；後續仍需以無人機操作場域資料進行人工標註、門檻校正與誤報漏報評估。", styles),
-            p("關鍵詞：無人機駕駛員、疲勞監測、MediaPipe、rPPG、PERCLOS、PySide6、Web dashboard。", styles),
+            p("關鍵詞：無人機駕駛員、疲勞監測、MediaPipe、rPPG、PERCLOS、Tauri、Flutter。", styles),
             PageBreak(),
             heading("English Abstract", styles, 1),
-            p("This project implements a non-contact fatigue and vigilance monitoring prototype for remote UAV operators. A standard RGB camera captures facial video, and MediaPipe Face Landmarker provides facial landmarks, iris landmarks, blendshape scores, and pose-related outputs. The system then runs two analysis paths: behavior-based fatigue estimation and remote photoplethysmography. The behavior path measures eye aspect ratio, PERCLOS, blink temporal patterns, gaze stability, head pose, microsleep-like nodding, mouth opening, and yawning. The rPPG path extracts facial skin regions of interest, applies POS pulse separation, Butterworth band-pass filtering, Welch spectral peak analysis, and IBI/HRV estimation to provide BPM, SQI, and stress-related diagnostic indicators.", styles),
-            p("The implementation includes a PySide6 desktop GUI, OpenCV camera capture, real-time overlays, SQLite recording, video recording, alarm configuration, and a Flask-SocketIO web dashboard. To avoid duplicate inference, the main pipeline uses one shared Face Landmarker instance and dispatches its outputs to both behavior and rPPG engines before a conservative fusion scorer combines them. The system also provides a UTA-RLDD replay pipeline that treats dataset videos as deterministic offline camera inputs and exports SQLite, CSV, HTML, and manifest reports.", styles),
+            p("This project implements a non-contact fatigue and vigilance monitoring prototype for remote UAV operators. A standard RGB camera captures facial video, and MediaPipe Face Landmarker provides facial landmarks, iris landmarks, blendshape scores, and pose-related outputs. The system then runs two analysis paths: behavior-based fatigue estimation and remote photoplethysmography. The behavior path measures eye aspect ratio, PERCLOS, blink temporal patterns, gaze stability, head pose, microsleep-like nodding, mouth opening, and yawning. The rPPG path extracts facial skin regions of interest, applies the implemented color-projection pulse separation, Butterworth band-pass filtering, Welch spectral peak analysis, and IBI/HRV estimation to provide BPM, SQI, and stress-related diagnostic indicators.", styles),
+            p("The desktop interface and overlays use Tauri v2 and Flutter Web. A hidden Python engine uses PySide6 for runtime, worker threads, and audio, alongside OpenCV camera capture, SQLite recording, video recording, alarm configuration, and a Flask-SocketIO diagnostics API. To avoid duplicate inference, the main pipeline uses one shared Face Landmarker instance and dispatches its outputs to both behavior and rPPG engines before a conservative fusion scorer combines them. The system also provides a UTA-RLDD replay pipeline that treats dataset videos as deterministic offline camera inputs and exports SQLite, CSV, HTML, and manifest reports.", styles),
             p("In the 2026-06-07 replay batch, 36 UTA-RLDD videos were processed successfully with a 100% completion rate and an average face detection rate of approximately 99.93%. PERCLOS and severe drowsiness-related frame ratios were higher in the Drowsy class, but the fused fatigue score did not monotonically increase from Alert to Low Vigilant to Drowsy. Therefore, this project should be presented as a working monitoring prototype and reproducible validation platform, not as a fully validated high-accuracy fatigue classifier.", styles),
-            p("Keywords: UAV operator, fatigue monitoring, MediaPipe, rPPG, PERCLOS, PySide6, Web dashboard.", styles),
+            p("Keywords: UAV operator, fatigue monitoring, MediaPipe, rPPG, PERCLOS, Tauri, Flutter.", styles),
             PageBreak(),
             heading("目錄", styles, 1),
             p("1. 緒言<br/>2. 簡介<br/>3. 理論<br/>4. 軟、硬體分析<br/>5. 測試結果<br/>6. 結論<br/>7. 建議<br/>8. 附錄<br/>9. 參考資料", styles, "toc"),
@@ -385,7 +385,7 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
                     "以 MediaPipe Face Landmarker 取得臉部、眼睛、嘴部、虹膜與姿態資訊。",
                     "設計可解釋的行為疲勞特徵，包括 EAR、PERCLOS、眨眼時序、凝視、頭姿、微睡眠與哈欠。",
                     "加入 rPPG 心率與品質診斷作為輔助生理資訊，但不讓低品質 rPPG 主導疲勞判斷。",
-                    "建立桌面 GUI、Web dashboard、SQLite 紀錄、影片錄製與可重現回放驗證流程。",
+                    "建立 Tauri／Flutter 桌面介面、診斷 API、SQLite 紀錄、影片錄製與可重現回放驗證流程。",
                 ],
                 styles,
             ),
@@ -395,7 +395,7 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
             heading("2.1 製作動機", styles, 2),
             p("專題的核心動機是把汽車駕駛疲勞偵測中常見的眼部與臉部行為特徵，轉換到無人機遠端操作員情境。無人機操作員的風險不只在移動速度，也在持續監控、判斷與操控時的注意力維持。", styles),
             heading("2.2 製作方法", styles, 2),
-            p("系統以 Python 為主要開發語言。桌面介面使用 PySide6，影像擷取與影像處理使用 OpenCV，臉部特徵擷取使用 MediaPipe Face Landmarker，訊號處理使用 NumPy 與 SciPy，Web dashboard 使用 Flask 與 Flask-SocketIO，資料紀錄使用 SQLite。", styles),
+            p("系統以 Python 實作分析 engine，桌面介面使用 Tauri v2 與 Flutter Web；PySide6 僅提供隱藏 runtime、工作執行緒及音效。OpenCV 負責影像擷取與處理，MediaPipe Face Landmarker 擷取臉部特徵，NumPy／SciPy 執行訊號處理，Flask／Flask-SocketIO 提供診斷與傳輸 API，SQLite 保存指標。", styles),
         ]
     )
     if FLOWCHART_PREVIEW.exists():
@@ -405,10 +405,10 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
             heading("2.3 主要成果", styles, 2),
             bullet_list(
                 [
-                    "完成即時桌面 GUI，可顯示 camera preview、MediaPipe 標註、rPPG ROI、疲勞狀態、融合分數與警報狀態。",
+                    "完成 Tauri／Flutter 即時操作台與 Overlay，可顯示 camera preview、MediaPipe 標註、rPPG ROI、疲勞狀態、融合分數與警報狀態。",
                     "完成 rPPG 子系統，可輸出 BPM、RMSSD、SDNN、LF/HF、SQI、品質分數與 BPM guard 診斷。",
                     "完成行為疲勞子系統，可輸出 OK、LOW_VIGILANCE、DROWSY、CRITICAL、MICROSLEEP 等狀態。",
-                    "完成 Web dashboard，即時推送 metrics 與 JPEG preview，並能回放 SQLite 紀錄。",
+                    "提供 HTTP／Socket.IO 診斷 API，傳輸 metrics、JPEG preview 與 SQLite 回放資料；根路徑回傳診斷 JSON，可見操作介面由 Flutter 提供。",
                     "完成 UTA-RLDD replay，可批次輸出 SQLite、summary CSV、validation CSV、HTML 報表與 manifest。",
                 ],
                 styles,
@@ -418,11 +418,11 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
             p("MediaPipe Face Landmarker 是本專題唯一直接使用的 AI 模型。系統將 OpenCV 取得的 BGR frame 轉為 RGB，再包裝成 MediaPipe Image，以 RunningMode.VIDEO 與遞增 timestamp_ms 執行 detect_for_video。模型輸出 478 個 normalized face landmarks、blendshape scores 與 facial transformation matrices。", styles),
             heading("3.2 EAR 與 PERCLOS", styles, 2),
             p("EAR 使用眼睛 6 個 landmark 估算眼睛開合程度，公式為 EAR = (||p2 - p6|| + ||p3 - p5||) / (2 ||p1 - p4||)。系統啟動後先收集個人開眼 baseline，再以 baseline 乘上比例產生閉眼門檻，避免固定 EAR 門檻受到眼型、鏡頭角度與眼鏡影響。", styles),
-            p("PERCLOS 則計算一段滑動時間窗內的閉眼時間比例：PERCLOS = closed_eye_time / valid_observation_time。本系統以 60 秒 sliding window 計算 PERCLOS，低警覺工程門檻約為 0.10，明顯嗜睡工程門檻約為 0.25。", styles),
+            p("PERCLOS 則計算一段滑動時間窗內的閉眼時間比例：PERCLOS = closed_eye_time / valid_observation_time。FatigueConfig 預設使用 60 秒 sliding window、有效觀測分母下限 5 秒；低警覺與嗜睡狀態門檻分別為 0.02 與 0.05，個人化基線可覆寫對應門檻。這些是本專案工程設定，不是通用生理或臨床界值。", styles),
             heading("3.3 眨眼時序、凝視與頭部姿態", styles, 2),
             p("低警覺不一定立即表現為長時間閉眼，因此系統記錄每次眨眼的 duration、amplitude 與 opening velocity，使用前 12 次有效眨眼建立個人 baseline。虹膜位置用於估計 gaze x/y、fixation duration、saccadic velocity 與 saccade frequency；頭部姿態則以 solvePnP 與簡化臉部 3D template 推估 pitch、yaw、roll。", styles),
-            heading("3.4 rPPG 與 POS 訊號分離", styles, 2),
-            p("rPPG 利用臉部皮膚反射光中隨脈搏產生的微小色彩變化估計心率。本系統選取額頭、左右臉頰與眉心附近 ROI，計算平均 RGB 時序，再使用 POS 方法降低光照共同變動。取得 pulse waveform 後，系統使用 Butterworth band-pass 保留合理心率頻帶，再用 Welch PSD 找主要峰值估算 BPM。", styles),
+            heading("3.4 rPPG 與色彩投影脈波分離", styles, 2),
+            p("rPPG 利用臉部皮膚反射光中隨脈搏產生的微小色彩變化估計心率。本系統選取額頭、左右臉頰與眉心附近 ROI，計算平均 RGB 時序，再由目前名為 pos_pulse 的函式執行通道 Z-score 與色彩投影混合。此為現有實作，不代表已完整重現原論文 POS。取得 pulse waveform 後，系統使用 Butterworth band-pass 保留合理心率頻帶，再用 Welch PSD 找主要峰值估算 BPM。", styles),
             heading("3.5 融合分數與創意設計", styles, 2),
             p("融合器預設行為疲勞權重 85%，rPPG 權重 15%；若 rPPG 的 SQI、quality score 或 ROI 數不足，rPPG 權重降為 0，避免低品質生理訊號造成誤判。此設計保留可解釋性：每一次警示都能回到 PERCLOS、眨眼時序、凝視、頭姿、哈欠或 rPPG 品質欄位。", styles),
             heading("4. 軟、硬體分析", styles, 1),
@@ -432,8 +432,8 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
                 [
                     ["硬體", "責任", "分析"],
                     ["USB / 內建攝影機", "提供 RGB 影像", "影像 FPS、解析度、自動曝光與光源穩定度會直接影響 Face Landmarker 與 rPPG。"],
-                    ["Notebook / PC", "執行 Python、MediaPipe、OpenCV、GUI 與 Web server", "CPU 與記憶體需同時負擔影像解碼、臉部推論、訊號處理與 UI 更新。"],
-                    ["螢幕", "顯示 GUI、overlay 與 Web dashboard", "顯示層不應阻塞分析層，因此 preview 有 FPS 節流與最新影格策略。"],
+                    ["Notebook / PC", "執行 Python engine、MediaPipe、OpenCV、Tauri／Flutter 與診斷服務", "CPU 與記憶體需同時負擔影像解碼、臉部推論、訊號處理與 UI 更新。"],
+                    ["螢幕", "顯示 Flutter 操作台與 Tauri Overlay", "顯示層不應阻塞分析層，因此 preview 有 FPS 節流與最新影格策略。"],
                     ["喇叭", "播放警示音", "可依 LOW_VIGILANCE、DROWSY、CRITICAL、MICROSLEEP 設定不同音效。"],
                 ],
                 [3.2, 4.2, 7.2],
@@ -444,12 +444,13 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
             table(
                 [
                     ["模組", "代表檔案", "責任"],
-                    ["桌面啟動", "main.py", "設定 Qt plugin 路徑、檢查 Linux xcb runtime、啟動 PySide6 主視窗。"],
-                    ["主控制台", "gui/main_window.py", "管理相機、分析 worker、錄影、Web dashboard、UTA-RLDD replay 與 UI 狀態。"],
+                    ["桌面啟動", "main.py / src-tauri/src/main.rs", "由 Tauri 管理背景 engine；engine 模式設定 Qt plugin 路徑並檢查 Linux runtime。"],
+                    ["桌面介面", "flutter_app/lib/main.dart", "呈現操作台、設定、回測進度與 Overlay。"],
+                    ["engine 編排", "gui/main_window.py", "管理相機、分析 worker、錄影、診斷服務、UTA-RLDD replay 與 runtime 狀態。"],
                     ["共用臉部推論", "gui/combined_worker.py", "單一 Face Landmarker 對每個 frame 推論一次，分送給 rPPG 與疲勞分析。"],
                     ["行為疲勞", "gui/fatigue_engine.py", "計算 EAR、PERCLOS、眨眼、凝視、頭姿、MAR、哈欠與品質分數。"],
-                    ["rPPG", "rppg/rppg_worker.py", "建立 ROI、POS pulse、濾波、Welch BPM、HRV、SQI 與 BPM guard。"],
-                    ["Web dashboard", "gui/web_server.py / gui/web_ui", "Socket.IO 即時 metrics、JPEG preview、歷史 DB 回放與影片串流。"],
+                    ["rPPG", "rppg/rppg_worker.py", "建立 ROI、色彩投影脈波、濾波、Welch BPM、HRV、SQI 與 BPM guard。"],
+                    ["診斷 API", "gui/web_server.py", "Socket.IO 即時 metrics、JPEG preview、歷史 DB 回放與影片串流。"],
                     ["回放驗證", "gui/video_replay.py / scripts/utarldd_replay.py", "用 UTA-RLDD 影片重用正式 pipeline，輸出 DB/CSV/HTML/manifest。"],
                 ],
                 [3.0, 4.6, 7.0],
@@ -457,7 +458,7 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
             ),
             Spacer(1, 8),
             heading("4.3 主要程式流程", styles, 2),
-            p("CombinedWorker 的程式設計重點是「一個 frame 只做一次臉部推論」。它從最新影格佇列取出 BGR frame，轉成 RGB MediaPipe Image，呼叫 FaceLandmarker.detect_for_video。若偵測到臉，先讓 FatigueEngine 產生行為 metrics，再讓 rPPG pipeline 取 ROI 與計算生理 metrics，最後由 FatigueFuser 產生 fused score 並輸出到 GUI、Web 與 recorder。", styles),
+            p("CombinedWorker 的程式設計重點是「一個 frame 只做一次臉部推論」。它從最新影格佇列取出 BGR frame，轉成 RGB MediaPipe Image，呼叫 FaceLandmarker.detect_for_video。若偵測到臉，先讓 FatigueEngine 產生行為 metrics，再讓 rPPG pipeline 取 ROI 與計算生理 metrics，最後由 FatigueFuser 產生 fused score，供 Flutter、診斷 API 與 recorder 使用。", styles),
             heading("5. 測試結果", styles, 1),
             heading("5.1 測試方法", styles, 2),
             p("本專題使用三層驗證：第一層是 pytest 自動測試；第二層是固定影片回放，使用 UTA-RLDD 影片建立可重現時間軸；第三層是人工情境測試建議，例如清醒注視、自然眨眼、閉眼、瞇眼、低頭、哈欠與轉頭等場景。", styles),
@@ -505,7 +506,7 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
                     ["測試類別", "覆蓋重點"],
                     ["rPPG", "合成 BPM、band-pass、Welch peak、IBI outlier、BPM guard、ROI jitter 與面積穩定度。"],
                     ["MediaPipe fatigue", "tuning profile、blendshape baseline、品質 gate、融合 15/85 權重與低 SQI 降權。"],
-                    ["Web dashboard", "Socket.IO 連線、request_metrics history/latest、JPEG preview、playback API 與 UTA-RLDD DB 列表。"],
+                    ["診斷 API", "Socket.IO 連線、request_metrics history/latest、JPEG preview、playback API 與 UTA-RLDD DB 列表。"],
                     ["UTA-RLDD replay", "label 解析、影片探索、summary/full CSV、validation report、HTML 報表、manifest、平行模式錯誤處理。"],
                     ["告警器", "狀態對應音效、冷卻時間、優先級與 fallback。"],
                 ],
@@ -514,7 +515,7 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
             ),
             Spacer(1, 8),
             heading("6. 結論", styles, 1),
-            p("本專題完成一套可即時執行的無人機駕駛員疲勞狀態監測原型。系統整合 MediaPipe 臉部特徵、rPPG 訊號處理、行為疲勞分析、融合評分、桌面 GUI、Web dashboard、SQLite 紀錄、影片錄製、警報與 UTA-RLDD 回放驗證。", styles),
+            p("本專題完成一套可即時執行的無人機駕駛員疲勞狀態監測原型。系統整合 MediaPipe 臉部特徵、rPPG 訊號處理、行為疲勞分析、融合評分、Tauri／Flutter 桌面介面、診斷 API、SQLite 紀錄、影片錄製、警報與 UTA-RLDD 回放驗證。", styles),
             p("測試結果也清楚指出目前限制：系統可以穩定處理影片並取得高人臉偵測率，PERCLOS 對 Drowsy 類別有一定反應，但融合分數尚未與資料集三分類穩定對齊。因此本專題應定位為疲勞監測原型與驗證平台，而非已完成高準確率分類器。", styles),
             heading("7. 建議", styles, 1),
             heading("7.1 對後續學弟妹的建議", styles, 2),
@@ -559,8 +560,9 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
             table(
                 [
                     ["用途", "指令"],
-                    ["建立環境", "py -3 -m venv .venv；.\\.venv\\Scripts\\python -m pip install -r requirements.txt"],
-                    ["啟動 GUI", "python main.py"],
+                    ["建立環境", "py -3.12 -m venv .venv；.\\.venv\\Scripts\\python -m pip install -r requirements-dev.txt"],
+                    ["準備本機資產", ".\\.venv\\Scripts\\python -m scripts.prepare_local_assets --download-model"],
+                    ["啟動桌面", "npm ci；npm run desktop"],
                     ["Ubuntu 安裝", "bash scripts/setup_ubuntu.sh"],
                     ["執行測試", ".\\.venv\\Scripts\\python.exe -m pytest -q"],
                     ["UTA-RLDD replay", ".\\.venv\\Scripts\\python.exe -m scripts.utarldd_replay <dataset_root> --jobs 4"],
@@ -590,7 +592,7 @@ def add_main_content(story: list[Any], styles: dict[str, ParagraphStyle], metric
         "National Highway Traffic Safety Administration, Development of a Drowsy Driver Detection System, DOT HS 808 247, 1998.",
         "UTA-RLDD official site, https://sites.google.com/view/utarldd/home",
         "Reza Ghoddoosian, Marnim Galib, Vassilis Athitsos, A Realistic Dataset and Baseline Temporal Model for Early Drowsiness Detection, CVPR Workshops, 2019.",
-        "本專案 README.md、docs/system_overview_technical_report.md、docs/rppg_technical_report_v2.md、docs/mediapipe_fatigue_technical_report.md、docs/utarldd_replay_validation_report.md。",
+        "本專案 README.md、docs/technical/system_overview_technical_report.md、docs/technical/rppg_technical_report_v2.md、docs/technical/mediapipe_fatigue_technical_report.md、docs/technical/utarldd_replay_validation_report.md。",
     ]
     for idx, ref in enumerate(refs, 1):
         story.append(p(f"{idx}. {ref}", styles))
@@ -603,7 +605,7 @@ def build_pdf() -> Path:
     story: list[Any] = []
     add_cover_and_front_matter(story, styles)
     add_main_content(story, styles, metrics, run_summary)
-    DOCS_DIR.mkdir(exist_ok=True)
+    OUTPUT_PDF.parent.mkdir(parents=True, exist_ok=True)
     doc = ProjectDocTemplate(str(OUTPUT_PDF))
     doc.build(story)
     return OUTPUT_PDF

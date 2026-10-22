@@ -6,7 +6,7 @@
       "wait": false
     },
     "beforeBuildCommand": {
-      "script": "flutter build web --release --dart-define=NCFD_BACKEND_URL=http://127.0.0.1:5055",
+      "script": "flutter build web --release --no-web-resources-cdn --dart-define=NCFD_BACKEND_URL=http://127.0.0.1:5055",
       "cwd": "../flutter_app",
       "wait": true
     }

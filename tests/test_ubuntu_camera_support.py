@@ -179,8 +179,10 @@ def test_setup_ubuntu_lists_qt_xcb_and_v4l2_packages() -> None:
         assert package in setup
 
 
-def test_readme_lists_qt_and_camera_diagnostics() -> None:
+def test_readme_links_to_qt_and_camera_diagnostics() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/guides/operations.md" in readme
+    operations = (ROOT / "docs/guides/operations.md").read_text(encoding="utf-8")
 
     for text in (
         "QT_DEBUG_PLUGINS=1",
@@ -189,4 +191,4 @@ def test_readme_lists_qt_and_camera_diagnostics() -> None:
         "v4l2-ctl --list-devices",
         "--list-cameras --backend v4l2",
     ):
-        assert text in readme
+        assert text in operations

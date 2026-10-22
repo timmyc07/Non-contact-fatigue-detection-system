@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from scripts.prepare_local_assets import prepare_icons
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,6 +22,14 @@ def test_flutter_bootstrap_page_has_opaque_fallback_background() -> None:
     html = (ROOT / "flutter_app" / "web" / "index.html").read_text(encoding="utf-8")
 
     assert "background:transparent" not in html.replace(" ", "").lower()
+
+
+def test_desktop_release_builds_use_bundled_web_resources() -> None:
+    for config_name in ("tauri.conf.json", "tauri.macos.conf.json"):
+        config = json.loads((ROOT / "src-tauri" / config_name).read_text(encoding="utf-8"))
+        command = config["build"]["beforeBuildCommand"]["script"]
+
+        assert "--no-web-resources-cdn" in command.split()
 
 
 def test_tauri_csp_allows_flutter_canvaskit_and_fonts() -> None:
@@ -65,15 +75,16 @@ def test_macos_bundle_enables_overlay_and_native_artifacts() -> None:
     assert "127.0.0.1:5055" in config["build"]["beforeBuildCommand"]["script"]
 
 
-def test_desktop_icons_cover_windows_and_macos() -> None:
+def test_desktop_icons_cover_windows_and_macos(tmp_path: Path) -> None:
     config = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
     icons = set(config["bundle"]["icon"])
 
     assert "icons/icon.png" in icons
     assert "icons/icon.icns" in icons
     assert "icons/icon-windows.ico" in icons
+    prepare_icons(tmp_path)
     for relative_path in icons:
-        assert (ROOT / "src-tauri" / relative_path).is_file()
+        assert (tmp_path / "src-tauri" / relative_path).is_file()
 
 
 def test_macos_privacy_manifest_declares_camera_and_bluetooth() -> None:
@@ -127,7 +138,7 @@ def test_macos_build_and_smoke_scripts_use_native_bundle_contract() -> None:
     assert 'default=5055' in smoke_script
 
 
-def test_linux_bundle_declares_native_appimage_and_deb_artifacts() -> None:
+def test_linux_bundle_declares_native_appimage_and_deb_artifacts(tmp_path: Path) -> None:
     config = json.loads(
         (ROOT / "src-tauri" / "tauri.linux.conf.json").read_text(encoding="utf-8")
     )
@@ -135,8 +146,9 @@ def test_linux_bundle_declares_native_appimage_and_deb_artifacts() -> None:
     assert config["bundle"]["targets"] == ["appimage", "deb"]
     assert config["bundle"]["linux"]["appimage"]["bundleMediaFramework"] is False
     assert "libglib2.0-0" in config["bundle"]["linux"]["deb"]["depends"]
+    prepare_icons(tmp_path)
     for icon in config["bundle"]["icon"]:
-        assert (ROOT / "src-tauri" / icon).is_file()
+        assert (tmp_path / "src-tauri" / icon).is_file()
 
 
 def test_linux_build_and_start_scripts_use_linux_runtime_contract() -> None:

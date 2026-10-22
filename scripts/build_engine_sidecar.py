@@ -29,8 +29,7 @@ def add_data_argument(source: Path, destination: str) -> str:
 def build_command(python_executable: str | Path = sys.executable) -> list[str]:
     model_path = ROOT / "models" / "face_landmarker.task"
     tuning_path = ROOT / "config" / "mediapipe_tuning.json"
-    web_ui_path = ROOT / "gui" / "web_ui"
-    for required_path in (model_path, tuning_path, web_ui_path):
+    for required_path in (model_path, tuning_path):
         if not required_path.exists():
             raise FileNotFoundError(f"Required engine resource is missing: {required_path}")
 
@@ -67,8 +66,6 @@ def build_command(python_executable: str | Path = sys.executable) -> list[str]:
         add_data_argument(model_path, "models"),
         "--add-data",
         add_data_argument(tuning_path, "config"),
-        "--add-data",
-        add_data_argument(web_ui_path, "gui/web_ui"),
         str(ROOT / "main.py"),
     ]
 
