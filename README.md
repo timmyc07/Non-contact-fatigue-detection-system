@@ -278,7 +278,7 @@ For engine-only diagnostics, run `.venv/bin/python main.py --engine`; this does 
 
 ## Documentation
 
-Supporting guides and historical reports are currently written primarily in Traditional Chinese.
+The product overview, documentation index, and operations guide are available in English. Technical reports and historical records remain primarily in Traditional Chinese.
 
 | Resource | Start here for |
 | :--- | :--- |

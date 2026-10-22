@@ -1,39 +1,92 @@
-# 文件索引
+<div align="center">
 
-首次使用請從[專案首頁](../README.md)開始；進階命令、相機疑難、回放與封裝驗收集中於[操作與驗證手冊](guides/operations.md)。
+# Documentation
 
-## 依用途閱讀
+### Operate the workspace. Understand the methods. Evaluate the evidence.
 
-| 想了解的內容 | 文件 |
-| --- | --- |
-| 系統輸入輸出、核心方法與限制 | [系統總技術報告](technical/system_overview_technical_report.md) |
-| 資料流、模組與演算法的關係 | [架構與演算法地圖](technical/system_architecture_algorithm_map.md) |
-| ROI、脈波分離、濾波、BPM 與 HRV | [rPPG 技術報告 v2](technical/rppg_technical_report_v2.md)；實際 `pos_pulse` 公式與名稱限制見[首頁](../README.md)，[早期版本](technical/rppg_technical_report.md)供沿革參考 |
-| EAR、PERCLOS、視線、表情與融合 | [MediaPipe 行為疲勞報告](technical/mediapipe_fatigue_technical_report.md) |
-| 校準模型、品質 gate 與參考量測 | [心率校準技術分析](technical/rppg_heart_rate_calibrator_technical_analysis.md)；內含早期手錶流程，現行 BLE 操作依手冊 |
-| BLE 通訊與真實裝置服務 | [心跳帶 GATT 對照](technical/heart_rate_belt_bluetooth_gatt_profile.md)、[Bluetooth／BLE 通訊指南](technical/bluetooth_ble_protocol_global_guide.md) |
-| 離線回放、報表與驗證限制 | [UTA-RLDD 回放驗證報告](technical/utarldd_replay_validation_report.md) |
-| 無人機操作情境與後續方向 | [應用定位](technical/drone_operator_fatigue_application_report.md)、[系統優化建議](technical/drone_operator_system_optimization_report.md) |
-| 海報與介面研究素材 | [海報製作稿](technical/rppg_fatigue_monitoring_poster_design.md)、[Pavise UI 分析](technical/pavise-ui-analysis.md) |
-| 本次實際產物分析與落地修正 | [2026-10-22 REA 分析報告](reviews/2026-10-22-rea-report.md) |
+**Non-contact Fatigue Detection System**
 
-## 目錄約定
+[Product overview](../README.md) &nbsp; | &nbsp; [Operations guide](guides/operations.md) &nbsp; | &nbsp; [Find a topic](#find-a-topic) &nbsp; | &nbsp; [Read the evidence](#read-the-evidence)
 
-| 目錄 | 保存內容 | 使用方式 |
-| --- | --- | --- |
-| [`guides/`](guides/) | 目前操作、安裝後診斷與驗證命令 | 執行前核對平台、硬體與必要資產 |
-| [`technical/`](technical/) | 系統與子系統技術報告 | 部分文件保存設計沿革，現行操作以首頁及手冊為準 |
-| [`reviews/`](reviews/) | REA 發現、證據範圍與改善紀錄 | 區分實際驗證、推論及未驗證項目 |
-| [`benchmarks/`](benchmarks/) | 已保存的測試與效能 JSON | 比較前核對日期、平台、測試模式與量測限制 |
-| [`history/`](history/) | 有日期的校準、實驗與開發紀錄 | 用於追溯當時版本，不視為目前通用準確度承諾 |
-| [`plans/`](plans/) | 遷移、平台分層與後續工作規劃 | 計畫存在不代表功能已完成 |
+</div>
 
-`docs/images/` 保存本機圖片與圖稿，`docs/exports/` 保存本機 PDF／簡報／文件輸出；兩者不納入 Git。`recordings/` 的影片、SQLite、CSV／HTML 回放產物，以及個人基線／校準亦保留本機。不要以報告中的本機素材路徑推定 fresh checkout 已包含該素材。
+---
 
-選用的 [Canva 流程圖 App](../tools/canva-flowchart/README.md) 位於 `tools/canva-flowchart/`，使用時選取本機 PNG／JPEG、確認預覽，再上傳並插入 Canva 設計；圖片不需要加入 Git。
+## Choose your starting point
 
-## 驗證紀錄怎麼讀
+| Explore the product | Run the system | Investigate the design |
+| :--- | :--- | :--- |
+| [Product README](../README.md) | [Operations & Validation Guide](guides/operations.md) | [System overview](technical/system_overview_technical_report.md) |
+| Capabilities, first installation, platform readiness, and core technical principles | Launch, camera troubleshooting, tuning, BLE calibration, replay, packaging, and acceptance checks | Inputs, outputs, architecture, algorithms, and known limitations |
 
-歷史實驗見 [2026-06-07 UTA-RLDD 分析](history/2026-06-07-utarldd-analysis.md)與[2026-07-03 疲勞準確度校準](history/2026-07-03-fatigue-accuracy-calibration.md)。數字僅適用於文中資料、設定與版本；人臉偵測率、影片完成率、AUC、golden 零漂移與實體相機 smoke 各自回答不同問題。
+The product README, this index, and the operations guide are in **English**. Most technical reports, historical records, plans, and supplementary tool guides remain in **Traditional Chinese**. A report's presence does not mean its experiments or proposed features describe the current release.
 
-調整數值路徑時需重新驗證對應資料；沒有資料集或硬體時，應明示未執行項目。正式 PDF 可由手冊列出的報告腳本重建，PDF 不作為版本控制中的主要來源。
+## Find a topic
+
+### Architecture and analysis
+
+| Topic | Reference | Reading context |
+| :--- | :--- | :--- |
+| System inputs, outputs, methods, and limits | [System technical overview](technical/system_overview_technical_report.md) | Start here for the complete monitoring pipeline |
+| Data flow, modules, and algorithm relationships | [Architecture and algorithm map](technical/system_architecture_algorithm_map.md) | Connect implementation responsibilities to their inputs and outputs |
+| ROIs, pulse separation, filtering, BPM, and HRV | [rPPG technical report v2](technical/rppg_technical_report_v2.md) | The [product README](../README.md#technical-design) records the actual `pos_pulse` formula and its naming limits; the [earlier report](technical/rppg_technical_report.md) preserves design history |
+| EAR, PERCLOS, gaze, expressions, and fatigue fusion | [MediaPipe behavioral-fatigue report](technical/mediapipe_fatigue_technical_report.md) | Read alongside current code and validation evidence |
+
+### Calibration, communication, and replay
+
+| Topic | Reference | Reading context |
+| :--- | :--- | :--- |
+| Calibration models, quality gates, and reference measurements | [Heart-rate calibration analysis](technical/rppg_heart_rate_calibrator_technical_analysis.md) | Includes a retired watch workflow; use the operations guide for current BLE procedures |
+| Measured belt services and characteristics | [Heart-rate belt GATT profile](technical/heart_rate_belt_bluetooth_gatt_profile.md) | Device-level reference for the measured belt |
+| Bluetooth/BLE protocols and integration | [Bluetooth and BLE guide](technical/bluetooth_ble_protocol_global_guide.md) | Broader communication background |
+| Offline replay, output reports, and validation limits | [UTA-RLDD replay-validation report](technical/utarldd_replay_validation_report.md) | Distinguish video-level labels from frame-level ground truth |
+
+### Application, design, and review
+
+| Topic | Reference | Reading context |
+| :--- | :--- | :--- |
+| UAV operator use cases | [Application positioning](technical/drone_operator_fatigue_application_report.md) | Intended monitoring context and application boundaries |
+| Improvement proposals | [System optimization report](technical/drone_operator_system_optimization_report.md) | Recommendations require implementation and validation before being treated as delivered features |
+| Poster and interface research | [Poster design source](technical/rppg_fatigue_monitoring_poster_design.md), [Pavise UI analysis](technical/pavise-ui-analysis.md) | Supporting design material; image/document exports remain local |
+| Artifact analysis and implemented corrections | [2026-10-22 REA report](reviews/2026-10-22-rea-report.md) | Evidence identities, coverage, observations, inferences, fixes, and unverified areas |
+
+## Documentation map
+
+| Directory | Contents | How to use it |
+| :--- | :--- | :--- |
+| [`guides/`](guides/) | Current operations, diagnostics, and validation commands | Check the target platform, hardware, and local assets before execution |
+| [`technical/`](technical/) | System and subsystem technical reports | Some sections preserve earlier designs; use the README and operations guide for current procedures |
+| [`reviews/`](reviews/) | REA findings, evidence boundaries, and improvement records | Separate observations, inferences, and unverified claims |
+| [`benchmarks/`](benchmarks/) | Saved test/performance JSON | Compare dates, platforms, modes, environments, and measurement limits |
+| [`history/`](history/) | Dated calibration, experiment, and development records | Trace a specific version; do not generalize its results to every current configuration |
+| [`plans/`](plans/) | Migration, platform separation, and future-work proposals | A plan is not proof of completed functionality |
+
+## Read the evidence
+
+Different checks establish different things:
+
+| Evidence | What it can establish | What it does not establish by itself |
+| :--- | :--- | :--- |
+| Face-detection rate | Whether the face tracker obtained usable detections in the evaluated input | Fatigue-classification accuracy |
+| Video completion rate | Whether a batch processed its inputs | Correct physiological estimates or decisions |
+| Golden-output comparison | Whether selected outputs drift from a defined numerical baseline | Correctness against real-world labels |
+| AUC and label-association measures | Relationships between scores and the evaluated labels/data split | Generalization to new users or UAV operating conditions |
+| Camera hardware smoke | Pipeline lifecycle and frame origin on the tested setup | BLE acceptance, a complete UI/installer check, or fatigue accuracy |
+| Static artifact analysis | Recorded properties and bounded code/resource evidence | Execution paths, runtime behavior, or complete coverage beyond the stated scope |
+
+Historical measurements include the [2026-06-07 UTA-RLDD analysis](history/2026-06-07-utarldd-analysis.md) and [2026-07-03 fatigue-calibration study](history/2026-07-03-fatigue-accuracy-calibration.md). Their numbers apply to the documented data, configuration, and version.
+
+After numerical changes, rerun the relevant evaluation. If the dataset or hardware is unavailable, state which checks were not run. The [operations guide](guides/operations.md#replay-and-validation) explains golden checks, label association, and replay interpretation.
+
+## Local assets and generated reports
+
+| Location | Local contents | Version-control boundary |
+| :--- | :--- | :--- |
+| `docs/images/` | Images, source diagrams, and artwork | Excluded from Git |
+| `docs/exports/` | Generated PDFs, presentations, and document exports | Excluded from Git; Markdown remains the maintained source |
+| `recordings/` | Videos, SQLite metrics, replay CSV/HTML, and manifests | Excluded from Git |
+| Personal baseline and calibration paths | User-, device-, and environment-specific settings/results | Kept local; see the operations guide |
+
+A report referencing a local asset does not mean a fresh checkout contains it. The report-generation commands in the [operations guide](guides/operations.md#supporting-tools-and-reports) rebuild PDFs from the required Markdown, experiment data, artwork, and available fonts; generating a document does not create new experimental evidence.
+
+The optional [Canva flowchart app](../tools/canva-flowchart/README.md) lives in `tools/canva-flowchart/`. Select a local PNG/JPEG, inspect its preview, and then insert it into the Canva design. Preview is local; insertion uploads the image to Canva. Images do not need to be added to Git.
