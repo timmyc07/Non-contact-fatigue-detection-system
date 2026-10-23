@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import queue
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -11,7 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, cast
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, Qt, QThread, QTimer, Slot
+from PySide6.QtCore import (
+    QByteArray, QBuffer, QCameraPermission, QIODevice, QObject, Qt, QThread, QTimer, Slot,
+)
 from PySide6.QtGui import (
     QImage,
     QImageWriter,
@@ -46,6 +49,7 @@ from gui.desktop_settings_contract import (
 )
 from gui.engine_controller import (
     AnalysisLifecyclePorts,
+    AnalysisPlan,
     CameraDevice,
     EngineController,
 )
@@ -160,6 +164,8 @@ class EngineApplication(QObject):
         self._last_fps: float = 0.0
         self._fps_measurement_samples = 0
         self._camera_fps_warning_sent = False
+        self._camera_permission_pending = False
+        self._camera_permission_denied_notified = False
 
         self._global_hotkey_runtime = GlobalHotkeyRuntime(self._on_global_hotkey)
         self._global_hotkey_bindings: dict[int, _GlobalHotkeyBinding] = {}
@@ -183,6 +189,10 @@ class EngineApplication(QObject):
         self._runtime_cleanup_retry_scheduled = False
         self._runtime_shutdown_waiting_for_adapters = False
         self._adapter_cleanup_in_progress = False
+        self._analysis_advance_in_progress = False
+        self._analysis_change_dirty = False
+        self._auto_capture_starting = False
+        self._auto_capture_restore_stress = False
         self._desktop_control_broker = DesktopCommandBroker(timeout_seconds=10.0)
         self._web_emit_interval = 0.25
         self._web_frame_interval = 1.0 / WEB_PREVIEW_TARGET_FPS
@@ -368,17 +378,24 @@ class EngineApplication(QObject):
         *,
         behavior_enabled: bool,
         rppg_enabled: bool,
+        mark_dirty: bool = False,
     ) -> None:
+        if self._engine_controller.analysis_transitioning:
+            raise BusyError("Analysis transition is still pending")
         previous = self._engine_controller.analysis_snapshot()
         if (
             previous.fatigue_enabled == behavior_enabled
             and previous.rppg_enabled == rppg_enabled
         ):
+            if mark_dirty:
+                self._settings_dirty = True
             return
         self._latest_rppg_metrics = None
         self._latest_fatigue_metrics = None
         self._latest_fused_score = None
         running = self._engine_controller.pipeline_snapshot().running
+        self._analysis_change_dirty = mark_dirty
+        self._analysis_advance_in_progress = True
         try:
             self._engine_controller.configure_analysis(
                 rppg_enabled=rppg_enabled,
@@ -386,9 +403,24 @@ class EngineApplication(QObject):
                 ports=self._analysis_lifecycle_ports() if running else None,
             )
         except Exception:
+            self._analysis_change_dirty = False
             if not self._engine_controller.pipeline_snapshot().running:
                 self._fail_closed_pipeline_adapters()
             raise
+        finally:
+            self._analysis_advance_in_progress = False
+        if not self._engine_controller.analysis_transitioning:
+            self._complete_analysis_change(previous)
+        self._restore_auto_capture_analysis()
+        self._emit_web_metrics(force=True)
+
+    def _complete_analysis_change(self, previous: AnalysisPlan) -> None:
+        current = self._engine_controller.analysis_snapshot()
+        behavior_enabled = current.fatigue_enabled
+        rppg_enabled = current.rppg_enabled
+        if self._analysis_change_dirty and previous != current:
+            self._settings_dirty = True
+        self._analysis_change_dirty = False
         if previous.fatigue_enabled != behavior_enabled:
             self._append_log(
                 f"[UI] 行為警覺 → {'開啟' if behavior_enabled else '關閉'}"
@@ -397,9 +429,46 @@ class EngineApplication(QObject):
             self._append_log(
                 f"[UI] 壓力／HRV → {'開啟' if rppg_enabled else '關閉'}"
             )
-        if running:
+        self._update_frame_routing()
+        if self._engine_controller.pipeline_snapshot().running:
             self._ensure_belt_calibration()
-            self._emit_web_metrics(force=True)
+            if self._belt_truth_capture is not None:
+                self._dispatch_belt_truth_capture(self._belt_truth_capture)
+            if self._rppg_param_coordinator is not None:
+                self._dispatch_candidate_roi_weights(self._rppg_param_coordinator.candidate_roi_weights)
+
+    def _advance_analysis_transition(self) -> None:
+        if self._analysis_advance_in_progress or not self._engine_controller.analysis_transitioning:
+            return
+        previous = self._engine_controller.analysis_snapshot()
+        self._analysis_advance_in_progress = True
+        try:
+            self._engine_controller.advance_analysis_transition(self._analysis_lifecycle_ports())
+            if not self._engine_controller.analysis_transitioning:
+                self._complete_analysis_change(previous)
+                if self._auto_capture_starting:
+                    self._auto_capture_starting = False
+                    self._continue_auto_capture_start()
+        except Exception as exc:
+            self._analysis_change_dirty = False
+            self._auto_capture_starting = False
+            self._rollback_auto_capture_toggles()
+            if not self._engine_controller.pipeline_snapshot().running:
+                self._fail_closed_pipeline_adapters()
+            else:
+                self._update_frame_routing()
+            self._notify_user("分析切換失敗", str(exc))
+        finally:
+            self._analysis_advance_in_progress = False
+        self._restore_auto_capture_analysis()
+        self._emit_web_metrics(force=True)
+
+    def _restore_auto_capture_analysis(self) -> None:
+        if self._auto_capture_restore_stress and not self._engine_controller.analysis_transitioning:
+            self._auto_capture_restore_stress = False
+            analysis = self._engine_controller.analysis_snapshot()
+            if analysis.rppg_enabled:
+                self._configure_analysis(behavior_enabled=analysis.fatigue_enabled, rppg_enabled=False)
 
     def _qt_key_to_vk(self, qt_key: int) -> int | None:
         if Qt.Key.Key_A <= qt_key <= Qt.Key.Key_Z:
@@ -715,28 +784,97 @@ class EngineApplication(QObject):
         self._settings_dirty = False
         return path
 
+    def _camera_scan_pending(self) -> bool:
+        return self._camera_permission_pending or self._engine_runtime.worker("camera_scan") is not None
+
     def _start_camera_scan(self) -> None:
         if self._runtime_cleanup_in_progress or self._runtime_cleanup_complete:
             return
-        if self._engine_runtime.worker("camera_scan") is not None:
+        if self._camera_scan_pending():
             return
         pipeline = self._engine_controller.pipeline_snapshot()
         if pipeline.running:
             raise BusyError("Stop the pipeline before refreshing cameras")
         if pipeline.cleanup_pending:
             raise BusyError("Live pipeline adapter cleanup is still pending")
-        worker = CameraScanWorker()
+        if sys.platform == "darwin":
+            app = QApplication.instance()
+            assert app is not None
+            try:
+                status = app.checkPermission(QCameraPermission())
+            except Exception as exc:
+                self._camera_permission_failed(str(exc))
+                return
+            if status == Qt.PermissionStatus.Undetermined:
+                self._camera_permission_pending = True
+                if self._start_camera_scan_worker(permission_only=True):
+                    self._engine_runtime.start_periodic_timer(
+                        "camera_permission", 100, self._poll_camera_permission
+                    )
+                return
+            if status == Qt.PermissionStatus.Denied:
+                self._notify_camera_permission_denied()
+                return
+        self._start_camera_scan_worker()
 
+    def _notify_camera_permission_denied(self) -> None:
+        if not self._camera_permission_denied_notified:
+            self._camera_permission_denied_notified = True
+            self._publish_desktop_notice("相機權限未開啟，請至系統設定的隱私權與安全性允許使用相機。")
+
+    def _camera_permission_failed(self, message: str) -> None:
+        self._camera_permission_pending = False
+        self._engine_runtime.cancel_timer("camera_permission")
+        logger.warning("Camera permission request failed: %s", message)
+        self._publish_desktop_notice(f"相機授權請求失敗，請重新整理相機後再試：{message}")
+
+    @Slot()
+    def _poll_camera_permission(self) -> None:
+        if not self._camera_permission_pending:
+            return
+        if self._runtime_cleanup_in_progress or self._runtime_cleanup_complete:
+            return
+        app = QApplication.instance()
+        assert app is not None
+        try:
+            status = app.checkPermission(QCameraPermission())
+        except Exception as exc:
+            self._camera_permission_failed(str(exc))
+            self._emit_web_metrics(force=True)
+            return
+        if status == Qt.PermissionStatus.Undetermined:
+            return
+        if (
+            status == Qt.PermissionStatus.Granted
+            and self._engine_runtime.worker("camera_scan") is not None
+        ):
+            return
+        self._camera_permission_pending = False
+        self._engine_runtime.cancel_timer("camera_permission")
+        if status == Qt.PermissionStatus.Granted:
+            self._camera_permission_denied_notified = False
+            self._start_camera_scan_worker()
+        else:
+            self._notify_camera_permission_denied()
+        self._emit_web_metrics(force=True)
+
+    def _start_camera_scan_worker(self, *, permission_only: bool = False) -> bool:
         def connect(current: object) -> None:
             scan = cast(CameraScanWorker, current)
             scan.succeeded.connect(self._on_camera_scan_succeeded, Qt.ConnectionType.QueuedConnection)
             scan.failed.connect(self._on_camera_scan_failed, Qt.ConnectionType.QueuedConnection)
 
         try:
+            worker = CameraScanWorker(permission_only=permission_only)
             self._engine_runtime.start_adapter("camera_scan", worker, connect=connect)
+            return True
         except Exception as exc:
-            logger.exception("攝影機列舉無法啟動")
-            self._publish_desktop_notice(f"攝影機列舉失敗：{exc}")
+            if permission_only:
+                self._camera_permission_failed(str(exc))
+            else:
+                logger.exception("攝影機列舉無法啟動")
+                self._publish_desktop_notice(f"攝影機列舉失敗：{exc}")
+            return False
 
     def _camera_scan_result_is_current(self, worker: object) -> bool:
         return (
@@ -748,14 +886,21 @@ class EngineApplication(QObject):
 
     @Slot(object, object)
     def _on_camera_scan_succeeded(self, worker: object, dev_list: object) -> None:
-        if self._camera_scan_result_is_current(worker):
+        if (
+            self._camera_scan_result_is_current(worker)
+            and not cast(CameraScanWorker, worker).permission_only
+        ):
             self._finish_camera_scan_ui(cast(list[tuple[int, str]], dev_list))
 
     @Slot(object, str)
     def _on_camera_scan_failed(self, worker: object, message: str) -> None:
         if self._camera_scan_result_is_current(worker):
-            logger.warning("攝影機列舉失敗：%s", message)
-            self._publish_desktop_notice(f"攝影機列舉失敗：{message}")
+            if cast(CameraScanWorker, worker).permission_only:
+                if self._camera_permission_pending:
+                    self._camera_permission_failed(message)
+            else:
+                logger.warning("攝影機列舉失敗：%s", message)
+                self._publish_desktop_notice(f"攝影機列舉失敗：{message}")
 
     def _finish_camera_scan_ui(self, dev_list: list[tuple[int, str]]) -> None:
         self._engine_controller.replace_cameras(
@@ -1230,6 +1375,9 @@ class EngineApplication(QObject):
             "desktop_api_version": DESKTOP_CONTROL_API_VERSION,
             "engine_mode": self._engine_mode,
             "pipeline_running": pipeline.running,
+            "analysis_transitioning": self._engine_controller.analysis_transitioning,
+            "pipeline_cleanup_pending": pipeline.cleanup_pending,
+            "auto_capture_starting": self._auto_capture_starting,
             "recording": pipeline.recording,
             "recording_finalizing": not pipeline.recording and (
                 self._video_thread is not None
@@ -1240,7 +1388,8 @@ class EngineApplication(QObject):
             "auto_capture_active": self._engine_runtime.timer_active("auto_capture"),
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
             "selected_camera_index": camera.selected_index,
-            "camera_scanning": self._engine_runtime.worker("camera_scan") is not None,
+            "camera_scanning": self._camera_scan_pending(),
+            "camera_permission_pending": self._camera_permission_pending,
             "cameras": cameras,
             "behavior_enabled": analysis.fatigue_enabled,
             "rppg_enabled": analysis.rppg_enabled,
@@ -1293,18 +1442,31 @@ class EngineApplication(QObject):
         if command == "state.get":
             return self._desktop_control_state()
 
+        pipeline = self._engine_controller.pipeline_snapshot()
+        if self._engine_controller.analysis_transitioning or self._auto_capture_starting:
+            if (
+                command in {"analysis.configure", "settings.save", "settings.reset", "baseline.start"}
+                or command in {"recording.set", "auto_capture.set"} and args.get("enabled") is True
+                or command == "preferences.configure" and args.get("belt_calibration") is True
+            ):
+                raise BusyError("Analysis transition is still pending")
+        if pipeline.cleanup_pending and (
+            command in {"camera.select", "camera.configure", "camera.refresh"}
+            or command in {"pipeline.set", "replay.set", "recording.set", "auto_capture.set"}
+            and args.get("enabled") is True
+        ):
+            raise BusyError("Live pipeline adapter cleanup is still pending")
+
         if command == "pipeline.set":
             enabled = self._require_bool(args, "enabled")
-            if enabled and self._engine_runtime.worker("camera_scan") is not None:
+            if enabled and self._camera_scan_pending():
                 raise BusyError("Wait for camera discovery before starting the pipeline")
             if enabled and self.selected_camera_index is None:
                 raise ValueError("Select a camera before starting the pipeline")
             pipeline = self._engine_controller.pipeline_snapshot()
             if pipeline.cleanup_pending:
                 self._fail_closed_pipeline_adapters()
-                pipeline = self._engine_controller.pipeline_snapshot()
-                if pipeline.cleanup_pending:
-                    raise BusyError("Live pipeline adapter cleanup is still pending")
+                return self._desktop_control_state()
             if enabled and self._engine_controller.replay_snapshot().running:
                 raise BusyError("Stop replay before starting the live pipeline")
             if enabled != pipeline.running:
@@ -1369,8 +1531,8 @@ class EngineApplication(QObject):
             self._configure_analysis(
                 behavior_enabled=behavior_enabled,
                 rppg_enabled=rppg_enabled,
+                mark_dirty=True,
             )
-            self._settings_dirty = True
 
         elif command == "preferences.configure":
             capture_changes: dict[str, object] = {}
@@ -1393,7 +1555,7 @@ class EngineApplication(QObject):
         elif command == "auto_capture.set":
             enabled = self._require_bool(args, "enabled")
             if enabled:
-                if self._engine_runtime.worker("camera_scan") is not None:
+                if self._camera_scan_pending():
                     raise BusyError("Wait for camera discovery before starting capture")
                 capture = self._capture_preferences.snapshot()
                 duration = args.get("duration_seconds", capture.auto_capture_seconds)
@@ -1410,7 +1572,7 @@ class EngineApplication(QObject):
                         auto_capture_include_belt=include_belt,
                     )
                     self._on_auto_capture_clicked()
-            elif self._engine_runtime.timer_active("auto_capture"):
+            elif self._engine_runtime.timer_active("auto_capture") or self._auto_capture_starting:
                 self._on_auto_capture_clicked()
 
         elif command == "auto_capture.configure":
@@ -1670,6 +1832,11 @@ class EngineApplication(QObject):
         if self._runtime_cleanup_in_progress:
             return False
         self._runtime_cleanup_in_progress = True
+        self._camera_permission_pending = False
+        self._engine_controller.mark_pipeline_cleanup_pending()
+        self._analysis_change_dirty = False
+        self._auto_capture_starting = False
+        self._auto_capture_restore_stress = False
         had_error = False
 
         def cleanup_step(label: str, action: Callable[[], Any]) -> Any | None:
@@ -1685,6 +1852,10 @@ class EngineApplication(QObject):
             cleanup_step(
                 "desktop command timer",
                 lambda: self._engine_runtime.cancel_timer("desktop_command"),
+            )
+            cleanup_step(
+                "camera permission timer",
+                lambda: self._engine_runtime.cancel_timer("camera_permission"),
             )
             cleanup_step("global hotkeys", self._unregister_global_hotkeys)
             cleanup_step("auto-capture timer", self._cancel_pending_auto_capture_timer)
@@ -2259,10 +2430,10 @@ class EngineApplication(QObject):
             "camera",
             worker,
             connect=lambda current: (
-                current.camera_info.connect(self._on_camera_info),
+                current.camera_info.connect(self._route_camera_info),
                 current.diagnostic_ready.connect(self._append_log),
-                current.fps_ready.connect(self._on_fps),
-                current.failed.connect(self._on_camera_failed),
+                current.fps_ready.connect(self._route_camera_fps),
+                current.failed.connect(self._route_camera_failure),
             ),
         )
         # Initial frame routing (camera → overlay); may be overridden when
@@ -2275,6 +2446,9 @@ class EngineApplication(QObject):
 
     def _stop_camera_worker(self) -> bool:
         self._engine_controller.mark_pipeline_cleanup_pending()
+        self._analysis_change_dirty = False
+        self._auto_capture_starting = False
+        self._auto_capture_restore_stress = False
         self._fail_closed_pipeline_adapters()
         return self._runtime_adapter_threads_stopped()
 
@@ -2282,6 +2456,8 @@ class EngineApplication(QObject):
         """Best-effort cleanup after controller can no longer restore live topology."""
         if self._adapter_cleanup_in_progress:
             return
+        self._engine_controller.mark_pipeline_cleanup_pending()
+        self._analysis_change_dirty = False
         self._adapter_cleanup_in_progress = True
         try:
             self._fail_closed_pipeline_adapters_impl()
@@ -2317,7 +2493,7 @@ class EngineApplication(QObject):
             )
         if self._cam_thread is not None:
             camera_steps.append(
-                ("camera thread stop", lambda: self._engine_runtime.stop_adapter("camera", 3000))
+                ("camera thread stop", lambda: self._engine_runtime.stop_adapter("camera", 0))
             )
         camera_thread_stopped = self._cam_thread is None
         for label, cleanup in camera_steps:
@@ -2332,14 +2508,21 @@ class EngineApplication(QObject):
             all_stopped = False
         self._pipeline_running = False
         self._recording = False
+        self._last_fps = 0.0
+        self._last_camera_info = {"codec": "", "width": 0, "height": 0}
+        self._latest_rppg_metrics = None
+        self._latest_fatigue_metrics = None
+        self._latest_fused_score = None
         if all_stopped:
             self._engine_controller.finish_pipeline_cleanup()
         else:
             self._engine_controller.mark_pipeline_cleanup_pending()
 
+    @Slot(str, object)
     def _on_adapter_released(self, kind: str, _thread: object) -> None:
         """Apply adapter queue and shutdown side effects after runtime release."""
         if kind == "camera_scan":
+            self._poll_camera_permission()
             self._emit_web_metrics(force=True)
         elif kind == "camera":
             pass
@@ -2358,6 +2541,8 @@ class EngineApplication(QObject):
             return
         else:
             return
+        if kind in {"combined", "rppg", "fatigue"}:
+            self._advance_analysis_transition()
         if (
             self._engine_controller.pipeline_snapshot().cleanup_pending
             and not self._adapter_cleanup_in_progress
@@ -2373,7 +2558,9 @@ class EngineApplication(QObject):
 
         Priority: combined > rPPG-only > fatigue-only > raw camera.
         """
-        if self._combined_worker is not None:
+        if self._engine_controller.analysis_transitioning:
+            self._set_frame_source("camera" if self._cam_worker is not None else None)
+        elif self._combined_worker is not None:
             self._set_frame_source("combined")
         elif self._rppg_worker is not None:
             self._set_frame_source("rppg")
@@ -2393,7 +2580,9 @@ class EngineApplication(QObject):
             self._set_record_source(None)
             return
 
-        if self._combined_worker is not None:
+        if self._engine_controller.analysis_transitioning:
+            self._set_record_source("camera" if self._cam_worker is not None else None)
+        elif self._combined_worker is not None:
             self._set_record_source("combined")
         elif self._rppg_worker is not None:
             self._set_record_source("rppg")
@@ -2407,15 +2596,15 @@ class EngineApplication(QObject):
     def _set_frame_source(self, source: str | None) -> None:
         if self._frame_source == source:
             return
-        self._disconnect_source(self._frame_source, self._on_frame)
-        self._connect_source(source, self._on_frame)
+        self._disconnect_source(self._frame_source, self._route_frame)
+        self._connect_source(source, self._route_frame)
         self._frame_source = source
 
     def _set_record_source(self, source: str | None) -> None:
         if self._record_source == source:
             return
-        self._disconnect_source(self._record_source, self._on_record_frame)
-        self._connect_source(source, self._on_record_frame)
+        self._disconnect_source(self._record_source, self._route_record_frame)
+        self._connect_source(source, self._route_record_frame)
         self._record_source = source
 
     def _connect_source(self, source: str | None, handler) -> None:
@@ -2440,6 +2629,78 @@ class EngineApplication(QObject):
                 self._cam_worker.frame_ready.disconnect(handler)
         except (TypeError, RuntimeError):
             pass
+
+    def _accept_analysis_event(self, sender: object) -> bool:
+        return (
+            self._engine_controller.pipeline_snapshot().running
+            and not self._engine_controller.analysis_transitioning
+            and any(self._engine_runtime.accepts_worker_event(kind, sender)
+                    for kind in ("combined", "rppg", "fatigue"))
+        )
+
+    @Slot(object)
+    def _route_rppg_metrics(self, metrics: object) -> None:
+        if self._accept_analysis_event(self.sender()):
+            self._on_rppg_metrics(metrics)
+
+    @Slot(object)
+    def _route_fatigue_metrics(self, metrics: object) -> None:
+        if self._accept_analysis_event(self.sender()):
+            self._on_fatigue_metrics(metrics)
+
+    @Slot(object)
+    def _route_fused_score(self, score: object) -> None:
+        if self._accept_analysis_event(self.sender()):
+            self._on_fused_score(score)
+
+    @Slot(float, float, float)
+    def _route_candidate_bpm(self, timestamp: float, current: float, candidate: float) -> None:
+        if self._accept_analysis_event(self.sender()):
+            self._on_candidate_bpm_ready(timestamp, current, candidate)
+
+    @Slot(str)
+    def _route_analysis_failure(self, message: str) -> None:
+        sender = self.sender()
+        if self._accept_analysis_event(sender):
+            for kind, callback in (
+                ("combined", self._on_combined_failed),
+                ("rppg", self._on_rppg_failed),
+                ("fatigue", self._on_fatigue_failed),
+            ):
+                if self._engine_runtime.accepts_worker_event(kind, sender):
+                    callback(message)
+                    return
+
+    @Slot(QImage)
+    def _route_frame(self, image: QImage) -> None:
+        if (
+            self._engine_controller.pipeline_snapshot().running
+            and self._frame_source is not None
+            and self._engine_runtime.accepts_worker_event(self._frame_source, self.sender())
+        ):
+            self._on_frame(image)
+
+    @Slot(QImage)
+    def _route_record_frame(self, image: QImage) -> None:
+        if self._record_source is not None and self._engine_runtime.accepts_worker_event(
+            self._record_source, self.sender()
+        ):
+            self._on_record_frame(image)
+
+    @Slot(str, int, int, float)
+    def _route_camera_info(self, codec: str, width: int, height: int, fps: float) -> None:
+        if self._engine_runtime.accepts_worker_event("camera", self.sender()):
+            self._on_camera_info(codec, width, height, fps)
+
+    @Slot(float)
+    def _route_camera_fps(self, fps: float) -> None:
+        if self._engine_runtime.accepts_worker_event("camera", self.sender()):
+            self._on_fps(fps)
+
+    @Slot(str)
+    def _route_camera_failure(self, message: str) -> None:
+        if self._engine_runtime.accepts_worker_event("camera", self.sender()):
+            self._on_camera_failed(message)
 
     # ── Analysis workers (rPPG / fatigue / combined) ──────────────────────────
 
@@ -2665,6 +2926,8 @@ class EngineApplication(QObject):
 
     def _tick_belt_calibration(self) -> None:
         """QTimer 每秒：餵一筆配對觀測給校正器並更新狀態列。"""
+        if self._engine_controller.analysis_transitioning:
+            return
         cal = self._belt_calibrator
         st = self._engine_controller.belt_status()
         if cal is not None and st is not None and st.state == "connected" and st.bpm > 0:
@@ -2773,9 +3036,10 @@ class EngineApplication(QObject):
             restore_raw_routing=self._update_frame_routing,
         )
 
-    def _stop_analysis_workers(self) -> None:
+    def _stop_analysis_workers(self) -> bool:
         """Stop ALL analysis workers in the correct order."""
         failures = []
+        stopped = True
         for label, stop in (
             ("combined", self._stop_combined_worker),
             ("rppg", self._stop_rppg_worker),
@@ -2783,11 +3047,12 @@ class EngineApplication(QObject):
         ):
             try:
                 if stop() is False:
-                    failures.append(f"{label} timeout")
+                    stopped = False
             except Exception as exc:
                 failures.append(f"{label}: {exc}")
         if failures:
             raise RuntimeError("Analysis cleanup failed: " + "; ".join(failures))
+        return stopped
 
     # ── Combined worker ───────────────────────────────────────────────────────
 
@@ -2814,11 +3079,11 @@ class EngineApplication(QObject):
             "combined",
             worker,
             connect=lambda current: (
-                current.rppg_metrics_ready.connect(self._on_rppg_metrics),
-                current.fatigue_metrics_ready.connect(self._on_fatigue_metrics),
-                current.fused_score_ready.connect(self._on_fused_score),
-                current.failed.connect(self._on_combined_failed),
-                current.candidate_bpm_ready.connect(self._on_candidate_bpm_ready),
+                current.rppg_metrics_ready.connect(self._route_rppg_metrics),
+                current.fatigue_metrics_ready.connect(self._route_fatigue_metrics),
+                current.fused_score_ready.connect(self._route_fused_score),
+                current.failed.connect(self._route_analysis_failure),
+                current.candidate_bpm_ready.connect(self._route_candidate_bpm),
             ),
         )
 
@@ -2829,15 +3094,14 @@ class EngineApplication(QObject):
     def _stop_combined_worker(self) -> bool:
         combined_queue = self._combined_queue
         camera_worker = self._cam_worker
-        stopped = self._engine_runtime.stop_adapter("combined", 5000)
-        if not stopped:
-            return False
         self._end_baseline_collection()
         if combined_queue is not None and camera_worker is not None:
             camera_worker.detach_bgr_queue(combined_queue)
-        self._combined_queue = None
+        stopped = self._engine_runtime.stop_adapter("combined", 0)
+        if stopped:
+            self._combined_queue = None
         self._update_frame_routing()
-        return True
+        return stopped
 
     def _on_fused_score(self, score: object) -> None:
         self._latest_fused_score = score
@@ -2846,7 +3110,6 @@ class EngineApplication(QObject):
 
     def _on_combined_failed(self, msg: str) -> None:
         self._append_log(f"✗ 合併引擎錯誤：{msg}")
-        self._stop_combined_worker()
         self._configure_analysis(
             behavior_enabled=False,
             rppg_enabled=False,
@@ -2873,9 +3136,9 @@ class EngineApplication(QObject):
             "rppg",
             worker,
             connect=lambda current: (
-                current.metrics_ready.connect(self._on_rppg_metrics),
-                current.failed.connect(self._on_rppg_failed),
-                current.candidate_bpm_ready.connect(self._on_candidate_bpm_ready),
+                current.metrics_ready.connect(self._route_rppg_metrics),
+                current.failed.connect(self._route_analysis_failure),
+                current.candidate_bpm_ready.connect(self._route_candidate_bpm),
             ),
         )
 
@@ -2885,14 +3148,13 @@ class EngineApplication(QObject):
     def _stop_rppg_worker(self) -> bool:
         bgr_queue = self._bgr_queue
         camera_worker = self._cam_worker
-        stopped = self._engine_runtime.stop_adapter("rppg", 4000)
-        if not stopped:
-            return False
         if bgr_queue is not None and camera_worker is not None:
             camera_worker.detach_bgr_queue(bgr_queue)
-        self._bgr_queue = None
+        stopped = self._engine_runtime.stop_adapter("rppg", 0)
+        if stopped:
+            self._bgr_queue = None
         self._update_frame_routing()
-        return True
+        return stopped
 
     def _on_stress_toggled(self, checked: bool) -> None:
         analysis = self._engine_controller.analysis_snapshot()
@@ -2926,7 +3188,6 @@ class EngineApplication(QObject):
 
     def _on_rppg_failed(self, msg: str) -> None:
         self._append_log(f"✗ rPPG 錯誤：{msg}")
-        self._stop_rppg_worker()
         analysis = self._engine_controller.analysis_snapshot()
         self._configure_analysis(
             behavior_enabled=analysis.fatigue_enabled,
@@ -2952,8 +3213,8 @@ class EngineApplication(QObject):
             "fatigue",
             worker,
             connect=lambda current: (
-                current.metrics_ready.connect(self._on_fatigue_metrics),
-                current.failed.connect(self._on_fatigue_failed),
+                current.metrics_ready.connect(self._route_fatigue_metrics),
+                current.failed.connect(self._route_analysis_failure),
             ),
         )
 
@@ -2964,15 +3225,14 @@ class EngineApplication(QObject):
     def _stop_fatigue_worker(self) -> bool:
         fatigue_queue = self._fatigue_queue
         camera_worker = self._cam_worker
-        stopped = self._engine_runtime.stop_adapter("fatigue", 4000)
-        if not stopped:
-            return False
         self._end_baseline_collection()
         if fatigue_queue is not None and camera_worker is not None:
             camera_worker.detach_bgr_queue(fatigue_queue)
-        self._fatigue_queue = None
+        stopped = self._engine_runtime.stop_adapter("fatigue", 0)
+        if stopped:
+            self._fatigue_queue = None
         self._update_frame_routing()
-        return True
+        return stopped
 
     def _on_behavior_toggled(self, checked: bool) -> None:
         analysis = self._engine_controller.analysis_snapshot()
@@ -3076,7 +3336,6 @@ class EngineApplication(QObject):
 
     def _on_fatigue_failed(self, msg: str) -> None:
         self._append_log(f"✗ 行為警覺錯誤：{msg}")
-        self._stop_fatigue_worker()
         analysis = self._engine_controller.analysis_snapshot()
         self._configure_analysis(
             behavior_enabled=False,
@@ -3097,7 +3356,7 @@ class EngineApplication(QObject):
         self._emit_web_frame(image)
 
     def _on_record_frame(self, image) -> None:
-        if self._video_queue is None:
+        if not self._recording or self._video_queue is None:
             return
         try:
             self._video_queue.put_nowait((time.perf_counter(), image))
@@ -3105,6 +3364,8 @@ class EngineApplication(QObject):
             pass
 
     def _on_fps(self, fps: float) -> None:
+        if not self._engine_controller.pipeline_snapshot().running:
+            return
         self._last_fps = float(fps)
         self._fps_measurement_samples += 1
         requested_fps = float(self._engine_controller.camera_snapshot().fps)
@@ -3123,11 +3384,12 @@ class EngineApplication(QObject):
 
     def _on_camera_failed(self, msg: str) -> None:
         self._append_log(f"✗ 相機錯誤：{msg}")
+        self._engine_controller.mark_pipeline_cleanup_pending()
+        self._analysis_change_dirty = False
         self._cancel_pending_auto_capture_timer()
         self._rollback_auto_capture_toggles()
         if self._belt_calibrator is not None:
             self._stop_belt_calibration()
-        self._stop_analysis_workers()
         if (
             self._recording
             or self._metrics_recorder is not None
@@ -3138,12 +3400,7 @@ class EngineApplication(QObject):
             self._append_log("○ 相機中斷，已一併結束記錄。")
         self._set_record_source(None)
         self._set_frame_source(None)
-        camera_stopped = self._engine_runtime.stop_adapter("camera", 3000)
-        self._pipeline_running = False
-        if camera_stopped:
-            self._engine_controller.stop_pipeline()
-        else:
-            self._engine_controller.mark_pipeline_cleanup_pending()
+        self._fail_closed_pipeline_adapters()
         self._latest_rppg_metrics = None
         self._latest_fatigue_metrics = None
         self._latest_fused_score = None
@@ -3157,7 +3414,7 @@ class EngineApplication(QObject):
     def _toggle_pipeline(self) -> None:
         pipeline_running = self._engine_controller.pipeline_snapshot().running
         if not pipeline_running:
-            if self._engine_runtime.worker("camera_scan") is not None:
+            if self._camera_scan_pending():
                 self._publish_desktop_notice("正在搜尋攝影機，請稍候再啟動監測。")
                 return
             self._latest_rppg_metrics = None
@@ -3167,7 +3424,6 @@ class EngineApplication(QObject):
                 self._engine_controller.start_pipeline()
             except (ValueError, RuntimeError):
                 self._pipeline_running = False
-                self._engine_controller.stop_pipeline()
                 self._emit_web_metrics(force=True)
                 return
             self._pipeline_running = True
@@ -3182,7 +3438,6 @@ class EngineApplication(QObject):
                     self._stop_camera_worker()
                 except Exception as cleanup_exc:
                     logger.warning("管線啟動失敗後清理資源失敗：%s", cleanup_exc)
-                self._engine_controller.stop_pipeline()
                 self._pipeline_running = False
                 self._notify_user("管線", f"無法啟動分析管線：{exc}")
                 self._emit_web_metrics(force=True)
@@ -3213,6 +3468,11 @@ class EngineApplication(QObject):
 
     def _toggle_recording(self) -> None:
         pipeline = self._engine_controller.pipeline_snapshot()
+        if not pipeline.recording and (
+            self._engine_controller.analysis_transitioning or self._auto_capture_starting
+        ):
+            self._publish_desktop_notice("正在切換分析，請稍候再開始記錄。", level="info")
+            return
         if not pipeline.running and not pipeline.recording:
             self._notify_user("記錄", "請先啟動管線再開始記錄（示範規則）。", level="info")
             return
@@ -3247,6 +3507,11 @@ class EngineApplication(QObject):
     def _cancel_pending_auto_capture_timer(self) -> None:
         """停止自動採集倒數，避免後續誤停不相關的新錄製。"""
         self._engine_runtime.cancel_timer("auto_capture")
+        if self._auto_capture_starting:
+            self._auto_capture_starting = False
+            self._auto_capture_started_stress = False
+            self._engine_controller.cancel_analysis_transition()
+            self._advance_analysis_transition()
 
     def _rollback_auto_capture_toggles(self) -> None:
         """回滾本次自動採集自己強制勾選的核取方塊，且只在目前仍是勾選狀態才動，
@@ -3262,22 +3527,29 @@ class EngineApplication(QObject):
         self._auto_capture_started_belt_calib = False
         analysis = self._engine_controller.analysis_snapshot()
         if self._auto_capture_started_stress and analysis.rppg_enabled:
-            self._configure_analysis(
-                behavior_enabled=analysis.fatigue_enabled,
-                rppg_enabled=False,
-            )
+            if self._engine_controller.analysis_transitioning:
+                self._auto_capture_restore_stress = True
+            else:
+                self._configure_analysis(
+                    behavior_enabled=analysis.fatigue_enabled,
+                    rppg_enabled=False,
+                )
         self._auto_capture_started_stress = False
 
     def _on_auto_capture_clicked(self) -> None:
         """一鍵自動採集：只串接既有偏好入口、_toggle_pipeline 與 _toggle_recording，
         不重寫任何 worker 啟停、記錄或心跳帶校準邏輯本身。"""
+        if self._auto_capture_starting:
+            self._cancel_pending_auto_capture_timer()
+            self._emit_web_metrics(force=True)
+            return
         if self._engine_runtime.timer_active("auto_capture"):
             # 倒數中再按一次 → 提前停止。
             self._append_log("■ 自動採集：使用者提前按下停止。")
             self._finish_auto_capture(early=True)
             return
 
-        if self._engine_runtime.worker("camera_scan") is not None:
+        if self._camera_scan_pending():
             self._publish_desktop_notice("正在搜尋攝影機，請稍候再啟動採集。")
             return
 
@@ -3289,11 +3561,26 @@ class EngineApplication(QObject):
         if include_belt:
             analysis = self._engine_controller.analysis_snapshot()
             if not analysis.rppg_enabled:
-                self._configure_analysis(
-                    behavior_enabled=analysis.fatigue_enabled,
-                    rppg_enabled=True,
-                )
                 self._auto_capture_started_stress = True
+                self._auto_capture_starting = True
+                try:
+                    self._configure_analysis(
+                        behavior_enabled=analysis.fatigue_enabled,
+                        rppg_enabled=True,
+                    )
+                except Exception:
+                    self._auto_capture_starting = False
+                    self._auto_capture_started_stress = False
+                    raise
+                if self._engine_controller.analysis_transitioning:
+                    return
+                self._auto_capture_starting = False
+        self._continue_auto_capture_start()
+
+    def _continue_auto_capture_start(self) -> None:
+        capture = self._capture_preferences.snapshot()
+        include_belt = capture.auto_capture_include_belt
+        if include_belt:
             if not self._capture_preferences.snapshot().belt_calibration:
                 self._configure_capture_preferences(
                     mark_dirty=False,

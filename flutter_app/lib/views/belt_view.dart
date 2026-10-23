@@ -178,7 +178,9 @@ class HeartRateBeltPanel extends StatelessWidget {
             ? kAccent
             : const Color(0xffe0a35d);
     final canEnable = engineState['pipeline_running'] == true &&
-        engineState['rppg_enabled'] == true;
+        engineState['rppg_enabled'] == true &&
+        engineState['analysis_transitioning'] != true &&
+        engineState['auto_capture_starting'] != true;
     final contactSupported = metrics['belt_contact_supported'] == true;
     final contactDetected = metrics['belt_contact_detected'] == true;
     final contact =

@@ -104,11 +104,18 @@ class PipelineSnapshot:
 class AnalysisLifecyclePorts:
     """Qt adapter 提供的 worker 操作；controller 只管理呼叫順序。"""
 
-    stop_all: Callable[[], None]
+    stop_all: Callable[[], bool]
     start_combined: Callable[[], None]
     start_rppg: Callable[[], None]
     start_fatigue: Callable[[], None]
     restore_raw_routing: Callable[[], None]
+
+
+@dataclass(slots=True)
+class _AnalysisTransition:
+    previous: AnalysisPlan
+    target: AnalysisPlan
+    error: Exception | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +132,7 @@ class EngineController:
         self._camera = CameraConfig()
         self._preferred_camera_index: int | None = None
         self._analysis = AnalysisPlan("fatigue", False, True)
+        self._analysis_transition: _AnalysisTransition | None = None
         self._pipeline = PipelineSnapshot()
         self._replay = ReplayLifecycleSnapshot()
         self._belt_runtime = belt_runtime
@@ -185,6 +193,8 @@ class EngineController:
         return replace(self._analysis)
 
     def start_pipeline(self) -> AnalysisPlan:
+        if self.analysis_transitioning:
+            raise RuntimeError("Analysis transition is still pending")
         if self._pipeline.cleanup_pending:
             raise RuntimeError("Wait for live pipeline adapter cleanup before restarting")
         if self._replay.running:
@@ -195,15 +205,19 @@ class EngineController:
         return self.analysis_snapshot()
 
     def stop_pipeline(self) -> None:
+        self._analysis_transition = None
         self._pipeline = PipelineSnapshot()
 
     def mark_pipeline_cleanup_pending(self) -> None:
+        self._analysis_transition = None
         self._pipeline = PipelineSnapshot(cleanup_pending=True)
 
     def finish_pipeline_cleanup(self) -> None:
         self._pipeline = PipelineSnapshot()
 
     def start_recording(self) -> None:
+        if self.analysis_transitioning:
+            raise RuntimeError("Analysis transition is still pending")
         if not self._pipeline.running:
             raise RuntimeError("Pipeline must be running before recording starts")
         self._pipeline = replace(self._pipeline, recording=True)
@@ -254,6 +268,11 @@ class EngineController:
             rppg_enabled=rppg_enabled,
             fatigue_enabled=fatigue_enabled,
         )
+        pending = self._analysis_transition
+        if pending is not None:
+            if plan == pending.target and pending.error is None:
+                return self.analysis_snapshot()
+            raise RuntimeError("Analysis transition is still pending")
         if plan == self._analysis:
             return self.analysis_snapshot()
         if not self._pipeline.running:
@@ -261,23 +280,47 @@ class EngineController:
             return self.analysis_snapshot()
         if ports is None:
             raise ValueError("Analysis lifecycle ports are required while the pipeline is running")
-        previous_plan = self._analysis
+        self._analysis_transition = _AnalysisTransition(self._analysis, plan)
+        return self.advance_analysis_transition(ports)
+
+    @property
+    def analysis_transitioning(self) -> bool:
+        return self._analysis_transition is not None
+
+    def cancel_analysis_transition(self) -> None:
+        """取消尚未完成的分析要求，待舊 worker 收尾後恢復原模式。"""
+        pending = self._analysis_transition
+        if pending is not None:
+            pending.target = pending.previous
+            pending.error = None
+
+    def advance_analysis_transition(self, ports: AnalysisLifecyclePorts) -> AnalysisPlan:
+        pending = self._analysis_transition
+        if pending is None:
+            return self.analysis_snapshot()
         try:
-            ports.stop_all()
+            if not ports.stop_all():
+                return self.analysis_snapshot()
+        except Exception:
+            self.mark_pipeline_cleanup_pending()
+            raise
+        try:
+            plan = pending.previous if pending.error is not None else pending.target
             self._activate_analysis(plan, ports)
-        except Exception as start_error:
-            try:
-                ports.stop_all()
-                self._activate_analysis(previous_plan, ports)
-            except Exception as rollback_error:
+        except Exception as error:
+            if pending.error is not None:
                 self.mark_pipeline_cleanup_pending()
                 raise RuntimeError(
                     "Analysis worker start failed and rollback failed: "
-                    f"start={start_error}; rollback={rollback_error}"
-                ) from rollback_error
-            raise
-        self._analysis = plan
-        self._pipeline = replace(self._pipeline, analysis=plan)
+                    f"start={pending.error}; rollback={error}"
+                ) from error
+            pending.error = error
+            return self.advance_analysis_transition(ports)
+        self._analysis_transition = None
+        if pending.error is not None:
+            raise pending.error
+        self._analysis = pending.target
+        self._pipeline = replace(self._pipeline, analysis=pending.target)
         return self.analysis_snapshot()
 
     @staticmethod
@@ -292,6 +335,8 @@ class EngineController:
             ports.restore_raw_routing()
 
     def activate_current_analysis(self, ports: AnalysisLifecyclePorts) -> AnalysisPlan:
+        if self.analysis_transitioning:
+            raise RuntimeError("Analysis transition is still pending")
         if not self._pipeline.running:
             raise RuntimeError("Pipeline must be running before analysis workers start")
         plan = self._pipeline.analysis

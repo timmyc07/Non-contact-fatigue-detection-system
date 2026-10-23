@@ -302,6 +302,75 @@ def test_default_store_and_live_feed_use_configured_data_root(
     assert is_live_feed_enabled() is False
 
 
+def test_live_feed_publishes_complete_snapshot_atomically(tmp_path, monkeypatch):
+    from rppg import calibration
+
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(tmp_path))
+    write_live_feed(RppgMetrics(bpm=71.0), enabled=True)
+    feed = tmp_path / "config" / "rppg_live_feed.json"
+    replace = os.replace
+    swaps = []
+
+    def checked_replace(source, target):
+        assert Path(source).parent == feed.parent
+        assert Path(target) == feed
+        assert read_live_feed()["bpm"] == 71.0
+        assert json.loads(Path(source).read_text())["bpm"] == 72.0
+        swaps.append(Path(source))
+        replace(source, target)
+
+    monkeypatch.setattr(calibration.os, "replace", checked_replace)
+    write_live_feed(RppgMetrics(bpm=72.0), enabled=True)
+    assert len(swaps) == 1
+    assert read_live_feed()["bpm"] == 72.0
+    assert list(feed.parent.iterdir()) == [feed]
+
+
+def test_live_feed_io_failure_preserves_previous_data_and_bounds_logs(tmp_path, monkeypatch, caplog):
+    from rppg import calibration
+
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(tmp_path))
+    write_live_feed(RppgMetrics(bpm=71.0), enabled=True)
+    feed = tmp_path / "config" / "rppg_live_feed.json"
+    replace = os.replace
+
+    def fail_replace(*args):
+        raise OSError("synthetic disk failure")
+
+    monkeypatch.setattr(calibration.os, "replace", fail_replace)
+    for _ in range(3):
+        write_live_feed(RppgMetrics(bpm=72.0), enabled=True)
+    assert read_live_feed()["bpm"] == 71.0
+    assert list(feed.parent.iterdir()) == [feed]
+    assert len(caplog.records) == 1
+    monkeypatch.setattr(calibration.os, "replace", replace)
+    write_live_feed(RppgMetrics(bpm=72.0), enabled=True)
+    assert read_live_feed()["bpm"] == 72.0
+    monkeypatch.setattr(calibration.os, "replace", fail_replace)
+    write_live_feed(RppgMetrics(bpm=73.0), enabled=True)
+    assert len(caplog.records) == 2
+
+
+def test_optional_live_feed_io_failure_does_not_interrupt_rppg_metrics(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from gui.main_window import EngineApplication
+
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(tmp_path))
+    set_live_feed_enabled(True)
+    (tmp_path / "config" / "rppg_live_feed.json").mkdir()
+    events = []
+    application = SimpleNamespace(
+        _combined_worker=None,
+        _apply_rppg_calibration=lambda metrics: metrics,
+        _record_metrics=lambda: events.append("recorded"),
+        _emit_web_metrics=lambda: events.append("published"),
+    )
+    metrics = RppgMetrics(bpm=72.0)
+    EngineApplication._on_rppg_metrics(application, metrics)
+    assert application._latest_rppg_metrics is metrics
+    assert events == ["recorded", "published"]
+
+
 # ── P6：rppg_params 向後相容擴充 ───────────────────────────────────────────
 
 def test_calibration_params_default_rppg_params_is_none():

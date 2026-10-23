@@ -148,6 +148,13 @@ def _selected_platform_name() -> str:
     return sys.platform
 
 
+def request_macos_camera_permission() -> None:
+    """Trigger OpenCV's asynchronous AVFoundation request exactly once, off the UI thread."""
+    # OpenCV returns immediately while macOS awaits the user's permission.
+    capture = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
+    capture.release()
+
+
 def _probe_camera_index(
     index: int,
     warmup_read: bool,

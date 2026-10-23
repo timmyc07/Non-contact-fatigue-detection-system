@@ -201,9 +201,10 @@ DesktopNotice? parseDesktopNotice(dynamic raw) {
 }
 
 class MonitorShell extends StatefulWidget {
-  const MonitorShell({this.backend, super.key});
+  const MonitorShell({this.backend, this.isBackendStarting, super.key});
 
   final BackendService? backend;
+  final Future<bool> Function()? isBackendStarting;
 
   @override
   State<MonitorShell> createState() => _MonitorShellState();
@@ -229,6 +230,8 @@ class _MonitorShellState extends State<MonitorShell> {
   bool _playbackBusy = false;
   bool _stateRefreshInFlight = false;
   bool _controlStateAvailable = false;
+  bool _backendStarting = false;
+  Future<bool>? _startupQuery;
   bool _recordingsLoaded = false;
   bool _recordingsLoading = false;
   String? _error;
@@ -281,11 +284,13 @@ class _MonitorShellState extends State<MonitorShell> {
       _showNewDesktopNotice(state);
       _requestOverlaySync(state);
       if (!_connected ||
+          _backendStarting ||
           jsonEncode(state) != jsonEncode(_engineState) ||
           _errorSource == _MonitorErrorSource.connection) {
         setState(() {
           _engineState = state;
           _connected = true;
+          _backendStarting = false;
           if (_errorSource == _MonitorErrorSource.connection) {
             _error = null;
             _errorSource = null;
@@ -295,11 +300,18 @@ class _MonitorShellState extends State<MonitorShell> {
       if (!_recordingsLoaded) unawaited(_loadRecordings());
     } catch (error) {
       _hideOverlayWindow();
+      final starting = await _readBackendStarting();
       if (!mounted) return;
       _controlStateAvailable = false;
       setState(() {
+        final wasStarting = _backendStarting;
+        _backendStarting = starting;
         _connected = false;
-        if (!silent && _errorSource != _MonitorErrorSource.operation) {
+        if (starting && _errorSource == _MonitorErrorSource.connection) {
+          _error = null;
+          _errorSource = null;
+        } else if (!starting && (!silent || wasStarting) &&
+            _errorSource != _MonitorErrorSource.operation) {
           _error = '監測服務暫時無法連線，請稍後重試。';
           _errorSource = _MonitorErrorSource.connection;
         }
@@ -307,6 +319,21 @@ class _MonitorShellState extends State<MonitorShell> {
     } finally {
       _stateRefreshInFlight = false;
     }
+  }
+
+  Future<bool> _readBackendStarting() async {
+    if (widget.isBackendStarting == null && !_bridge.isAvailable) return false;
+    if (_startupQuery == null) {
+      late final Future<bool> query;
+      query = Future<bool>.sync(() async {
+        final read = widget.isBackendStarting;
+        return read != null ? await read() : await _bridge.invoke('is_backend_starting') == true;
+      }).catchError((_) => false).whenComplete(() {
+        if (identical(_startupQuery, query)) _startupQuery = null;
+      });
+      _startupQuery = query;
+    }
+    return _startupQuery!.timeout(const Duration(seconds: 2), onTimeout: () => false);
   }
 
   Future<void> _runCommand(
@@ -668,6 +695,15 @@ class _MonitorShellState extends State<MonitorShell> {
                             ),
                             Expanded(
                                 child: Column(children: [
+                              if (_backendStarting)
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+                                  child: Semantics(
+                                    liveRegion: true,
+                                    child: const Text('畫面已開啟，監測服務正在載入。首次啟動最多等候 90 秒。',
+                                        style: TextStyle(color: kMutedInk)),
+                                  ),
+                                ),
                               if (_error != null)
                                 Padding(
                                   padding:
@@ -1650,6 +1686,10 @@ class DesktopControlPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
     final cameraScanning = state['camera_scanning'] == true;
+    final cameraPermissionPending = state['camera_permission_pending'] == true;
+    final captureStarting = state['auto_capture_starting'] == true;
+    final analysisTransitioning = state['analysis_transitioning'] == true || captureStarting;
+    final cleanupPending = state['pipeline_cleanup_pending'] == true;
     final recording = state['recording'] == true;
     final recordingFinalizing = state['recording_finalizing'] == true;
     final focus = state['monitor_focus'] == true;
@@ -1669,6 +1709,11 @@ class DesktopControlPanel extends StatelessWidget {
         Text('SYSTEM CONTROL',
             style:
                 TextStyle(color: kMutedInk, fontSize: 10, letterSpacing: 1.4)),
+        if (cleanupPending || analysisTransitioning) ...[
+          const SizedBox(height: 8),
+          Text(cleanupPending ? '監測資源收尾中，請稍候。' : '正在切換分析，請稍候。',
+              style: const TextStyle(color: kMutedInk, fontSize: 12)),
+        ],
         const SizedBox(height: 14),
         DropdownButtonFormField<int>(
           isExpanded: true,
@@ -1682,7 +1727,7 @@ class DesktopControlPanel extends StatelessWidget {
                       row['label']?.toString() ?? 'Camera ${row['index']}',
                       overflow: TextOverflow.ellipsis)))
               .toList(),
-          onChanged: busy || running || cameraScanning
+          onChanged: busy || running || cameraScanning || cleanupPending
               ? null
               : (value) {
                   if (value != null) {
@@ -1693,7 +1738,9 @@ class DesktopControlPanel extends StatelessWidget {
         ),
         if (cameraScanning) ...[
           const SizedBox(height: 8),
-          Text('正在搜尋攝影機…',
+          Text(cameraPermissionPending
+              ? '請在系統提示中允許相機，授權後將自動搜尋。'
+              : '正在搜尋攝影機…',
               style: TextStyle(color: kMutedInk, fontSize: 12)),
         ],
         if (cameraRows.isEmpty && !cameraScanning) ...[
@@ -1723,7 +1770,7 @@ class DesktopControlPanel extends StatelessWidget {
         ],
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: busy || (!running && (selected == null || cameraScanning))
+          onPressed: busy || (!running && (selected == null || cameraScanning || cleanupPending))
               ? null
               : () => onCommand(
                   'pipeline.set', <String, dynamic>{'enabled': !running}),
@@ -1755,7 +1802,8 @@ class DesktopControlPanel extends StatelessWidget {
         ),
         const SizedBox(height: 9),
         OutlinedButton.icon(
-          onPressed: busy || recordingFinalizing || (!running && !recording)
+          onPressed: busy || recordingFinalizing || (!running && !recording) ||
+              (!recording && (analysisTransitioning || cleanupPending))
               ? null
               : () => onCommand(
                   'recording.set', <String, dynamic>{'enabled': !recording}),
@@ -1775,9 +1823,9 @@ class DesktopControlPanel extends StatelessWidget {
             shape: const Border(),
             collapsedShape: const Border(),
             title: const Text('自動採集', style: TextStyle(fontSize: 13)),
-            subtitle: Text(capturing ? '正在採集 · $autoDuration 秒' : '設定時長與同步來源',
+            subtitle: Text(captureStarting ? '採集啟動中，可取消' : capturing ? '正在採集 · $autoDuration 秒' : '設定時長與同步來源',
                 style: const TextStyle(color: kMutedInk, fontSize: 11)),
-            initiallyExpanded: capturing,
+            initiallyExpanded: capturing || captureStarting,
             children: [
               DropdownButtonFormField<int>(
                 isExpanded: true,
@@ -1793,7 +1841,7 @@ class DesktopControlPanel extends StatelessWidget {
                     .map((seconds) => DropdownMenuItem<int>(
                         value: seconds, child: Text('$seconds 秒')))
                     .toList(),
-                onChanged: busy || capturing
+                onChanged: busy || capturing || captureStarting
                     ? null
                     : (value) {
                         if (value != null) {
@@ -1809,7 +1857,7 @@ class DesktopControlPanel extends StatelessWidget {
                 dense: true,
                 title: const Text('同步心跳帶真值'),
                 value: includeBelt,
-                onChanged: busy || capturing
+                onChanged: busy || capturing || captureStarting
                     ? null
                     : (value) => onCommand(
                             'auto_capture.configure', <String, dynamic>{
@@ -1818,23 +1866,24 @@ class DesktopControlPanel extends StatelessWidget {
                         }),
               ),
               OutlinedButton.icon(
-                onPressed: busy || (!capturing && cameraScanning)
+                onPressed: busy || (!capturing && !captureStarting &&
+                    (cameraScanning || analysisTransitioning || cleanupPending))
                     ? null
                     : () => onCommand('auto_capture.set', <String, dynamic>{
-                          'enabled': !capturing,
+                          'enabled': !capturing && !captureStarting,
                           'duration_seconds': autoDuration,
                           'include_belt': includeBelt
                         }),
                 icon: Icon(capturing
                     ? Icons.timer_off_outlined
                     : Icons.timer_outlined),
-                label: Text(capturing ? '停止自動採集' : '開始自動採集'),
+                label: Text(captureStarting ? '取消啟動' : capturing ? '停止自動採集' : '開始自動採集'),
               ),
             ]),
         const SizedBox(height: 8),
         TextButton.icon(
             onPressed:
-                busy || running ? null : () => onCommand('camera.refresh'),
+                busy || running || cameraScanning || cleanupPending ? null : () => onCommand('camera.refresh'),
             icon: const Icon(Icons.refresh, size: 17),
             label: const Text('刷新攝影機')),
       ]),

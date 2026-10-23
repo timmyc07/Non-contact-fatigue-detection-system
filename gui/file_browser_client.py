@@ -6,8 +6,9 @@ import hashlib
 import threading
 import time
 import weakref
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -19,7 +20,8 @@ _TOKEN_TTL_ESTIMATE = 110 * 60
 
 
 class FileBrowserClient:
-    def __init__(self) -> None:
+    def __init__(self, cache_dir: Path) -> None:
+        self._cache_dir = Path(cache_dir)
         self._base_url: Optional[str] = None
         self._username: Optional[str] = None
         self._password: Optional[str] = None
@@ -154,22 +156,33 @@ class FileBrowserClient:
             )
         return result
 
-    def download_db(self, remote_path: str, cache_dir: Path) -> Path:
+    @staticmethod
+    def _normalize_remote_path(remote_path: str) -> str:
+        """接受未經 URL 編碼的 resource path；快取與 HTTP 共用此路徑。"""
+        resource = PurePosixPath(remote_path.lstrip("/"))
+        if not resource.parts or ".." in resource.parts or "\\" in remote_path or "\0" in remote_path:
+            raise ValueError("Invalid File Browser resource path")
+        return resource.as_posix()
+
+    def _cached_db_path(self, resource_path: str) -> Path:
+        namespace = hashlib.sha256(f"{self._base_url}\0{self._username}".encode()).hexdigest()
+        filename = hashlib.sha256(resource_path.encode()).hexdigest() + ".db"
+        return self._cache_dir / namespace / filename
+
+    def download_db(self, remote_path: str) -> Path:
         # 下載與切換站點互斥，避免快取歸屬及同名 temporary file 競態。
         with self._download_lock:
             self._require_open()
-            namespace = hashlib.sha256(f"{self._base_url}\0{self._username}".encode()).hexdigest()
-            cache_dir = Path(cache_dir) / namespace
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            filename = Path(remote_path).name
-            local_path = cache_dir / filename
+            resource_path = self._normalize_remote_path(remote_path)
+            local_path = self._cached_db_path(resource_path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
 
             if local_path.exists() and local_path.stat().st_size > 0:
                 log.debug("FB cache hit: %s", local_path)
                 return local_path
 
             log.info("FB downloading DB: %s", remote_path)
-            api_path = f"/api/raw/{remote_path.lstrip('/')}"
+            api_path = f"/api/raw/{quote(resource_path, safe='/')}"
             resp = self._request("GET", api_path, stream=True, timeout=120)
 
             tmp = local_path.with_suffix(".tmp")
@@ -192,7 +205,8 @@ class FileBrowserClient:
         extra: dict = {}
         if range_header:
             extra["headers"] = {"Range": range_header}
-        api_path = f"/api/raw/{remote_path.lstrip('/')}"
+        resource_path = self._normalize_remote_path(remote_path)
+        api_path = f"/api/raw/{quote(resource_path, safe='/')}"
         resp = self._request("GET", api_path, stream=True, timeout=60, **extra)
         try:
             resp.raise_for_status()
@@ -202,36 +216,40 @@ class FileBrowserClient:
         return resp
 
     def upload_file(self, local_path: Path, remote_path: str, progress_cb: Optional[Callable[[float], None]] = None) -> None:
-        local_path = Path(local_path)
-        total = local_path.stat().st_size
-        api_path = f"/api/resources/{remote_path.lstrip('/')}"
+        with self._download_lock:
+            self._require_open()
+            resource_path = self._normalize_remote_path(remote_path)
+            local_path = Path(local_path)
+            total = local_path.stat().st_size
+            api_path = f"/api/resources/{quote(resource_path, safe='/')}"
 
-        def _make_reader():
-            uploaded = 0
-            with open(local_path, "rb") as f:
-                while True:
-                    chunk = f.read(256 * 1024)
-                    if not chunk:
-                        break
-                    yield chunk
-                    uploaded += len(chunk)
-                    if progress_cb and total > 0:
-                        progress_cb(uploaded / total)
+            def _make_reader():
+                uploaded = 0
+                with open(local_path, "rb") as f:
+                    while True:
+                        chunk = f.read(256 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+                        uploaded += len(chunk)
+                        if progress_cb and total > 0:
+                            progress_cb(uploaded / total)
 
-        resp = self._request(
-            "POST", api_path,
-            data_factory=_make_reader,
-            headers={"Content-Type": "application/octet-stream"},
-            timeout=600,
-        )
-        if resp.status_code == 409:
             resp = self._request(
-                "POST", api_path + "?override=true",
+                "POST", api_path,
                 data_factory=_make_reader,
                 headers={"Content-Type": "application/octet-stream"},
                 timeout=600,
             )
-        resp.raise_for_status()
+            if resp.status_code == 409:
+                resp = self._request(
+                    "POST", api_path + "?override=true",
+                    data_factory=_make_reader,
+                    headers={"Content-Type": "application/octet-stream"},
+                    timeout=600,
+                )
+            resp.raise_for_status()
+            self._cached_db_path(resource_path).unlink(missing_ok=True)
 
     def _do_login_locked(self) -> bool:
         if self.is_closing:

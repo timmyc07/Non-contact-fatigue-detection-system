@@ -1,6 +1,6 @@
 # 全系統優化追蹤
 
-目標：針對這套程序，修復使用者尚未提出的優化問題。此目標仍在進行，不能以先前 ProMotion 修正或單一批測試宣稱全部完成。工作分支為 `codex/system-optimization`，驗證通過的提交亦須推至 `main`；第一批 `e7c4065` 已推至兩分支。
+目標：針對這套程序，修復使用者尚未提出的優化問題。本次系統審查已完成 O01–O36 的修正、回歸及可取得的本機驗證。工作分支為 `codex/system-optimization`，驗證通過的提交亦須推至 `main`；前兩批為 `e7c4065`、`47072e1`。原先 ProMotion 與空白面板修正的證據另見[捲動審查](promotion_scroll_2026-10-23.md)。
 
 ## 驗收原則
 
@@ -44,11 +44,12 @@
 | O28 | Web 重啟／停止等待 | Qt 等待服務停止最多 5 秒；一次收尾失敗會一直等完成 | 第二批已修；request-stop＋50ms 輪詢、舊 owner 完成才重綁；有限重試並同步 drain 後備 owner |
 | O29 | 一般回放產出遺漏 | recordings 僅列 root／utarldd_runs，replay_runs 的 DB／影片未出現 | 第二批已修；共用 run directories／marker，新增錄製自動刷新並可播放 |
 | O30 | 上傳進度回壓 | 慢客戶端 10000 次進度使 Engine.IO queue 積 10000 筆／1008901 bytes | 第二批已修；進度亦用每 SID ACK／latest，HTTP 成功／失敗結果仍完整 |
-| O31 | 相機／分析停止等待 | main_window 的 combined／rPPG／fatigue／相機停止仍有 3–5 秒 Qt wait | 待下一批；須完整處理 analysis.configure 的拓撲切換，不可僅改 timeout=0 導致正常切換失敗 |
-| O32 | 診斷 live feed／遠端覆寫一致性 | 可選 feed 非原子寫入可讀到空窗、寫入錯誤向分析端傳播；本 client 成功覆寫遠端同名 DB 後仍返回舊快取 | 待下一批；已用並行讀取與 71→72 BPM 覆寫案例重現，不需新增背景 writer |
-| O33 | 封裝首次路徑啟動 | 暖字型 cache 的新 engine 路徑第一次完整 readiness 曾 39.606 秒，超過 Rust 20 秒限期；第二次僅 1.205 秒 | 待拆解首輪載入／系統檢查成本及有界 readiness 契約，不將這段時間誤算為字型 cache |
-| O34 | 安裝版首次相機清單 | 同一新 dist engine 在 offscreen／cocoa 均找到 1 台，Tauri 安裝版初次／早期刷新回空清單 | 稍後刷新已恢復，原生實機監測／錄製成功；首次授權／啟動時機根因仍待查，未由代理修改權限 |
-| O35 | 錄影時間軸 | 本輪實機 DB 記錄 36.626 秒，但影片 726 frames／30 FPS，僅 24.2 秒；recorder 丟棄 queue timestamp、用固定相機 FPS 寫節流後分析預覽 | 待修錄影採樣／時間軸契約，已保留測試記錄；可讀／無編碼錯誤不能當作時間同步正確 |
+| O31 | 相機／分析停止等待 | main_window 的 combined／rPPG／fatigue／相機停止仍有 3–5 秒 Qt wait | 第三批已修；非阻塞 transition／rollback、舊 queue 早 detach、stale 訊號過濾及全入口 pending guard |
+| O32 | 診斷 live feed／遠端覆寫一致性 | 可選 feed 非原子寫入可讀到空窗、寫入錯誤向分析端傳播；成功覆寫仍返回舊 DB，且同站不同資料夾同名資源互相碰撞 | 第三批已修；atomic feed／容錯、完整資源路徑 cache identity、精確失效與共用 HTTP path 編碼 |
+| O33 | 封裝首次路徑啟動 | 暖字型 cache 的新 engine 路徑第一次完整 readiness 曾 39.606 秒，超過 Rust 20 秒限期；第二次僅 1.205 秒 | 第三批已修過早終止；UI 先開並顯示載入，API 相容性以 90 秒總限期等待、各 socket 操作另有界；未宣稱首輪載入時間消失 |
+| O34 | 安裝版首次相機清單 | OpenCV 的首次授權為非同步，未授權時先返回空清單；Qt requestPermission 又會錯查 source／sidecar 自身缺少的 bundle metadata | 第三批已修；單次背景 AVFoundation probe、Qt 狀態輪詢，授權且原 worker 釋放後自動完整搜尋；未修改系統授權 |
+| O35 | 錄影時間軸 | 實機 DB 記錄 36.626 秒，但影片 726 frames／30 FPS，僅 24.2 秒；recorder 丟棄 timestamp、用固定相機 FPS 寫節流後分析預覽 | 第三批已修；依單調時間 sample-hold 補／丟幀、停止時 drain，實機跨模式錄影時間吻合；舊影片保持原檔 |
+| O36 | Qt 收尾鎖反序 | 相機壓力測試重現主線程 QTimer 析構持 GIL 等 Qt mutex、背景 worker 析構持 mutex 等 GIL，僅加 Slot 仍於第七輪卡住 | 第三批已修共享收尾順序；真 QObject 保留至成功 join 後，由主線程析構，再通知 owner 釋放 |
 
 ## 第一批驗證與數值影響
 
@@ -121,8 +122,74 @@ Context7 沒有 PyInstaller 6.22.2／Matplotlib 3.11.1／Bleak 3.0.2 的精確�
 - [PyInstaller 6.22.2 Matplotlib runtime hook](https://github.com/pyinstaller/pyinstaller/blob/v6.22.2/PyInstaller/hooks/rthooks/pyi_rth_mplconfig.py)：每輪臨時 MPLCONFIGDIR。
 - [Matplotlib 3.11.1 font manager](https://github.com/matplotlib/matplotlib/blob/v3.11.1/lib/matplotlib/font_manager.py)：cache 讀寫及 bundled relative 字型路徑。
 
-## 審查覆蓋與未完工作
+## 第三批驗證與數值影響
 
-第一輪已讀取各主要資料流與相鄰測試，已分派傳輸／儲存、計算管線、Flutter／原生視窗三路審查。主代理另追查控制 broker、錄製 lifecycle、回放與啟動流程。尚未將掃描檔名或既有測試全綠當作全面審查完成的證據。
+本批處理 O31–O36：互動控制改為先提出停止要求並保留 owner，背景釋放後再完成分析切換；可選診斷寫檔與遠端資源快取補齊一致性；原生啟動採有總期限的相容性等待；新錄影依單調時間建立固定 FPS 時間軸，並補齊相機授權及 QObject 收尾順序。未增加依賴、背景寫檔服務、可選環境參數或資料 schema。第二批已提交並推送至 `main` 的版本為 `47072e1`。
 
-接續仍需檢查：診斷／封裝工具、錯誤與取消路徑、長時記憶體／CPU／FD、有界佇列、回放與校準數值比對、各平台契約，以及修正後的本機安裝版。未完成項目保留在本表，不會以縮小目標或未驗證的效能宣稱結案。
+### O31：互動停止與分析切換
+
+- 相機、combined、rPPG、fatigue 的互動停止不再於 Qt 主執行緒等待 3–5 秒。停止要求、零等待 join 與完成通知分開；adapter 完成前保留 reference，先解除舊 BGR queue，避免分析停止期間持續堆積新輸入。事件迴圈退出後仍由既有同步 drain 回收 owner。
+- 分析切換由 controller 保留原模式、目標模式與啟動錯誤。舊 worker 釋放後才啟動目標；目標啟動失敗會先清理，再恢復原模式；恢復也失敗則保留 cleanup pending 並阻擋重啟。切換尚未完成時，各控制入口與 Flutter 對應操作保持一致的 busy 狀態，自動採集也沿用同一完成／回滾流程。
+- queued metrics、preview、record frame、status、failure 以目前 worker 身分及停止／切換狀態篩選，晚到的舊 session 訊號不再更新新 session 或觸發停止。切換時清除舊指標並重建 worker 的暖機與基線蒐集，不能把新舊分析 session 的輸出混在一起。
+- macOS 實體相機下兩次模式切換的控制回覆為 **16.35ms／17.34ms**；同次 control 查詢 **p50 16.47ms／p95 20.14ms**。這些數值量到控制回覆延遲，分析模型初始化、暖機與基線重建仍須後續影格完成，不能視為整段推論或切換初始化耗時。
+
+### O32：診斷輸出與遠端資源一致性
+
+- File Browser 的 cache root 由 `FileBrowserClient` 建構時單一持有，下載仍回傳單一本機 `Path`。快取身分包含站點、帳號與完整遠端 resource path；同站 `/a/same.db`、`/b/same.db` 不再互相命中。舊 basename 快取無法證明來源，直接不命中，未加入搬移或相容分支。
+- 原始 resource path 共用一個正規化契約：leading `/` 與重複分隔符／`.` 統一，拒絕實際 `..`、backslash、NUL 與空路徑。快取使用正規路徑雜湊，HTTP 對同一路徑編碼一次；Unicode、空白、`%`、`?`、`#` 保持檔名字義，literal `%2F` 不會被額外解碼成路徑分隔符。下載、上傳、影片串流、刪除與一般下載的 resource URL 已逐一核對。
+- 成功上傳才失效該站點／帳號／完整資源的快取，HTTP 失敗保留原快取；新 client 也能失效前一輪已存在的磁碟快取。409 override 重試、失效與切換站點共用互斥邊界，避免第一次要求與重試送至不同站點。
+- 一般下載另補真 HTTP 信任邊界：原始 Unicode `Content-Disposition` 會使 Werkzeug 於 Latin-1 標頭輸出時失敗，僅用 Flask test client 看不出此問題。改用已安裝 **Werkzeug 3.1.8** 的 `dump_options_header` 輸出 RFC5987 `filename*=UTF-8''...`；真 loopback 驗證 Unicode、雙引號、literal percent、問號／井號及內嵌 CRLF，皆能完整下載並還原原檔名，標頭僅含 ASCII，沒有額外注入標頭。
+- 可選 live feed 使用同目錄唯一暫存檔，關閉後原子 replace，失敗清理暫存並保留前一份有效快照。I/O 錯誤只告警並讓分析繼續；持續故障僅告警一次，成功恢復後才重置告警狀態。此通道是暫態診斷快照，未額外執行每幀 fsync，也未新增背景 writer。
+- 真實檔案 I/O 並行驗證：**2000 次 atomic write，5887 次讀取中 0 次無效快照**，無暫存檔或讀取 thread 殘留。寫入 **p50 0.235ms／p95 0.377ms**，平均每秒 30 次寫入合計 **7.74ms／秒**。此數值是檔案輸出的成本，未據此宣稱影格率提升。
+- 最終相鄰回歸 **142 項通過**，涵蓋成功／失敗上傳、跨站／帳號／完整路徑隔離、切站競態、真 wire 檔名與標頭、live feed 原子可見性及 I/O 故障下的實際 metrics record／publish；`compileall`、read-back 與 `git diff --check` 通過。
+
+### O33：冷啟動期限與嚴格 readiness
+
+- 新封裝路徑第一次完整 readiness 曾耗 **39.606 秒**，同一路徑暖開為 **1.205 秒**。第二批已解決重建字型 cache，這組量測仍證明首次完整啟動存在其他成本，原本 20 秒期限會過早中止健康 engine。
+- 保留背景啟動與 Child ownership，原生 UI 先開啟，Flutter 顯示服務載入狀態；readiness 使用 **90 秒總期限**。延長等待是避免誤殺，沒有宣稱首次啟動已縮短到暖開時間。啟動期間退出仍取消、終止並 reap 當次 owned child。
+- readiness 需 HTTP 成功、JSON `success=true` 與整數 `desktop_api_version=2`，不以開埠、字串版本或無關服務當作相容。單次 probe 最多 2 秒，connect 最多 500ms，write 與整段 read 另受剩餘期限限制；response 上限 **64KiB**。read 使用固定 deadline，逐 byte 慢送也不能重置等待而無限延長；所有 probe 共用啟動總預算。
+- 對應回歸包含總期限、逐 byte 回應、oversized／失敗／版本不符回應與 readiness 競態下退出；Rust **22 項通過**，`cargo check` 通過。
+
+### O35：錄影的實際時間軸
+
+- 第二批實機紀錄保留原檔：DB 記錄 **36.626 秒**，影片 **726 frames／30 FPS＝24.2 秒**。影像可解碼只能證明檔案可讀；節流後的分析預覽被直接當成相機 FPS 寫入，會縮短錄影，該次不能算時間同步驗收通過。
+- 新 recorder 在建構時建立 `perf_counter` 起點，依同一單調時鐘的入列 timestamp 決定固定 FPS 格點，以最近已見影像 sample-hold 補幀或丟棄過密中間幀。首張影像較晚時可補黑畫面，輸入間隔較長時保持前張影像；這些是新影片的明確像素與時間軸行為。
+- 停止時先記錄停止時間，再排空已接受的 queue，忽略停止後影格並補齊停止時刻；非有限、倒退或不合理的未來 timestamp 會明確失敗。FFmpeg 中途退出保留已錄部分並告警，不再以 OpenCV 重開同一路徑覆寫。既有 stdin 堵塞 watchdog、正常 EOF、kill／reap 與恰一次 finished 收尾契約保留。
+- 獨立錄影生命週期 **24 項測試通過**。補測 **1／5／20／30／60／120Hz** 合成輸入，3 秒輸出至 **29.97 FPS** 均為 **90 幀**；真 encoder 的 20Hz、2.5 秒輸入產生 75 幀，時長誤差小於一幀。1080p 停止至 drain 完成量得 **0.290 秒**。
+- 本批實機跨模式錄影為 **360 幀／29.761964 FPS＝12.095976 秒**，落在控制操作量得的 **12.059439–12.122993 秒**實際區間，與舊片縮短問題的證據分開保存。既有影片、DB 與測試紀錄未重寫。
+
+### O34／O36：相機授權與 Qt 物件收尾
+
+- 核對 OpenCV 5.0.0 的 AVFoundation 原碼：授權未決時，背景 `VideoCapture` 提出非同步請求後立刻返回失敗；因此原先完整列舉可能在使用者回覆前先產生空清單。Qt 6.11.2 的 `requestPermission` 又要求程序自身 MainBundle 的 usage description，source Python 與目前 nested sidecar 不具備該 metadata，會在真正提出系統請求前合成 Denied。最終不使用此 Qt request 路徑，不注入 metadata、不重設 TCC、不新增套件。
+- 沿用既有 OpenCV：`CameraScanWorker(permission_only=True)` 背景只做一次 AVFoundation open／release，Qt 主線程以 runtime-owned 100ms timer 讀取真實授權狀態。等待期間不覆寫既有清單；Granted 仍須等 permission worker 完成 join／release 才完整搜尋。Denied 單次通知，錯誤停止輪詢並提供可行動訊息；cleanup 取消等待並忽略晚到結果，不等待使用者關閉系統對話框。
+- 真 source 整合先確認 OS 已 Granted，才僅將第一次 Qt 狀態讀值模擬為 Undetermined；實際執行 OpenCV probe、後續讀真 Qt 狀態及完整搜尋。probe／完整搜尋各 **1 次**，probe owner 仍在時 Qt heartbeat **107 次**，最大間隔 **15.90ms**，**1.651 秒**找到 1 台相機，pipeline／recording 均 false，完整收尾 exit 0。此驗證涵蓋實際續掃與提前 Granted 的競態，沒有重設權限或宣稱重現 OS 首次提示。
+- 壓力測試另重現 QObject 背景析構與主線程 QTimer 析構的 Qt mutex／GIL 鎖反序。僅註冊 Slot 並未消除，於第七輪再次卡住。共享修正移除真 worker 的 `thread.finished -> worker.deleteLater`，保留物件至 `wait()` 成功，再由主線程明確析構，最後通知 adapter released。兩個實際 Qt 回歸先紅，涵蓋有／無主事件迴圈、join 前物件仍有效、析構執行緒與先析構後釋放順序。
+- 最終四檔相關 **213 項通過**；以 30 秒硬期限的獨立子程序重跑 **10／10 輪、合計 2130 項**，每輪測試 2.84–2.96 秒，沒有 timeout、hang、segfault 或 stderr。不是對未修版本反覆重跑直到碰巧通過。
+- 這條明確析構路徑只在成功 join 後執行，原執行緒已不再處理任何事件，符合 Qt 的安全例外；目前七種 worker 沒有 QObject timer／socket 子物件，且 native 資源在 finished 前已關閉。數值、停止要求、stale identity guard 與 postloop drain 契約保留。
+
+來源：Context7 為 Qt 6 通用索引，另核對 [Qt 6.11.2 QObject 原碼](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/kernel/qobject.cpp)、[Qt 6.11 執行緒文件](https://doc.qt.io/qt-6.11/threads-qobject.html)、[OpenCV 5.0.0 AVFoundation 原碼](https://github.com/opencv/opencv/blob/5.0.0/modules/videoio/src/cap_avfoundation_mac.mm) 與 [Qt 6.11.2 Darwin permission 原碼](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/platform/darwin/qdarwinpermissionplugin.mm)。PySide6 6.11.2 的相機 permission plugin 靜態包含於已封裝的 `QtCore.abi3.so`，不需新增 plugin 收集規則。
+
+### 數值行為、整合驗證與部署邊界
+
+疲勞、rPPG、HRV、ROI、融合公式、門檻與已保存校準數值未改。模式轉換抑制 stale 輸出並重建 worker 暖機／基線，轉換期間的指標序列可能出現等待與重新暖機，不能宣稱跨 session 逐筆等價。新影片會補／丟幀並可能出現啟動黑畫面，因此新影片的時長與像素序列會改變；分析輸入與舊資料不因錄影時間軸修正而重算。
+
+- 最終凍結 source 完整 Python `pytest -q -rs -o faulthandler_timeout=20`：**1119 passed、2 skipped**，12.47 秒；略過仍僅為 macOS 無法套用的 Windows rooted-relative 路徑語意。相鄰 O32 最後 142 項結果見前文。
+- Flutter 完整測試 **97 項通過**、analyze 無問題；Rust **22 項通過**、`cargo check` 通過。
+- O34／O36 的 source 與壓力驗證見前文；最終封裝及安裝驗證另列，不以 source 成功取代安裝版驗收。
+- 本機未取得 UTA-RLDD 資料集，未執行正式 golden replay；實體 BLE、Windows 與 Linux 端到端未測。macOS 的局部實機量測不能代替這些驗證，也不能用來宣稱生理指標的醫療準確性。
+
+本批沿用既有套件版本。Context7 的 Werkzeug 索引為 main，已另核對本機 **3.1.8** 與[官方 3.1.8 HTTP 原碼](https://github.com/pallets/werkzeug/blob/3.1.8/src/werkzeug/http.py)，確認 `dump_options_header` 對 `filename*` 不會再次加引號；國際檔名格式依據 [RFC6266 §4.3](https://www.rfc-editor.org/rfc/rfc6266#section-4.3)。暫存替換沿用專案既有同目錄標準做法，沒有新增相容解析層或依賴。
+
+### 第三批封裝與安裝驗證
+
+- 最終 Python sidecar 完整重建，source／packaged 一般及 Face Landmarker preflight 通過；Flutter release 與 Tauri `.app` 建置成功。`compileall`、`pip check`、`git diff --check` 通過。既有未使用的 Wasm dry-run／CupertinoIcons 提示仍在，dart2js release 成功，未為這些提示新增套件。
+- 產物、暫存安裝目錄、最終 `/Applications/疲勞監測操作台.app` 均通過 `codesign --verify --deep --strict`；主程式與 engine SHA256 均與建置產物相同。原安裝版備份於 `~/Library/Application Support/FatigueMonitorAppBackups/20261023-205602-before-final-lifecycle-fixes.app`，使用者設定及記錄保留。
+- 安裝版開啟後 API v2 及介面顯示已連線，相機自動列出 1 台，permission／scan／transition／cleanup 均非等待狀態，未出現需要代理批准的系統提示。主畫面完整，可捲動至底部並返回；歷史頁刷新後可見原三段及本次新增的第四段記錄，能開啟新記錄內容。
+- 實際安裝版監測平均 **29.973 FPS**，沿用使用者原有自動記錄偏好，保存 **3501 筆**指標與新影片。停止錄製回應 **20.14ms**，當時 pipeline 仍 running；停止監測回應 **21.06ms**，最後 pipeline／recording／finalizing／cleanup 均 false。資料庫 `integrity_check=ok`，影片 **1195 幀／30 FPS＝39.833 秒**，首末幀均可解碼；未覆寫舊影片。指標首筆晚於錄影啟動，故其 **38.896 秒**跨度與影片總時長不是相同起點；嚴格時間軸區間驗收另見 O35 的 12 秒實機對照。
+- 正式產物沒有測試探針、額外權限 API 或相容層；本機維持開啟於即時監測頁，監測及錄製停止，供使用者開始自己的工作階段。
+
+## 審查覆蓋與驗證限制
+
+三路審查涵蓋計算管線、傳輸／儲存、Flutter／原生視窗；主代理另檢查控制 broker、診斷／封裝 preflight、錄製、回放及啟動流程。三軸 read-back 核對官方精確版本與執行緒所有權、相鄰程式／部署、專案契約／文件；最後的共享 QObject 修改也完成獨立 API 與部署審查，沒有剩餘阻擋項。已取得的長時 BLE 合成、FD、慢客戶端佇列、數值對照、真 HTTP、真 encoder、實體相機及原生介面證據分列各批；未將單一測試通過當作所有範圍的驗證。
+
+未取得 UTA-RLDD 資料集或實體 BLE 心跳帶，未做正式 golden、實體心跳帶、Windows／Linux 端到端驗收，也沒有重設 TCC 來測 OS 首次授權提示。未做攝影機／BLE 並行的長時間 GPU／電池或高速攝影逐幀呈現量測。這些限制保留，不能用目前 macOS 結果宣稱跨平台硬體或醫療準確性。

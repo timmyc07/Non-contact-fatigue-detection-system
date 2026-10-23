@@ -3,6 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('pipeline cleanup prevents replay starts', (tester) async {
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: PlaybackView(
+      recordings: const [], selected: null, rows: const [], offset: 0,
+      total: 0, startTimestamp: 0, onPage: (_) async {}, busy: false,
+      state: const {'pipeline_cleanup_pending': true},
+      onCommand: (_, [__]) async {}, onRefresh: () async {},
+      onOpen: (_) async {}, onClose: () {}, onPickReplayFolder: () async => null,
+    ))));
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, '開始批次')).onPressed, isNull);
+    expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '平行驗證')).onPressed, isNull);
+  });
+
   testWidgets('history shows relative elapsed time and later pages',
       (tester) async {
     final pages = <int>[];

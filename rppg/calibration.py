@@ -8,6 +8,7 @@ saved version parameters without a watch.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import statistics
 import tempfile
@@ -22,6 +23,8 @@ from uuid import uuid4
 from gui.runtime_paths import data_path, data_root
 
 ORIGIN_VERSION_ID = "v000_origin"
+logger = logging.getLogger(__name__)
+_live_feed_io_failed = False
 
 # 保留既有公開路徑常數供外部整合使用；實際讀寫函式仍動態解析 data root，
 # 確保 Tauri 在啟動前注入的使用者資料目錄生效。
@@ -521,25 +524,41 @@ class CalibrationVersionStore:
 
 
 def write_live_feed(metrics: Any, *, enabled: bool | None = None) -> None:
-    if enabled is None:
-        enabled = is_live_feed_enabled()
-    if not enabled or metrics is None:
-        return
-    payload = {
-        "timestamp": time.time(),
-        "bpm": float(getattr(metrics, "bpm", 0.0) or 0.0),
-        "raw_bpm": float(getattr(metrics, "raw_bpm", 0.0) or 0.0),
-        "sqi": float(getattr(metrics, "sqi", 0.0) or 0.0),
-        "quality_score": float(getattr(metrics, "quality_score", 0.0) or 0.0),
-        "warmup_progress": float(getattr(metrics, "warmup_progress", 0.0) or 0.0),
-        "roi_valid_count": int(getattr(metrics, "roi_valid_count", 0) or 0),
-        "bpm_guarded": bool(getattr(metrics, "bpm_guarded", False)),
-        "bpm_guard_reason": str(getattr(metrics, "bpm_guard_reason", "") or ""),
-        "face_detected": bool(getattr(metrics, "face_detected", False)),
-    }
-    path = data_path("config", "rppg_live_feed.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    global _live_feed_io_failed
+    try:
+        if enabled is None:
+            enabled = is_live_feed_enabled()
+        if not enabled or metrics is None:
+            return
+        payload = {
+            "timestamp": time.time(),
+            "bpm": float(getattr(metrics, "bpm", 0.0) or 0.0),
+            "raw_bpm": float(getattr(metrics, "raw_bpm", 0.0) or 0.0),
+            "sqi": float(getattr(metrics, "sqi", 0.0) or 0.0),
+            "quality_score": float(getattr(metrics, "quality_score", 0.0) or 0.0),
+            "warmup_progress": float(getattr(metrics, "warmup_progress", 0.0) or 0.0),
+            "roi_valid_count": int(getattr(metrics, "roi_valid_count", 0) or 0),
+            "bpm_guarded": bool(getattr(metrics, "bpm_guarded", False)),
+            "bpm_guard_reason": str(getattr(metrics, "bpm_guard_reason", "") or ""),
+            "face_detected": bool(getattr(metrics, "face_detected", False)),
+        }
+        path = data_path("config", "rppg_live_feed.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+                temporary = Path(output.name)
+                json.dump(payload, output, ensure_ascii=False)
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    except OSError as exc:
+        if not _live_feed_io_failed:
+            logger.warning("可選 rPPG live feed 寫入失敗，分析繼續：%s", exc)
+        _live_feed_io_failed = True
+    else:
+        _live_feed_io_failed = False
 
 
 def read_live_feed(max_age_sec: float = 5.0) -> dict[str, Any] | None:

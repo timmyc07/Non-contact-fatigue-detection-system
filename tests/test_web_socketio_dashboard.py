@@ -393,7 +393,7 @@ def test_upload_database_snapshot_includes_committed_wal(tmp_path, monkeypatch):
                 assert conn.execute("SELECT bpm FROM metrics").fetchall() == [(72.0,)]
             captured.append((path, name))
 
-    monkeypatch.setattr(web_server, "FileBrowserClient", FakeFileBrowser)
+    monkeypatch.setattr(web_server, "FileBrowserClient", lambda _cache_dir: FakeFileBrowser())
     db_path = tmp_path / "metrics_session.db"
     source = sqlite3.connect(db_path)
     try:
@@ -436,7 +436,7 @@ def test_upload_progress_is_bounded_per_client_and_http_keeps_final_result(tmp_p
             if failure:
                 raise RuntimeError("synthetic upload failed")
 
-    monkeypatch.setattr(web_server, "FileBrowserClient", FakeFileBrowser)
+    monkeypatch.setattr(web_server, "FileBrowserClient", lambda _cache_dir: FakeFileBrowser())
     app, socketio = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
     slow = socketio.test_client(app)
     fast = socketio.test_client(app)
@@ -474,7 +474,7 @@ def test_upload_waits_until_video_finalization_finishes(tmp_path, monkeypatch, f
     from types import SimpleNamespace
     from gui import web_server
 
-    monkeypatch.setattr(web_server, "FileBrowserClient", lambda: SimpleNamespace(is_authenticated=lambda: True))
+    monkeypatch.setattr(web_server, "FileBrowserClient", lambda _cache_dir: SimpleNamespace(is_authenticated=lambda: True))
     app, _ = create_app(MetricsBuffer(), PlaybackManager(tmp_path), get_latest_packet=lambda: {flag: True})
     response = app.test_client().post("/api/fb/upload", json={"recording_name": "metrics_session"})
     assert response.status_code == 409

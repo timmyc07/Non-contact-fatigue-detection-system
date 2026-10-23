@@ -35,6 +35,25 @@ Future<void> _openDialog(
 }
 
 void main() {
+  testWidgets('analysis pending locks topology and settings persistence',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SettingsView(
+      state: const {'analysis_transitioning': true,
+        'behavior_enabled': true, 'rppg_enabled': false,
+        'hotkey_registration': {'supported': true}},
+      busy: false, onCommand: (_, [__]) async {},
+    ))));
+    for (final label in ['行為警覺分析', 'rPPG / HRV 分析', '心跳帶真值校準']) {
+      final toggle = tester.widget<SwitchListTile>(find.widgetWithText(SwitchListTile, label));
+      expect(toggle.onChanged, isNull);
+      expect(toggle.value, label == '行為警覺分析');
+    }
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, '儲存設定')).onPressed, isNull);
+    for (final label in ['重設快捷鍵', '重設使用者資料', '重設警報器']) {
+      expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, label)).onPressed, isNull);
+    }
+  });
+
   testWidgets(
       'profile fields and apply stay reachable in a small large-text dialog',
       (tester) async {

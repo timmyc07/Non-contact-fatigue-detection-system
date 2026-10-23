@@ -40,6 +40,7 @@ class EngineRuntime(QObject):
         self._alarm_controller_factory = alarm_controller_factory
         self._alarm_controller: FatigueAlarmController | None = None
         self._adapters: dict[str, tuple[object, QThread]] = {}
+        self._stopping_adapters: set[str] = set()
         self._finished_pending: dict[str, object] = {}
         self._finished_join_scheduled = False
         self._timers: dict[str, QTimer] = {}
@@ -227,9 +228,11 @@ class EngineRuntime(QObject):
                 current,
             )
         )
-        thread.finished.connect(getattr(worker, "deleteLater"))
+        if not isinstance(worker, QObject):
+            thread.finished.connect(getattr(worker, "deleteLater"))
 
         self._adapters[kind] = (worker, thread)
+        self._stopping_adapters.discard(kind)
         try:
             move_to_thread(thread)
             thread.start()
@@ -252,8 +255,14 @@ class EngineRuntime(QObject):
         if session is None:
             return False
         worker, _thread = session
+        self._stopping_adapters.add(kind)
         getattr(worker, "request_stop")()
         return True
+
+    def accepts_worker_event(self, kind: str, sender: object) -> bool:
+        """已要求停止或被新 session 取代的 worker 不得再送入業務 callback。"""
+        worker = self.worker(kind)
+        return worker is not None and worker is sender and kind not in self._stopping_adapters
 
     def join_adapter(self, kind: str, timeout_ms: int | None) -> bool:
         """Quit and join one adapter while retaining ownership on timeout."""
@@ -302,6 +311,7 @@ class EngineRuntime(QObject):
         if expected_thread is not None and thread is not expected_thread:
             return False
         del self._adapters[kind]
+        self._stopping_adapters.discard(kind)
         if self._finished_pending.get(kind) is thread:
             del self._finished_pending[kind]
         self.adapter_released.emit(kind, thread)
@@ -329,6 +339,12 @@ class EngineRuntime(QObject):
             QTimer.singleShot(1, self._drain_finished_adapters)
 
     def _release_joined_adapter(self, kind: str, thread: object) -> None:
+        session = self._adapters.get(kind)
+        if session is None or session[1] is not thread:
+            return
+        if isinstance(session[0], QObject):
+            # wait 已保證原線程不再處理事件；主線程析構避免 Qt mutex/GIL 鎖反序。
+            delete_qobject(session[0])
         if self.release_adapter(kind, thread):
             getattr(thread, "deleteLater")()
 

@@ -153,6 +153,11 @@ The capability contract lives in `gui/platforms/registry.py`. Camera smoke tests
 
 PyInstaller packages the engine; Tauri bundles it with the model and tuning resources. Release builds use the bundled engine, while development uses the checkout source. Rebuild virtual environments, Flutter, Rust, and sidecar artifacts on each target OS rather than copying them between platforms.
 
+桌面畫面會先開啟，Python engine 在背景載入；首次啟動可能需要較久，面板會顯示載入狀態。
+engine 必須在 90 秒內提供相容的 localhost control API，否則會停止該 child 並顯示錯誤；
+載入期間仍可關閉視窗，取消啟動不會等待整個期限。
+macOS 首次使用若出現相機授權提示，允許後會自動搜尋裝置；拒絕後可至系統設定開啟相機權限，再重新整理相機。
+
 Current macOS local packages use ad-hoc signing. Public distribution still requires Developer ID signing and notarization. See the [operations guide](docs/guides/operations.md) for packaging, diagnostics, and acceptance procedures.
 
 macOS 主面板會在建立 WebView 前解除 WebKit 偏好 60fps 的限制，讓捲動可配合 ProMotion／高刷新率螢幕；實際頻率仍由系統與負載決定。此功能使用 WebKit 私有 API，API 不可用時保留預設刷新策略，因此不適用 Mac App Store 發佈。測量與限制見 [ProMotion 捲動審查](docs/technical/promotion_scroll_2026-10-23.md)。

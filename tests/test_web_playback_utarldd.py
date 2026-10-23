@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 import pytest
 import requests
+from werkzeug.http import parse_options_header
 
-from gui.web_server import MetricsBuffer, PlaybackManager, create_app, format_web_dashboard_urls
+from gui.web_server import MetricsBuffer, PlaybackManager, WebServerThread, create_app, format_web_dashboard_urls
 
 
 def _write_minimal_metrics_db(path: Path) -> None:
@@ -67,14 +70,108 @@ def test_file_browser_download_closes_upstream_after_http_error(tmp_path, monkey
     response._content_consumed = True
     closed = []
     monkeypatch.setattr(response, "close", lambda: closed.append(True))
-    monkeypatch.setattr(web_server, "FileBrowserClient", lambda: SimpleNamespace(
+    monkeypatch.setattr(web_server, "FileBrowserClient", lambda _cache_dir: SimpleNamespace(
         is_authenticated=lambda: True,
+        _normalize_remote_path=lambda path: path,
         _request=lambda *args, **kwargs: response,
     ))
     app, _ = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
     result = app.test_client().get("/api/fb/download", query_string={"filename": "metrics_test.db"})
     assert result.status_code == 502
     assert closed == [True]
+
+
+@pytest.mark.parametrize("operation", ["stream-video", "download", "delete"])
+def test_file_browser_resource_operations_keep_uploaded_raw_filename(tmp_path, monkeypatch, operation):
+    app, _socketio = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
+    browser = app.extensions["ncfd_file_browser_client"]
+    browser._base_url = "https://file-browser.invalid"
+    browser._username = "user"
+    browser._token = "synthetic-token"
+    browser._token_expires = float("inf")
+    filename = "影片 %?#.mp4"
+    stored = {}
+    calls = []
+
+    def request(method, url, **kwargs):
+        parsed = urlsplit(url)
+        assert not parsed.query and not parsed.fragment
+        resource = unquote(parsed.path.split("/", 3)[3])
+        calls.append((method, resource))
+        if method == "POST":
+            stored[resource] = b"".join(kwargs["data"])
+        body = stored[resource]
+        if method == "DELETE":
+            del stored[resource]
+        response = requests.Response()
+        response.status_code = 204 if method == "DELETE" else 200
+        response._content_consumed = True
+        monkeypatch.setattr(response, "iter_content", lambda **kwargs: iter([body]))
+        return response
+
+    monkeypatch.setattr(browser._session, "request", request)
+    source = tmp_path / "upload.mp4"
+    source.write_bytes(b"uploaded video")
+    try:
+        browser.upload_file(source, filename)
+        if operation == "delete":
+            result = app.test_client().delete("/api/fb/delete", json={"filename": filename})
+            assert result.json == {"success": True}
+            assert not stored
+        else:
+            argument = "path" if operation == "stream-video" else "filename"
+            result = app.test_client().get(f"/api/fb/{operation}", query_string={argument: filename})
+            assert result.data == b"uploaded video"
+        assert result.status_code == 200
+        assert calls == [("POST", filename), ("DELETE" if operation == "delete" else "GET", filename)]
+    finally:
+        browser.close()
+
+
+@pytest.mark.parametrize("filename", ["影片 %?#.mp4", 'quoted"percent%20?#.mp4', "line\r\nX-Injected: yes.mp4"])
+def test_file_browser_download_filename_is_safe_on_real_http_wire(tmp_path, monkeypatch, filename):
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1", port=0)
+    browser = server.app.extensions["ncfd_file_browser_client"]
+    browser._base_url = "https://file-browser.invalid"
+    browser._token = "synthetic-token"
+    browser._token_expires = float("inf")
+    body = b"downloaded video"
+
+    def request(_method, url, **kwargs):
+        parsed = urlsplit(url)
+        assert not parsed.query and not parsed.fragment
+        assert unquote(parsed.path.split("/", 3)[3]) == filename
+        response = requests.Response()
+        response.status_code = 200
+        response._content_consumed = True
+        response.headers["Content-Length"] = str(len(body))
+        monkeypatch.setattr(response, "iter_content", lambda **kwargs: iter([body]))
+        return response
+
+    monkeypatch.setattr(browser._session, "request", request)
+    server.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while server.port == 0 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert server.port != 0
+        with requests.get(
+            f"http://127.0.0.1:{server.port}/api/fb/download",
+            params={"filename": filename}, timeout=0.5,
+        ) as response:
+            assert response.status_code == 200
+            assert response.content == body
+            disposition = response.headers["Content-Disposition"]
+            assert disposition.isascii()
+            assert "\r" not in disposition and "\n" not in disposition
+            assert "X-Injected" not in response.headers
+            value, options = parse_options_header(disposition)
+            assert value == "attachment"
+            assert options["filename"] == filename
+    finally:
+        assert server.stop(join_timeout=3.0)
+        server.join(timeout=3.0)
+        assert not server.is_alive()
 
 
 @pytest.mark.parametrize("run_dir", ["utarldd_runs", "replay_runs"])

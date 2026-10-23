@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import queue
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,7 +14,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject  # noqa: E402
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot  # noqa: E402
+from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget  # noqa: E402
 
 from gui.alarm_config import AlarmConfig  # noqa: E402
@@ -61,6 +64,356 @@ def _install_runtime_adapter(
 ) -> None:
     """Install a fake adapter session without restoring EngineApplication storage."""
     window._engine_runtime._adapters[kind] = (worker, thread)  # type: ignore[assignment]
+
+
+def test_analysis_change_waits_for_release_without_stopping_camera_or_recording(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = settings_window
+    controller = window._engine_controller
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    controller.start_recording()
+    window._pipeline_running = True
+    window._recording = True
+    old_queue = queue.Queue(maxsize=2)
+    attached = {old_queue}
+    events = []
+
+    class Worker:
+        def request_stop(self):
+            events.append("stop")
+
+        def detach_bgr_queue(self, current):
+            attached.discard(current)
+
+    class Thread:
+        def quit(self):
+            pass
+
+        def wait(self, timeout_ms):
+            assert timeout_ms == 0
+            return False
+
+    camera = Worker()
+    _install_runtime_adapter(window, "camera", camera, Thread())
+    _install_runtime_adapter(window, "fatigue", Worker(), Thread())
+    window._fatigue_queue = old_queue
+    monkeypatch.setattr(window, "_start_rppg_worker", lambda: events.append("rppg"))
+    monkeypatch.setattr(window, "_set_frame_source", lambda source: None)
+    monkeypatch.setattr(window, "_set_record_source", lambda source: None)
+    monkeypatch.setattr(window, "_ensure_belt_calibration", lambda: None)
+
+    state = window._handle_desktop_command(
+        "analysis.configure", {"behavior_enabled": False, "rppg_enabled": True}
+    )
+    assert state["analysis_transitioning"] is True
+    assert state["pipeline_running"] is True
+    assert state["recording"] is True
+    assert state["settings_dirty"] is False
+    assert not attached
+    assert events == ["stop"]
+    window._engine_runtime.release_adapter("fatigue")
+    assert events == ["stop", "rppg"]
+    assert controller.analysis_snapshot().worker == "rppg"
+    assert not window._desktop_control_state()["analysis_transitioning"]
+    assert window._settings_dirty
+    window._engine_runtime.release_adapter("camera")
+
+
+@pytest.fixture
+def held_analysis(settings_window, monkeypatch):
+    window = settings_window
+    controller = window._engine_controller
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    window._pipeline_running = True
+    calls = []
+
+    class Camera(QObject):
+        frame_ready = Signal(QImage)
+        fps_ready = Signal(float)
+        failed = Signal(str)
+
+        def __init__(self):
+            super().__init__()
+            self.queues = set()
+
+        def detach_bgr_queue(self, current=None):
+            if current is None:
+                self.queues.clear()
+            else:
+                self.queues.discard(current)
+
+        def request_stop(self):
+            calls.append("camera.stop")
+
+    class Analysis(QObject):
+        metrics_ready = Signal(object)
+        failed = Signal(str)
+        frame_annotated = Signal(QImage)
+
+        def request_stop(self):
+            calls.append("analysis.stop")
+
+    class Thread:
+        def quit(self):
+            pass
+
+        def wait(self, timeout_ms=None):
+            assert timeout_ms in (0, None)
+            return timeout_ms is None
+
+        def deleteLater(self):
+            pass
+
+    camera, analysis = Camera(), Analysis()
+    camera.fps_ready.connect(window._route_camera_fps, Qt.ConnectionType.QueuedConnection)
+    camera.failed.connect(window._route_camera_failure, Qt.ConnectionType.QueuedConnection)
+    analysis.metrics_ready.connect(window._route_fatigue_metrics, Qt.ConnectionType.QueuedConnection)
+    analysis.failed.connect(window._route_analysis_failure, Qt.ConnectionType.QueuedConnection)
+    _install_runtime_adapter(window, "camera", camera, Thread())
+    _install_runtime_adapter(window, "fatigue", analysis, Thread())
+    window._fatigue_queue = queue.Queue(maxsize=2)
+    camera.queues.add(window._fatigue_queue)
+    monkeypatch.setattr(window, "_start_combined_worker", lambda **_: calls.append("combined.start"))
+    monkeypatch.setattr(window, "_start_rppg_worker", lambda: calls.append("rppg.start"))
+    monkeypatch.setattr(window, "_start_fatigue_worker", lambda: calls.append("fatigue.start"))
+    monkeypatch.setattr(window, "_ensure_belt_calibration", lambda: None)
+    return window, camera, analysis, calls
+
+
+def test_old_analysis_events_are_ignored_during_and_after_transition(held_analysis, monkeypatch, qt_app):
+    window, camera, old, calls = held_analysis
+    received = []
+    monkeypatch.setattr(window, "_on_fatigue_metrics", received.append)
+    old.metrics_ready.emit("queued.before.stop")
+    old.failed.emit("queued.failure")
+    window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+    qt_app.processEvents()
+    assert received == []
+    assert not camera.queues
+    window._engine_runtime.release_adapter("fatigue")
+    old.metrics_ready.emit("obsolete.session")
+    old.failed.emit("obsolete.failure")
+    qt_app.processEvents()
+    assert received == []
+    assert calls.count("rppg.start") == 1
+    assert window._engine_controller.analysis_snapshot().worker == "rppg"
+
+
+@pytest.mark.parametrize("command,args", [
+    ("analysis.configure", {"rppg_enabled": False}),
+    ("settings.save", {}), ("settings.reset", {}),
+    ("recording.set", {"enabled": True}),
+    ("auto_capture.set", {"enabled": True}),
+    ("preferences.configure", {"belt_calibration": True}),
+])
+def test_analysis_transition_blocks_conflicting_commands(held_analysis, command, args):
+    window, _, _, _ = held_analysis
+    window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+    with pytest.raises(BusyError, match="transition"):
+        window._handle_desktop_command(command, args)
+
+
+def test_pipeline_stop_cancels_analysis_target_and_late_fps(held_analysis, qt_app):
+    window, camera, _, calls = held_analysis
+    window._last_fps = 30.0
+    window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+    camera.fps_ready.emit(22.0)
+    state = window._handle_desktop_command("pipeline.set", {"enabled": False})
+    assert not state["pipeline_running"]
+    assert state["pipeline_cleanup_pending"]
+    qt_app.processEvents()
+    assert window._last_fps == 0.0
+    window._engine_runtime.release_adapter("fatigue")
+    window._engine_runtime.release_adapter("camera")
+    assert "rppg.start" not in calls
+    assert not window._desktop_control_state()["pipeline_cleanup_pending"]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_auto_capture_waits_for_analysis_and_can_cancel_before_recording(held_analysis, monkeypatch, cancel):
+    window, _, _, calls = held_analysis
+    recording = []
+    window._capture_preferences.configure(auto_capture_include_belt=True)
+
+    def record():
+        recording.append(True)
+        window._engine_controller.start_recording()
+        window._recording = True
+
+    monkeypatch.setattr(window, "_toggle_recording", record)
+    monkeypatch.setattr(window, "_configure_capture_preferences", lambda **_: None)
+    window._on_auto_capture_clicked()
+    assert window._desktop_control_state()["auto_capture_starting"]
+    assert not window._engine_runtime.timer_active("auto_capture")
+    assert recording == []
+    if cancel:
+        window._handle_desktop_command("auto_capture.set", {"enabled": False})
+    window._engine_runtime.release_adapter("fatigue")
+    assert window._auto_capture_starting is False
+    assert recording == ([] if cancel else [True])
+    assert window._engine_runtime.timer_active("auto_capture") is (not cancel)
+    assert calls[-1] == ("fatigue.start" if cancel else "combined.start")
+
+
+def test_record_frame_rejects_already_queued_signal_after_stop(settings_window):
+    settings_window._video_queue = queue.Queue()
+    settings_window._recording = False
+    settings_window._on_record_frame(object())
+    assert settings_window._video_queue.empty()
+
+
+def test_delayed_analysis_start_failure_rolls_back_and_reports_once(held_analysis, monkeypatch):
+    window, _, _, calls = held_analysis
+    notices = []
+    monkeypatch.setattr(window, "_notify_user", lambda title, message: notices.append((title, message)))
+    monkeypatch.setattr(window, "_start_rppg_worker", lambda: (_ for _ in ()).throw(RuntimeError("target failed")))
+    window._handle_desktop_command("analysis.configure", {"rppg_enabled": True, "behavior_enabled": False})
+    assert window._settings_dirty is False
+    window._engine_runtime.release_adapter("fatigue")
+    assert window._engine_controller.analysis_snapshot().worker == "fatigue"
+    assert not window._engine_controller.analysis_transitioning
+    assert window._engine_controller.pipeline_snapshot().running
+    assert window._settings_dirty is False
+    assert calls[-1] == "fatigue.start"
+    assert notices == [("分析切換失敗", "target failed")]
+    window._on_adapter_released("fatigue", object())
+    assert len(notices) == 1
+
+
+def test_auto_capture_start_failure_never_records_or_starts_countdown(held_analysis, monkeypatch):
+    window, _, _, calls = held_analysis
+    window._capture_preferences.configure(auto_capture_include_belt=True)
+    monkeypatch.setattr(window, "_start_combined_worker", lambda **_: (_ for _ in ()).throw(RuntimeError("target failed")))
+    monkeypatch.setattr(window, "_toggle_recording", lambda: pytest.fail("Capture must not record before analysis starts"))
+    window._on_auto_capture_clicked()
+    window._engine_runtime.release_adapter("fatigue")
+    assert not window._auto_capture_starting
+    assert not window._auto_capture_started_stress
+    assert not window._engine_runtime.timer_active("auto_capture")
+    assert window._engine_controller.analysis_snapshot().worker == "fatigue"
+    assert calls[-1] == "fatigue.start"
+
+
+def test_camera_error_during_transition_cancels_target_and_resets_metrics(held_analysis):
+    window, _, _, calls = held_analysis
+    window._last_fps = 30.0
+    window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+    window._on_camera_failed("disconnected")
+    assert not window._engine_controller.analysis_transitioning
+    assert not window._engine_controller.pipeline_snapshot().running
+    assert window._engine_controller.pipeline_snapshot().cleanup_pending
+    assert window._last_fps == 0.0
+    window._engine_runtime.release_adapter("fatigue")
+    window._engine_runtime.release_adapter("camera")
+    assert not window._engine_controller.pipeline_snapshot().cleanup_pending
+    assert "rppg.start" not in calls
+
+
+def test_failed_pipeline_start_retains_unjoined_adapters_until_late_release(held_analysis, monkeypatch):
+    window, _, _, _ = held_analysis
+    controller = window._engine_controller
+    controller.stop_pipeline()
+    monkeypatch.setattr(window, "_start_camera_worker", lambda: None)
+    monkeypatch.setattr(controller, "activate_current_analysis", lambda _ports: (_ for _ in ()).throw(RuntimeError("start failed")))
+    state = window._handle_desktop_command("pipeline.set", {"enabled": True})
+    assert not state["pipeline_running"]
+    assert state["pipeline_cleanup_pending"]
+    with pytest.raises(BusyError, match="cleanup"):
+        window._handle_desktop_command("replay.set", {"enabled": True})
+    window._toggle_pipeline()
+    assert controller.pipeline_snapshot().cleanup_pending
+    window._engine_runtime.release_adapter("fatigue")
+    window._engine_runtime.release_adapter("camera")
+    assert not controller.pipeline_snapshot().cleanup_pending
+
+
+def test_recording_hotkey_rejects_new_recording_during_transition(held_analysis, monkeypatch):
+    window, _, _, _ = held_analysis
+    window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+    monkeypatch.setattr(window, "_start_recording", lambda: pytest.fail("Pending analysis must block recording hotkey"))
+    window._toggle_recording()
+    assert not window._engine_controller.pipeline_snapshot().recording
+
+
+def test_transition_reattaches_existing_belt_writer_and_candidate_weights(held_analysis, monkeypatch):
+    from types import SimpleNamespace
+
+    window, _, _, _ = held_analysis
+    writer = object()
+    candidate = {"forehead": 0.4}
+    window._belt_truth_capture = writer
+    window._rppg_param_coordinator = SimpleNamespace(candidate_roi_weights=candidate)
+    dispatched = []
+    monkeypatch.setattr(window, "_dispatch_belt_truth_capture", lambda value: dispatched.append(("writer", value)))
+    monkeypatch.setattr(window, "_dispatch_candidate_roi_weights", lambda value: dispatched.append(("candidate", value)))
+    window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+    assert dispatched == []
+    window._engine_runtime.release_adapter("fatigue")
+    assert dispatched == [("writer", writer), ("candidate", candidate)]
+    window._belt_truth_capture = None
+    window._rppg_param_coordinator = None
+
+
+def test_auto_capture_rollback_waits_for_current_switch_then_restores_owned_rppg(held_analysis):
+    window, _, _, calls = held_analysis
+    controller = window._engine_controller
+    controller.stop_pipeline()
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True)
+    controller.start_pipeline()
+    window._auto_capture_started_stress = True
+    window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+    window._rollback_auto_capture_toggles()
+    assert window._auto_capture_restore_stress
+    window._engine_runtime.release_adapter("fatigue")
+    assert controller.analysis_snapshot().worker == "none"
+    assert not controller.analysis_transitioning
+    assert not window._auto_capture_restore_stress
+    assert calls.count("rppg.start") == 1
+
+
+def test_analysis_stop_keeps_real_qt_heartbeat_responsive(settings_window, monkeypatch, qt_app):
+    window = settings_window
+    controller = window._engine_controller
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    entered, release = threading.Event(), threading.Event()
+    heartbeat = []
+
+    class Worker(QObject):
+        finished = Signal()
+
+        @Slot()
+        def run(self):
+            entered.set()
+            assert release.wait(3.0)
+            self.finished.emit()
+
+        def request_stop(self):
+            pass
+
+    thread = window._engine_runtime.start_adapter("fatigue", Worker())
+    monkeypatch.setattr(window, "_start_rppg_worker", lambda: None)
+    monkeypatch.setattr(window, "_ensure_belt_calibration", lambda: None)
+    try:
+        assert entered.wait(2.0)
+        window._configure_analysis(behavior_enabled=False, rppg_enabled=True)
+        assert controller.analysis_transitioning
+        QTimer.singleShot(0, lambda: heartbeat.append(True))
+        deadline = time.monotonic() + 2.0
+        while not heartbeat and time.monotonic() < deadline:
+            qt_app.processEvents()
+        assert heartbeat == [True]
+        assert not release.is_set()
+        assert window._handle_desktop_command("state.get", {})["analysis_transitioning"]
+    finally:
+        release.set()
+        thread.quit()
+        thread.wait(2000)
+        window._engine_runtime.join_adapter("fatigue", 0)
+    assert not controller.analysis_transitioning
 
 
 def test_state_get_exposes_desktop_settings_v2(settings_window: EngineApplication) -> None:
@@ -894,7 +1247,7 @@ def test_running_analysis_command_reconciles_two_changes_once(
     monkeypatch.setattr(
         settings_window,
         "_stop_analysis_workers",
-        lambda: events.append("stop"),
+        lambda: events.append("stop") or True,
     )
     monkeypatch.setattr(settings_window, "_start_rppg_worker", lambda: events.append("rppg"))
     monkeypatch.setattr(settings_window, "_ensure_belt_calibration", lambda: None)
@@ -920,7 +1273,7 @@ def test_running_analysis_command_rolls_back_controller_state_on_reconcile_failu
     )
     settings_window._engine_controller.start_pipeline()
     original_dirty = settings_window._settings_dirty
-    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: None)
+    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: True)
     monkeypatch.setattr(
         settings_window, "_start_rppg_worker", lambda: (_ for _ in ()).throw(RuntimeError("topology failed"))
     )
@@ -950,7 +1303,7 @@ def test_running_analysis_command_cleans_adapters_after_fail_closed(
     settings_window._pipeline_running = True
     cleanup: list[bool] = []
 
-    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: None)
+    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: True)
     monkeypatch.setattr(
         settings_window, "_start_rppg_worker", lambda: (_ for _ in ()).throw(RuntimeError("start failed"))
     )
@@ -1011,7 +1364,7 @@ def test_fail_closed_pipeline_cleanup_releases_live_adapter_resources(
         "detach",
         "camera.stop",
         "thread.quit",
-        ("thread.wait", 3000),
+        ("thread.wait", 0),
     ]
     assert settings_window._cam_worker is None
     assert settings_window._cam_thread is None
@@ -1242,6 +1595,8 @@ def test_engine_belt_tick_keeps_calibration_and_coordinator_side_effects(
 def test_engine_runtime_callbacks_update_headless_state_without_legacy_controls(
     settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.start_pipeline()
     emitted: list[bool] = []
     monkeypatch.setattr(
         settings_window,
@@ -1266,6 +1621,8 @@ def test_engine_runtime_callbacks_update_headless_state_without_legacy_controls(
 def test_measured_camera_fps_warns_once_when_requested_rate_is_not_reached(
     settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
+    settings_window._engine_controller.start_pipeline()
     logs: list[str] = []
     monkeypatch.setattr(settings_window, "_append_log", logs.append)
     monkeypatch.setattr(settings_window, "_emit_web_metrics", lambda **_kwargs: None)
@@ -2540,6 +2897,7 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
 
     assert events == [
         "desktop_command.cancel",
+        "camera_permission.cancel",
         "hotkeys.unregister",
         "auto_capture.cancel",
         "belt_calibration.stop",
@@ -2667,7 +3025,7 @@ def test_camera_failure_timeout_blocks_replay_until_adapter_release(
     settings_window._engine_controller.replace_cameras([CameraDevice(0, "Camera")])
     settings_window._engine_controller.start_pipeline()
     _install_runtime_adapter(settings_window, "camera", worker, thread)
-    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: None)
+    monkeypatch.setattr(settings_window, "_stop_analysis_workers", lambda: True)
 
     settings_window._on_camera_failed("camera disconnected")
 
@@ -2698,7 +3056,7 @@ def test_pipeline_command_rolls_back_when_replay_is_active(
         settings_window,
         "_analysis_lifecycle_ports",
         lambda: AnalysisLifecyclePorts(
-            stop_all=lambda: None,
+            stop_all=lambda: True,
             start_combined=lambda: None,
             start_rppg=lambda: None,
             start_fatigue=lambda: None,
@@ -2729,7 +3087,7 @@ def test_pipeline_command_uses_controller_snapshot_for_success_and_stop(
         settings_window,
         "_analysis_lifecycle_ports",
         lambda: AnalysisLifecyclePorts(
-            stop_all=lambda: None,
+            stop_all=lambda: True,
             start_combined=lambda: None,
             start_rppg=lambda: None,
             start_fatigue=lambda: None,
@@ -2775,11 +3133,13 @@ def test_pipeline_command_rolls_back_adapter_start_failure(
             "activate_current_analysis",
             lambda _ports: (_ for _ in ()).throw(RuntimeError("analysis failed")),
         )
-    monkeypatch.setattr(
-        settings_window,
-        "_stop_camera_worker",
-        lambda: cleanup.append("stop"),
-    )
+    stop_camera = settings_window._stop_camera_worker
+
+    def cleanup_camera() -> bool:
+        cleanup.append("stop")
+        return stop_camera()
+
+    monkeypatch.setattr(settings_window, "_stop_camera_worker", cleanup_camera)
 
     state = settings_window._handle_desktop_command(
         "pipeline.set",

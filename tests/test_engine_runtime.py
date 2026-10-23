@@ -9,7 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread, Signal  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QThread, Qt, Signal  # noqa: E402
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
@@ -118,6 +118,56 @@ class _QtWorker(QObject):
 
     def request_stop(self) -> None:
         pass
+
+
+@pytest.mark.parametrize("process_events", [False, True])
+def test_finished_worker_is_destroyed_on_owner_only_after_join(
+    qt_app: QApplication, process_events: bool,
+) -> None:
+    entered, stopping = threading.Event(), threading.Event()
+    destroyed_on, lifecycle = [], []
+    owner_thread_id = threading.get_ident()
+
+    class Worker(QObject):
+        finished = Signal()
+
+        def run(self) -> None:
+            entered.set()
+            stopping.wait()
+            self.finished.emit()
+
+        def request_stop(self) -> None:
+            stopping.set()
+
+    worker = Worker()
+    worker.destroyed.connect(
+        lambda: (destroyed_on.append(threading.get_ident()), lifecycle.append("destroyed")),
+        Qt.ConnectionType.DirectConnection,
+    )
+    runtime = EngineRuntime(qt_app)
+    runtime.adapter_released.connect(lambda *_: lifecycle.append("released"))
+    thread = runtime.start_adapter("camera_scan", worker)
+    try:
+        assert entered.wait(2)
+        runtime.request_adapter_stop("camera_scan")
+        thread.quit()
+        if process_events:
+            for _ in range(200):
+                if runtime.all_stopped():
+                    break
+                QTest.qWait(5)
+        else:
+            assert thread.wait(2000)
+            assert isValid(worker)
+            assert runtime.join_adapter("camera_scan", 0)
+        assert runtime.all_stopped()
+        assert destroyed_on == [owner_thread_id]
+        assert lifecycle == ["destroyed", "released"]
+        assert not isValid(worker)
+    finally:
+        stopping.set()
+        if runtime.worker("camera_scan") is not None:
+            runtime.stop_adapter("camera_scan", None)
 
 
 def test_close_adapters_joins_real_worker_without_main_event_loop(qt_app: QApplication) -> None:
@@ -376,6 +426,22 @@ def test_request_stop_can_defer_join_until_replay_finishes(
     thread.finished.emit()
 
     assert runtime.all_stopped() is True
+
+
+def test_stopping_and_obsolete_worker_events_are_rejected(qt_app: QApplication) -> None:
+    events = []
+    runtime = EngineRuntime(qt_app, thread_factory=lambda _parent: _FakeThread(events))
+    previous, current = _FakeWorker(events), _FakeWorker(events)
+    runtime.start_adapter("fatigue", previous)
+    assert runtime.accepts_worker_event("fatigue", previous)
+    assert not runtime.accepts_worker_event("fatigue", current)
+    runtime.request_adapter_stop("fatigue")
+    assert not runtime.accepts_worker_event("fatigue", previous)
+    runtime.release_adapter("fatigue")
+    runtime.start_adapter("fatigue", current)
+    assert runtime.accepts_worker_event("fatigue", current)
+    assert not runtime.accepts_worker_event("fatigue", previous)
+    runtime.close_adapters()
 
 
 def test_stale_finish_cannot_release_a_new_adapter_session(

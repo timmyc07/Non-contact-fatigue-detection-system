@@ -6,13 +6,14 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QThread, QTimer  # noqa: E402
+from PySide6.QtCore import QThread, QTimer, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -22,6 +23,242 @@ from gui.main_window import EngineApplication  # noqa: E402
 
 
 _START_CAMERA_SCAN = EngineApplication._start_camera_scan
+
+
+def test_macos_permission_request_is_single_flight_and_grant_resumes_scan(
+    camera_window, monkeypatch, qt_app,
+):
+    from gui import camera_devices
+    from gui.desktop_control import BusyError
+
+    window = camera_window
+    requested, probes = [], []
+    status = [Qt.PermissionStatus.Undetermined]
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"), raising=False)
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: status[0])
+    monkeypatch.setattr(qt_app, "requestPermission", lambda *_: pytest.fail("Qt requestPermission rejects source and frozen mainBundle metadata"))
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", lambda: requested.append(QThread.currentThread()), raising=False)
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: probes.append(True) or [(9, "Camera")])
+    _START_CAMERA_SCAN(window)
+    _START_CAMERA_SCAN(window)
+    _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+    assert len(requested) == 1
+    assert requested[0] != QThread.currentThread()
+    assert probes == []
+    state = window._desktop_control_state()
+    assert state["camera_permission_pending"] is True
+    assert state["camera_scanning"] is True
+    heartbeat = []
+    QTimer.singleShot(0, lambda: heartbeat.append(True))
+    _process_until(lambda: bool(heartbeat))
+    QTest.qWait(250)
+    _START_CAMERA_SCAN(window)
+    assert len(requested) == 1
+    assert window._engine_runtime.timer_active("camera_permission")
+    assert probes == []
+    with pytest.raises(BusyError, match="discovery"):
+        window._handle_desktop_command("pipeline.set", {"enabled": True})
+    with pytest.raises(BusyError, match="discovery"):
+        window._handle_desktop_command("auto_capture.set", {"enabled": True})
+    window._toggle_pipeline()
+    assert not window._engine_controller.pipeline_snapshot().running
+    window._on_auto_capture_clicked()
+    assert not window._engine_runtime.timer_active("auto_capture")
+    status[0] = Qt.PermissionStatus.Granted
+    _process_until(lambda: bool(probes) and window._engine_runtime.worker("camera_scan") is None)
+    assert probes == [True]
+    assert window.selected_camera_index == 9
+    assert window._desktop_control_state()["camera_permission_pending"] is False
+
+
+def test_macos_denied_permission_never_probes_or_requests_again(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    previous = window._engine_controller.camera_snapshot()
+    notices = []
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"), raising=False)
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: Qt.PermissionStatus.Denied)
+    monkeypatch.setattr(qt_app, "requestPermission", lambda *_: pytest.fail("Denied permission cannot prompt again"))
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: pytest.fail("Denied permission cannot open a camera"))
+    monkeypatch.setattr(window, "_publish_desktop_notice", lambda message: notices.append(message))
+    _START_CAMERA_SCAN(window)
+    _START_CAMERA_SCAN(window)
+    assert len(notices) == 1
+    assert window._engine_controller.camera_snapshot() == previous
+    assert not window._desktop_control_state()["camera_scanning"]
+
+
+@pytest.mark.parametrize("granted", [False, True])
+def test_macos_permission_poll_after_cleanup_never_restarts_camera(camera_window, monkeypatch, qt_app, granted):
+    from gui import camera_devices
+
+    window = camera_window
+    requested, status = [], [Qt.PermissionStatus.Undetermined]
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"), raising=False)
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: status[0])
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", lambda: requested.append(True), raising=False)
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: pytest.fail("Late permission callback cannot open a camera"))
+    _START_CAMERA_SCAN(window)
+    _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+    assert requested == [True]
+    assert window.close_runtime()
+    assert not window._desktop_control_state()["camera_permission_pending"]
+    assert not window._engine_runtime.timer_active("camera_permission")
+    status[0] = Qt.PermissionStatus.Granted if granted else Qt.PermissionStatus.Denied
+    window._poll_camera_permission()
+    assert window._engine_runtime.worker("camera_scan") is None
+
+
+def test_macos_permission_denial_does_not_repeat_probe(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    requested, notices = [], []
+    status = [Qt.PermissionStatus.Undetermined]
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: status[0])
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", lambda: requested.append(True), raising=False)
+    monkeypatch.setattr(window, "_publish_desktop_notice", notices.append)
+    _START_CAMERA_SCAN(window)
+    _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+    status[0] = Qt.PermissionStatus.Denied
+    _process_until(lambda: not window._camera_permission_pending)
+    _START_CAMERA_SCAN(window)
+    assert len(requested) == len(notices) == 1
+    assert not window._desktop_control_state()["camera_scanning"]
+    assert not window._engine_runtime.timer_active("camera_permission")
+
+
+def test_macos_permission_probe_failure_clears_pending_and_does_not_scan(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: Qt.PermissionStatus.Undetermined)
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", lambda: (_ for _ in ()).throw(RuntimeError("permission backend unavailable")), raising=False)
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: pytest.fail("Permission probe failure cannot enumerate cameras"))
+    _START_CAMERA_SCAN(window)
+    _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+    state = window._desktop_control_state()
+    assert not state["camera_permission_pending"]
+    assert not state["camera_scanning"]
+    assert "permission backend unavailable" in state["desktop_notice"]["message"]
+    assert not window._engine_runtime.timer_active("camera_permission")
+
+
+def test_macos_permission_grant_waits_until_probe_adapter_released(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    entered, release = threading.Event(), threading.Event()
+    status, probes = [Qt.PermissionStatus.Undetermined], []
+
+    def request_permission():
+        entered.set()
+        release.wait(2.0)
+
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: status[0])
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", request_permission, raising=False)
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: probes.append(True) or [(9, "Camera")])
+    try:
+        _START_CAMERA_SCAN(window)
+        _process_until(entered.is_set)
+        status[0] = Qt.PermissionStatus.Granted
+        window._poll_camera_permission()
+        assert window._camera_permission_pending
+        assert window._engine_runtime.timer_active("camera_permission")
+        assert probes == []
+    finally:
+        release.set()
+        _process_until(lambda: bool(probes) and window._engine_runtime.worker("camera_scan") is None)
+    assert probes == [True]
+    assert not window._camera_permission_pending
+
+
+def test_macos_pending_permission_poll_error_clears_pending_once(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    notices, fail_status = [], [False]
+
+    def check_permission(_permission):
+        if fail_status[0]:
+            raise RuntimeError("permission status unavailable")
+        return Qt.PermissionStatus.Undetermined
+
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(qt_app, "checkPermission", check_permission)
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", lambda: None, raising=False)
+    monkeypatch.setattr(window, "_publish_desktop_notice", notices.append)
+    _START_CAMERA_SCAN(window)
+    _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+    fail_status[0] = True
+    window._poll_camera_permission()
+    window._poll_camera_permission()
+    assert len(notices) == 1
+    assert "permission status unavailable" in notices[0]
+    assert not window._camera_scan_pending()
+    assert not window._engine_runtime.timer_active("camera_permission")
+
+
+def test_macos_permission_cleanup_is_nonblocking_with_probe_still_owned(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    entered, release = threading.Event(), threading.Event()
+    status = [Qt.PermissionStatus.Undetermined]
+
+    def request_permission():
+        entered.set()
+        release.wait(2.0)
+
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: status[0])
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", request_permission)
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: pytest.fail("Shutdown cannot start a camera scan"))
+    try:
+        _START_CAMERA_SCAN(window)
+        _process_until(entered.is_set)
+        started = time.perf_counter()
+        assert not window._cleanup_runtime()
+        assert time.perf_counter() - started < 0.1
+        assert window._engine_runtime.worker("camera_scan") is not None
+        assert not window._camera_permission_pending
+        assert not window._engine_runtime.timer_active("camera_permission")
+        status[0] = Qt.PermissionStatus.Granted
+        window._poll_camera_permission()
+    finally:
+        release.set()
+        _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+    assert window.close_runtime()
+
+
+def test_macos_initial_permission_status_error_never_probes(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: (_ for _ in ()).throw(RuntimeError("status unavailable")))
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", lambda: pytest.fail("Unknown permission status cannot open a camera"))
+    _START_CAMERA_SCAN(window)
+    assert not window._camera_scan_pending()
+    assert "status unavailable" in window._desktop_control_state()["desktop_notice"]["message"]
+
+
+def test_non_macos_discovery_does_not_use_camera_permission_api(camera_window, monkeypatch, qt_app):
+    from gui import camera_devices
+
+    window = camera_window
+    probes = []
+    monkeypatch.setattr(main_window_module, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(qt_app, "checkPermission", lambda _: pytest.fail("Only macOS requests camera permission"))
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: probes.append(True) or [(9, "Camera")])
+    _START_CAMERA_SCAN(window)
+    _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+    assert probes == [True]
+    assert window.selected_camera_index == 9
 
 
 def _process_until(condition: Any) -> None:

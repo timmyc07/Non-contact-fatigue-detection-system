@@ -70,7 +70,7 @@ def test_pipeline_lifecycle_requires_camera_and_preserves_analysis_snapshot() ->
         rppg_enabled=True,
         fatigue_enabled=False,
         ports=AnalysisLifecyclePorts(
-            stop_all=lambda: None,
+            stop_all=lambda: True,
             start_combined=lambda: None,
             start_rppg=lambda: None,
             start_fatigue=lambda: None,
@@ -104,6 +104,143 @@ def test_analysis_preferences_are_product_state_while_pipeline_is_idle() -> None
     assert configured.worker == "rppg"
     assert controller.analysis_snapshot() == configured
     assert controller.pipeline_snapshot().analysis.worker == "none"
+
+
+def test_pending_analysis_stop_preserves_camera_recording_and_committed_plan() -> None:
+    controller = EngineController()
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    controller.start_recording()
+    joined = False
+    events = []
+    ports = AnalysisLifecyclePorts(
+        stop_all=lambda: joined,
+        start_combined=lambda: events.append("combined"),
+        start_rppg=lambda: events.append("rppg"),
+        start_fatigue=lambda: events.append("fatigue"),
+        restore_raw_routing=lambda: events.append("raw"),
+    )
+
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=False, ports=ports)
+    assert events == []
+    assert controller.analysis_transitioning
+    assert controller.analysis_snapshot().worker == "fatigue"
+    assert controller.pipeline_snapshot().running
+    assert controller.pipeline_snapshot().recording
+    assert not controller.pipeline_snapshot().cleanup_pending
+    with pytest.raises(RuntimeError, match="transition"):
+        controller.activate_current_analysis(ports)
+    with pytest.raises(RuntimeError, match="transition"):
+        controller.start_recording()
+    with pytest.raises(RuntimeError, match="transition"):
+        controller.start_pipeline()
+    joined = True
+    controller.advance_analysis_transition(ports)
+    assert events == ["rppg"]
+    assert not controller.analysis_transitioning
+    assert controller.analysis_snapshot().worker == "rppg"
+
+
+def test_failed_analysis_start_waits_for_partial_worker_before_rollback() -> None:
+    controller = EngineController()
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    joined = True
+    events = []
+
+    def start_rppg():
+        nonlocal joined
+        joined = False
+        events.append("new.failed")
+        raise RuntimeError("start failed")
+
+    ports = AnalysisLifecyclePorts(
+        stop_all=lambda: joined,
+        start_combined=lambda: None,
+        start_rppg=start_rppg,
+        start_fatigue=lambda: events.append("old.restored"),
+        restore_raw_routing=lambda: None,
+    )
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=False, ports=ports)
+    assert events == ["new.failed"]
+    assert controller.analysis_transitioning
+    assert controller.pipeline_snapshot().running
+    joined = True
+    with pytest.raises(RuntimeError, match="start failed"):
+        controller.advance_analysis_transition(ports)
+    assert events == ["new.failed", "old.restored"]
+    assert not controller.analysis_transitioning
+    assert controller.analysis_snapshot().worker == "fatigue"
+
+
+@pytest.mark.parametrize("stop_method", ["stop_pipeline", "mark_pipeline_cleanup_pending"])
+def test_pipeline_stop_cancels_pending_analysis_target(stop_method) -> None:
+    controller = EngineController()
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    events = []
+    ports = AnalysisLifecyclePorts(
+        stop_all=lambda: False,
+        start_combined=lambda: events.append("combined"),
+        start_rppg=lambda: events.append("rppg"),
+        start_fatigue=lambda: events.append("fatigue"),
+        restore_raw_routing=lambda: events.append("raw"),
+    )
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True, ports=ports)
+    getattr(controller, stop_method)()
+    controller.advance_analysis_transition(ports)
+    assert not controller.analysis_transitioning
+    assert events == []
+
+
+@pytest.mark.parametrize("previous", [(False, False), (False, True), (True, False), (True, True)])
+@pytest.mark.parametrize("target", [(False, False), (False, True), (True, False), (True, True)])
+def test_all_analysis_modes_wait_for_old_worker_without_overlap(previous, target) -> None:
+    controller = EngineController()
+    controller.configure_analysis(rppg_enabled=previous[0], fatigue_enabled=previous[1])
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    released = False
+    starts = []
+    ports = AnalysisLifecyclePorts(
+        stop_all=lambda: released,
+        start_combined=lambda: starts.append("combined"),
+        start_rppg=lambda: starts.append("rppg"),
+        start_fatigue=lambda: starts.append("fatigue"),
+        restore_raw_routing=lambda: starts.append("none"),
+    )
+    controller.configure_analysis(rppg_enabled=target[0], fatigue_enabled=target[1], ports=ports)
+    assert starts == []
+    assert controller.analysis_transitioning is (previous != target)
+    released = True
+    controller.advance_analysis_transition(ports)
+    expected = controller.analysis_plan(rppg_enabled=target[0], fatigue_enabled=target[1])
+    assert controller.analysis_snapshot() == expected
+    assert starts == ([] if previous == target else [expected.worker])
+
+
+def test_pending_transition_rejects_conflict_and_cancel_restores_previous_mode() -> None:
+    controller = EngineController()
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    released = False
+    starts = []
+    ports = AnalysisLifecyclePorts(
+        stop_all=lambda: released,
+        start_combined=lambda: starts.append("combined"),
+        start_rppg=lambda: starts.append("rppg"),
+        start_fatigue=lambda: starts.append("fatigue"),
+        restore_raw_routing=lambda: None,
+    )
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True, ports=ports)
+    controller.configure_analysis(rppg_enabled=True, fatigue_enabled=True, ports=ports)
+    with pytest.raises(RuntimeError, match="pending"):
+        controller.configure_analysis(rppg_enabled=True, fatigue_enabled=False, ports=ports)
+    controller.cancel_analysis_transition()
+    released = True
+    controller.advance_analysis_transition(ports)
+    assert starts == ["fatigue"]
+    assert controller.analysis_snapshot().worker == "fatigue"
 
 
 def test_recording_lifecycle_rejects_start_without_pipeline() -> None:
@@ -213,7 +350,7 @@ def test_analysis_lifecycle_ports_preserve_worker_start_and_restart_order() -> N
     controller.replace_cameras([CameraDevice(0, "Camera")])
     events: list[str] = []
     ports = AnalysisLifecyclePorts(
-        stop_all=lambda: events.append("stop"),
+        stop_all=lambda: events.append("stop") or True,
         start_combined=lambda: events.append("combined"),
         start_rppg=lambda: events.append("rppg"),
         start_fatigue=lambda: events.append("fatigue"),
@@ -257,7 +394,7 @@ def test_repeating_current_analysis_plan_does_not_restart_workers() -> None:
     controller.start_pipeline()
     events: list[str] = []
     ports = AnalysisLifecyclePorts(
-        stop_all=lambda: events.append("stop"),
+        stop_all=lambda: events.append("stop") or True,
         start_combined=lambda: events.append("combined"),
         start_rppg=lambda: events.append("rppg"),
         start_fatigue=lambda: events.append("fatigue"),
@@ -286,7 +423,7 @@ def test_analysis_reconcile_rolls_back_worker_and_snapshot_on_start_failure() ->
         raise RuntimeError("worker failed")
 
     ports = AnalysisLifecyclePorts(
-        stop_all=lambda: events.append("stop"),
+        stop_all=lambda: events.append("stop") or True,
         start_combined=lambda: events.append("combined"),
         start_rppg=fail_rppg,
         start_fatigue=lambda: events.append("fatigue"),
@@ -318,7 +455,7 @@ def test_analysis_reconcile_fails_closed_when_worker_rollback_also_fails() -> No
         return callback
 
     ports = AnalysisLifecyclePorts(
-        stop_all=lambda: None,
+        stop_all=lambda: True,
         start_combined=fail("rollback failed"),
         start_rppg=fail("new worker failed"),
         start_fatigue=lambda: None,
@@ -353,7 +490,7 @@ def test_analysis_reconcile_fails_closed_when_initial_stop_fails() -> None:
         restore_raw_routing=lambda: None,
     )
 
-    with pytest.raises(RuntimeError, match="rollback failed"):
+    with pytest.raises(RuntimeError, match="stop failed"):
         controller.configure_analysis(
             rppg_enabled=True,
             fatigue_enabled=False,

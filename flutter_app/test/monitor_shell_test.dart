@@ -41,14 +41,66 @@ class _StartingBackend extends BackendService {
   }
 }
 
-Future<void> _pumpShell(WidgetTester tester, _StartingBackend backend) async {
+Future<void> _pumpShell(WidgetTester tester, _StartingBackend backend,
+    {Future<bool> Function()? isBackendStarting}) async {
   await tester.binding.setSurfaceSize(const Size(1280, 820));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  await tester.pumpWidget(MaterialApp(home: MonitorShell(backend: backend)));
+  await tester.pumpWidget(MaterialApp(home: MonitorShell(backend: backend,
+      isBackendStarting: isBackendStarting)));
   await tester.pump();
 }
 
 void main() {
+  testWidgets('native cold loading remains visible until control API is ready',
+      (tester) async {
+    final backend = _StartingBackend();
+    await _pumpShell(tester, backend, isBackendStarting: () async => true);
+    expect(find.textContaining('畫面已開啟，監測服務正在載入'), findsOneWidget);
+    expect(find.text('監測服務暫時無法連線，請稍後重試。'), findsNothing);
+    expect(backend.recordingRequests, 0);
+    await tester.pump(const Duration(seconds: 40));
+    await tester.pump();
+    expect(find.textContaining('畫面已開啟，監測服務正在載入'), findsOneWidget);
+    backend.ready = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.textContaining('畫面已開啟，監測服務正在載入'), findsNothing);
+    expect(backend.recordingRequests, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('unresolved native status keeps only one bridge request',
+      (tester) async {
+    final backend = _StartingBackend();
+    final pending = Completer<bool>();
+    var queries = 0;
+    await _pumpShell(tester, backend, isBackendStarting: () {
+      queries++;
+      return pending.future;
+    });
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+    }
+    expect(queries, 1);
+    pending.complete(false);
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('native startup completion without API shows a connection error',
+      (tester) async {
+    final backend = _StartingBackend();
+    var starting = true;
+    await _pumpShell(tester, backend, isBackendStarting: () async => starting);
+    starting = false;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.textContaining('畫面已開啟，監測服務正在載入'), findsNothing);
+    expect(find.text('監測服務暫時無法連線，請稍後重試。'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('metrics before engine readiness do not skip the recordings load',
       (tester) async {
     final backend = _StartingBackend();

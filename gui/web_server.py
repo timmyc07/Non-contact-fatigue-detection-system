@@ -16,10 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Optional, Callable, cast
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from flask import Flask, jsonify, request, Response, send_file, abort
 from flask_socketio import SocketIO, emit
+from werkzeug.http import dump_options_header
 from werkzeug.serving import make_server
 import gzip
 import re
@@ -454,9 +455,9 @@ def create_app(
     access_token: Optional[str] = None,
     control_handler: Optional[Callable[[str, dict[str, Any]], dict[str, Any]]] = None,
 ) -> tuple[Flask, SocketIO]:
-    _fb_client = FileBrowserClient()
     _fb_lock = threading.Lock()
     _fb_cache_dir = playback_manager.recordings_dir / ".fb_cache"
+    _fb_client = FileBrowserClient(_fb_cache_dir)
 
     def resolve_allowed_db_path(raw_db_path: str) -> Optional[Path]:
         candidate = Path(raw_db_path).expanduser().resolve(strict=False)
@@ -885,7 +886,7 @@ def create_app(
         if ".." in remote_path or "/" in remote_path or remote_path.startswith("\\"):
             return jsonify({"success": False, "error": "不合法的路徑"}), 400
         try:
-            local_path = _fb_client.download_db(remote_path, _fb_cache_dir)
+            local_path = _fb_client.download_db(remote_path)
             return jsonify({"success": True, "db_path": str(local_path)})
         except Exception:
             logger.exception("下載 File Browser 錄製資料庫失敗: %s", remote_path)
@@ -1007,7 +1008,8 @@ def create_app(
         if not filename or ".." in filename or "/" in filename or filename.startswith("\\"):
             return jsonify({"success": False, "error": "不合法的檔名"}), 400
         try:
-            resp = _fb_client._request("DELETE", f"/api/resources/{filename}")
+            resource_path = _fb_client._normalize_remote_path(filename)
+            resp = _fb_client._request("DELETE", f"/api/resources/{quote(resource_path, safe='/')}")
             if resp.status_code in (200, 204):
                 return jsonify({"success": True})
             return jsonify({"success": False, "error": f"HTTP {resp.status_code}"}), 500
@@ -1024,7 +1026,8 @@ def create_app(
             return jsonify({"success": False, "error": "不合法的檔名"}), 400
         fb_resp = None
         try:
-            fb_resp = _fb_client._request("GET", f"/api/raw/{filename}", stream=True, timeout=300)
+            resource_path = _fb_client._normalize_remote_path(filename)
+            fb_resp = _fb_client._request("GET", f"/api/raw/{quote(resource_path, safe='/')}", stream=True, timeout=300)
             fb_resp.raise_for_status()
         except Exception:
             if fb_resp is not None:
@@ -1042,7 +1045,9 @@ def create_app(
 
         mime = "video/mp4" if filename.endswith(".mp4") else "application/octet-stream"
         headers = {
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": dump_options_header(
+                "attachment", {"filename*": "UTF-8''" + quote(filename, safe="")},
+            ),
             "Content-Type": mime,
         }
         if "Content-Length" in fb_resp.headers:

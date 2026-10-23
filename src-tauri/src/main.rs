@@ -28,6 +28,7 @@ struct DesktopShutdown(AtomicBool);
 const DESKTOP_CONTROL_API_VERSION: u64 = 2;
 const WINDOWS_LINUX_BACKEND_PORT: u16 = 5000;
 const MACOS_BACKEND_PORT: u16 = 5055;
+const BACKEND_STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Serialize)]
 struct SystemInfo {
@@ -76,6 +77,16 @@ fn get_system_info() -> SystemInfo {
         arch: std::env::consts::ARCH.to_owned(),
         tauri_version: env!("CARGO_PKG_VERSION").to_owned(),
     }
+}
+
+#[tauri::command]
+fn is_backend_starting(
+    backend: tauri::State<'_, BackendProcess>,
+    shutdown: tauri::State<'_, DesktopShutdown>,
+) -> bool {
+    !shutdown.0.load(Ordering::Acquire)
+        && backend.startup.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref().is_some_and(|startup| !startup.is_finished())
 }
 
 #[tauri::command]
@@ -355,6 +366,9 @@ fn backend_api_version_from_response(response: &str) -> Option<u64> {
         return None;
     }
     let payload: serde_json::Value = serde_json::from_str(body).ok()?;
+    if payload.get("success")?.as_bool()? != true {
+        return None;
+    }
     payload
         .get("data")?
         .get("desktop_api_version")?
@@ -362,23 +376,68 @@ fn backend_api_version_from_response(response: &str) -> Option<u64> {
 }
 
 fn backend_api_compatible() -> bool {
-    let Ok(mut stream) = TcpStream::connect_timeout(&backend_address(), Duration::from_millis(500)) else {
+    backend_api_compatible_with_budget(Duration::from_secs(2))
+}
+
+fn probe_timeout(deadline: Instant, maximum: Duration) -> Option<Duration> {
+    deadline.checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .map(|remaining| remaining.min(maximum))
+}
+
+fn backend_api_compatible_with_budget(budget: Duration) -> bool {
+    let deadline = Instant::now() + budget.min(Duration::from_secs(2));
+    let Some(connect_timeout) = probe_timeout(deadline, Duration::from_millis(500)) else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let Ok(mut stream) = TcpStream::connect_timeout(&backend_address(), connect_timeout) else {
+        return false;
+    };
     let request = format!(
         "GET /api/control/state HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         backend_address()
     );
-    if stream.write_all(request.as_bytes()).is_err() || stream.flush().is_err() {
-        return false;
+    let mut pending = request.as_bytes();
+    while !pending.is_empty() {
+        let Some(timeout) = probe_timeout(deadline, Duration::from_secs(1)) else {
+            return false;
+        };
+        if stream.set_write_timeout(Some(timeout)).is_err() {
+            return false;
+        }
+        match stream.write(pending) {
+            Ok(0) | Err(_) => return false,
+            Ok(written) => pending = &pending[written..],
+        }
     }
-    let mut response = String::new();
-    if stream.read_to_string(&mut response).is_err() {
-        return false;
+    read_backend_api_response(&mut stream, deadline)
+}
+
+fn read_backend_api_response(stream: &mut TcpStream, deadline: Instant) -> bool {
+    let read_deadline = deadline.min(Instant::now() + Duration::from_secs(1));
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let Some(timeout) = probe_timeout(read_deadline, Duration::from_secs(1)) else {
+            return false;
+        };
+        if stream.set_read_timeout(Some(timeout)).is_err() {
+            return false;
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                if response.len() + read > 64 * 1024 {
+                    return false;
+                }
+                response.extend_from_slice(&buffer[..read]);
+            }
+            Err(_) => return false,
+        }
     }
-    backend_api_version_from_response(&response) == Some(DESKTOP_CONTROL_API_VERSION)
+    Instant::now() < read_deadline
+        && std::str::from_utf8(&response).ok().and_then(backend_api_version_from_response)
+            == Some(DESKTOP_CONTROL_API_VERSION)
 }
 
 fn project_root() -> PathBuf {
@@ -513,24 +572,41 @@ fn ensure_startup_active(shutting_down: &AtomicBool) -> Result<(), String> {
 fn wait_for_backend_startup(
     child: &mut Child,
     shutting_down: &AtomicBool,
-    mut ready: impl FnMut() -> bool,
+    ready: impl FnMut(Duration) -> bool,
+) -> Result<(), String> {
+    let started = Instant::now();
+    wait_for_backend_startup_with_clock(
+        child, shutting_down, ready, || started.elapsed(), thread::sleep,
+    )
+}
+
+fn wait_for_backend_startup_with_clock(
+    child: &mut Child,
+    shutting_down: &AtomicBool,
+    mut ready: impl FnMut(Duration) -> bool,
+    mut elapsed: impl FnMut() -> Duration,
+    mut pause: impl FnMut(Duration),
 ) -> Result<(), String> {
     let result = (|| {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < deadline {
+        while elapsed() < BACKEND_STARTUP_TIMEOUT {
             ensure_startup_active(shutting_down)?;
-            if ready() {
-                ensure_startup_active(shutting_down)?;
+            let remaining = BACKEND_STARTUP_TIMEOUT.saturating_sub(elapsed());
+            let compatible = ready(remaining);
+            ensure_startup_active(shutting_down)?;
+            if elapsed() >= BACKEND_STARTUP_TIMEOUT {
+                break;
+            }
+            if compatible {
                 return Ok(());
             }
             if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
                 return Err(format!("Python engine exited before startup: {status}"));
             }
-            thread::sleep(Duration::from_millis(150));
+            pause(Duration::from_millis(150).min(BACKEND_STARTUP_TIMEOUT.saturating_sub(elapsed())));
         }
         Err(format!(
-            "Python engine did not open port {} within 20 seconds",
-            backend_address().port()
+            "Python engine API did not become ready on port {} within {} seconds",
+            backend_address().port(), BACKEND_STARTUP_TIMEOUT.as_secs()
         ))
     })();
     if result.is_err() {
@@ -605,7 +681,7 @@ fn spawn_backend(
         .spawn()
         .map_err(|error| format!("failed to start Python engine: {error}"))?;
 
-    wait_for_backend_startup(&mut child, shutting_down, backend_api_compatible)?;
+    wait_for_backend_startup(&mut child, shutting_down, backend_api_compatible_with_budget)?;
     Ok(Some(child))
 }
 
@@ -770,6 +846,7 @@ fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
+            is_backend_starting,
             minimize_window,
             toggle_maximize_window,
             close_window,
@@ -824,15 +901,19 @@ mod tests {
         bundled_resource_root, engine_path_for_mode, isolate_backend_process_tree,
         join_backend_startup, kill_backend_process_tree, path_to_frontend_string,
         validate_external_directory, validate_external_url, validate_overlay_geometry,
-        wait_for_backend_startup, BackendProcess, DesktopShutdown, OverlayGeometry,
+        wait_for_backend_startup, wait_for_backend_startup_with_clock, BackendProcess,
+        DesktopShutdown, OverlayGeometry, BACKEND_STARTUP_TIMEOUT, read_backend_api_response,
     };
     use std::fs;
+    use std::cell::Cell;
     use std::path::Path;
+    use std::net::{TcpListener, TcpStream};
+    use std::io::Write;
     use std::process::{Child, Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
     use std::thread;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn startup_probe_child() -> Child {
         let mut command = Command::new(std::env::current_exe().expect("test executable"));
@@ -856,9 +937,96 @@ mod tests {
     }
 
     #[test]
+    fn cold_engine_can_become_ready_after_forty_seconds() {
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut child = startup_probe_child();
+        let result = wait_for_backend_startup_with_clock(
+            &mut child, &AtomicBool::new(false),
+            |_| elapsed.get() >= Duration::from_secs(40),
+            || elapsed.get(),
+            |duration| elapsed.set(elapsed.get() + duration),
+        );
+        kill_backend_process_tree(&mut child);
+        child.wait().expect("probe child reaped");
+        assert!(result.is_ok(), "cold engine should remain owned until ready: {result:?}");
+    }
+
+    #[test]
+    fn startup_deadline_reaps_child_and_passes_only_remaining_budget() {
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut child = startup_probe_child();
+        let result = wait_for_backend_startup_with_clock(
+            &mut child, &AtomicBool::new(false),
+            |remaining| {
+                assert_eq!(remaining, BACKEND_STARTUP_TIMEOUT - elapsed.get());
+                elapsed.set(elapsed.get() + remaining.min(Duration::from_secs(7)));
+                false
+            },
+            || elapsed.get(),
+            |duration| elapsed.set(elapsed.get() + duration),
+        );
+        assert_eq!(elapsed.get(), BACKEND_STARTUP_TIMEOUT);
+        assert!(result.expect_err("bounded startup").contains("90 seconds"));
+        assert!(child.try_wait().expect("reaped child").is_some());
+    }
+
+    #[test]
+    fn exited_startup_child_does_not_wait_out_deadline() {
+        let mut child = startup_probe_child();
+        kill_backend_process_tree(&mut child);
+        child.wait().expect("child exited");
+        let result = wait_for_backend_startup_with_clock(
+            &mut child, &AtomicBool::new(false), |_| false,
+            || Duration::ZERO,
+            |_| panic!("exited child must not wait again"),
+        );
+        assert!(result.expect_err("exited startup").contains("exited before startup"));
+    }
+
+    #[test]
+    fn response_peer_cannot_hold_startup_probe_past_remaining_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
+        let address = listener.local_addr().expect("probe address");
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept probe");
+            stream.write_all(b"HTTP/1.1 200 OK\r\n").expect("partial response");
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        });
+        let mut stream = TcpStream::connect(address).expect("probe connection");
+        let started = Instant::now();
+        let compatible = read_backend_api_response(&mut stream, started + Duration::from_millis(100));
+        let elapsed = started.elapsed();
+        let _ = release_tx.send(());
+        server.join().expect("probe server");
+        assert!(!compatible);
+        assert!(elapsed < Duration::from_secs(3), "probe ignored remaining budget: {elapsed:?}");
+    }
+
+    #[test]
+    fn readiness_response_requires_success_and_has_a_size_limit() {
+        let valid = "HTTP/1.1 200 OK\r\n\r\n{\"success\":true,\"data\":{\"desktop_api_version\":2}}";
+        let oversized = format!("HTTP/1.1 200 OK\r\n\r\n{{\"success\":true,\"data\":{{\"desktop_api_version\":2}},\"padding\":\"{}\"}}", "x".repeat(64 * 1024));
+        let failed = valid.replace("true", "false");
+        for (response, expected) in [(valid.to_owned(), true), (oversized, false), (failed, false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
+            let address = listener.local_addr().expect("probe address");
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept probe");
+                let _ = stream.write_all(response.as_bytes());
+            });
+            let mut stream = TcpStream::connect(address).expect("probe connection");
+            let compatible = read_backend_api_response(&mut stream, Instant::now() + Duration::from_secs(2));
+            drop(stream);
+            server.join().expect("probe server");
+            assert_eq!(compatible, expected);
+        }
+    }
+
+    #[test]
     fn cancelled_startup_kills_and_reaps_child_without_another_probe() {
         let mut child = startup_probe_child();
-        let result = wait_for_backend_startup(&mut child, &AtomicBool::new(true), || {
+        let result = wait_for_backend_startup(&mut child, &AtomicBool::new(true), |_| {
             panic!("cancelled startup must not probe the backend")
         });
 
@@ -875,7 +1043,7 @@ mod tests {
         let (finished_tx, finished_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
             let mut child = startup_probe_child();
-            let result = wait_for_backend_startup(&mut child, &worker_shutdown, || {
+            let result = wait_for_backend_startup(&mut child, &worker_shutdown, |_| {
                 probing_tx.send(()).expect("probe notification");
                 release_rx.recv().expect("probe release");
                 true

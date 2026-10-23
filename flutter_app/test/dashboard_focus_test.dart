@@ -39,6 +39,69 @@ Future<void> _pumpDashboard(
 }
 
 void main() {
+  testWidgets('camera permission waiting explains automatic discovery',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: SingleChildScrollView(child: DesktopControlPanel(
+      state: const {
+        'camera_permission_pending': true,
+        'camera_scanning': true,
+        'selected_camera_index': 0,
+        'cameras': [{'index': 0, 'label': 'Previously found camera'}],
+      },
+      busy: false, onCommand: (_, [__]) async {},
+    )))));
+    expect(find.text('請在系統提示中允許相機，授權後將自動搜尋。'), findsOneWidget);
+    expect(find.text('正在搜尋攝影機…'), findsNothing);
+    expect(tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '開始監測')).onPressed, isNull);
+    expect(tester.widget<TextButton>(
+        find.widgetWithText(TextButton, '刷新攝影機')).onPressed, isNull);
+  });
+
+  testWidgets('analysis transition blocks starts and keeps stop available',
+      (tester) async {
+    Future<void> pump(bool recording) async => tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: SingleChildScrollView(child: DesktopControlPanel(
+      state: {'pipeline_running': true, 'analysis_transitioning': true,
+        'recording': recording},
+      busy: false, onCommand: (_, [__]) async {},
+    )))));
+    await pump(false);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, '停止監測')).onPressed, isNotNull);
+    expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '開始記錄')).onPressed, isNull);
+    await pump(true);
+    expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '停止記錄')).onPressed, isNotNull);
+  });
+
+  testWidgets('pending auto capture can be cancelled during analysis transition',
+      (tester) async {
+    final calls = <(String, Map<String, dynamic>?)>[];
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+        child: DesktopControlPanel(state: const {
+          'auto_capture_starting': true, 'analysis_transitioning': true,
+        }, busy: false, onCommand: (command, [args]) async => calls.add((command, args)))))));
+    await tester.pumpAndSettle();
+    final cancel = find.widgetWithText(OutlinedButton, '取消啟動');
+    await tester.ensureVisible(cancel);
+    await tester.tap(cancel);
+    expect(calls.single.$1, 'auto_capture.set');
+    expect(calls.single.$2, {'enabled': false,
+      'duration_seconds': 60, 'include_belt': false});
+  });
+
+  testWidgets('pipeline cleanup blocks camera selection and pipeline restart',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+        child: DesktopControlPanel(state: const {
+          'pipeline_cleanup_pending': true, 'selected_camera_index': 0,
+          'cameras': [{'index': 0, 'label': 'Test camera'}],
+        }, busy: false, onCommand: (_, [__]) async {})))));
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, '開始監測')).onPressed, isNull);
+    expect(tester.widget<DropdownButtonFormField<int>>(find.byType(DropdownButtonFormField<int>).first).onChanged, isNull);
+    expect(tester.widget<TextButton>(find.widgetWithText(TextButton, '刷新攝影機')).onPressed, isNull);
+  });
+
   testWidgets('camera discovery shows progress and disables capture starts',
       (tester) async {
     await tester.pumpWidget(MaterialApp(

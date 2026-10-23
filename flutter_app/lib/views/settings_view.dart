@@ -14,6 +14,9 @@ class SettingsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
+    final transitioning = state['analysis_transitioning'] == true ||
+        state['auto_capture_starting'] == true;
+    final cleanupPending = state['pipeline_cleanup_pending'] == true;
     final dirty = state['settings_dirty'] == true;
     final settingsKnown = state['settings_dirty'] is bool;
     final opacity = (state['overlay_opacity'] as num?)?.toDouble() ?? 55;
@@ -50,7 +53,7 @@ class SettingsView extends StatelessWidget {
                           color: dirty ? const Color(0xffe9c46a) : kMutedInk)),
                 ])),
             FilledButton.icon(
-                onPressed: busy ? null : () => onCommand('settings.save'),
+                onPressed: busy || transitioning ? null : () => onCommand('settings.save'),
                 icon: const Icon(Icons.save_outlined, size: 18),
                 label: const Text('儲存設定')),
           ]),
@@ -68,11 +71,14 @@ class SettingsView extends StatelessWidget {
                       children: [
                     const PanelSectionTitle(
                         title: '分析與記錄', subtitle: '依使用需求選擇分析項目，可在監測中調整。'),
+                    if (transitioning)
+                      const Text('正在切換分析，完成後即可調整。',
+                          style: TextStyle(color: kMutedInk, fontSize: 12)),
                     _SettingSwitch(
                       title: '行為警覺分析',
                       subtitle: '頭部姿態、眨眼、哈欠、注視與疲勞融合',
                       value: state['behavior_enabled'] == true,
-                      enabled: !busy,
+                      enabled: !busy && !transitioning,
                       onChanged: (value) => onCommand('analysis.configure',
                           <String, dynamic>{'behavior_enabled': value}),
                     ),
@@ -81,7 +87,7 @@ class SettingsView extends StatelessWidget {
                       title: 'rPPG / HRV 分析',
                       subtitle: '非接觸式心率、HRV 與訊號品質',
                       value: state['rppg_enabled'] == true,
-                      enabled: !busy,
+                      enabled: !busy && !transitioning,
                       onChanged: (value) => onCommand('analysis.configure',
                           <String, dynamic>{'rppg_enabled': value}),
                     ),
@@ -98,7 +104,7 @@ class SettingsView extends StatelessWidget {
                         title: '心跳帶真值校準',
                         subtitle: '僅校正 rPPG，不直接改變疲勞融合權重',
                         value: state['belt_calibration'] == true,
-                        enabled: !busy,
+                        enabled: !busy && (!transitioning || state['belt_calibration'] == true),
                         onChanged: (value) => onCommand('preferences.configure',
                             <String, dynamic>{'belt_calibration': value})),
                   ])),
@@ -121,7 +127,7 @@ class SettingsView extends StatelessWidget {
                           '1280×800',
                           '1920×1080（1080p）'
                         ],
-                        enabled: !busy && !running,
+                        enabled: !busy && !running && !cleanupPending,
                         onChanged: (value) => onCommand('camera.configure',
                             <String, dynamic>{'resolution': value})),
                     const SizedBox(height: 18),
@@ -137,7 +143,7 @@ class SettingsView extends StatelessWidget {
                         label: '影像後端',
                         value: state['backend']?.toString(),
                         values: const ['ffmpeg'],
-                        enabled: !busy && !running,
+                        enabled: !busy && !running && !cleanupPending,
                         onChanged: (value) => onCommand('camera.configure',
                             <String, dynamic>{'backend': value})),
                     const SizedBox(height: 10),
@@ -145,7 +151,7 @@ class SettingsView extends StatelessWidget {
                         title: '水平翻轉',
                         subtitle: '修正鏡像攝影機方向',
                         value: state['horizontal_flip'] == true,
-                        enabled: !busy && !running,
+                        enabled: !busy && !running && !cleanupPending,
                         onChanged: (value) => onCommand('camera.configure',
                             <String, dynamic>{'horizontal_flip': value})),
                   ])),
@@ -202,7 +208,7 @@ class SettingsView extends StatelessWidget {
                         title: '個人化與警報', subtitle: '管理個人資料、清醒基線與提醒方式。'),
                     Wrap(spacing: 10, runSpacing: 10, children: [
                       OutlinedButton.icon(
-                          onPressed: busy || !running
+                        onPressed: busy || !running || transitioning
                               ? null
                               : () => onCommand('baseline.start'),
                           icon: const Icon(Icons.person_search_outlined),
@@ -283,21 +289,21 @@ class SettingsView extends StatelessWidget {
                         title: '重設設定', subtitle: '恢復指定項目的預設值，執行前會再次確認。'),
                     Wrap(spacing: 10, runSpacing: 10, children: [
                       OutlinedButton.icon(
-                          onPressed: busy || !hotkeysSupported
+                          onPressed: busy || transitioning || !hotkeysSupported
                               ? null
                               : () => _confirmSettingsReset(
                                   context, const ['hotkeys'], onCommand),
                           icon: const Icon(Icons.restore),
                           label: const Text('重設快捷鍵')),
                       OutlinedButton.icon(
-                          onPressed: busy
+                          onPressed: busy || transitioning
                               ? null
                               : () => _confirmSettingsReset(
                                   context, const ['user_profile'], onCommand),
                           icon: const Icon(Icons.restore),
                           label: const Text('重設使用者資料')),
                       OutlinedButton.icon(
-                          onPressed: busy
+                          onPressed: busy || transitioning
                               ? null
                               : () => _confirmSettingsReset(
                                   context, const ['alarm'], onCommand),
@@ -311,7 +317,7 @@ class SettingsView extends StatelessWidget {
                         style: OutlinedButton.styleFrom(
                             foregroundColor: const Color(0xffefa5a2),
                             side: const BorderSide(color: Color(0x66efa5a2))),
-                        onPressed: busy
+                        onPressed: busy || transitioning || cleanupPending
                             ? null
                             : () => _confirmSettingsReset(
                                 context,

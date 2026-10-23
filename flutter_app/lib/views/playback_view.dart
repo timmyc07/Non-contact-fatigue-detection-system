@@ -197,6 +197,7 @@ class _ReplayControlPanelState extends State<_ReplayControlPanel> {
   Widget build(BuildContext context) {
     final running = widget.state['replay_running'] == true;
     final stopping = widget.state['replay_stopping'] == true;
+    final cleanupPending = widget.state['pipeline_cleanup_pending'] == true;
     final jobs = (widget.state['replay_jobs'] as num?)?.toInt() ?? 2;
     final annotated = widget.state['replay_annotated'] == true;
     final total = (widget.state['replay_total'] as num?)?.toInt() ?? 0;
@@ -281,14 +282,14 @@ class _ReplayControlPanelState extends State<_ReplayControlPanel> {
         const SizedBox(height: 12),
         Wrap(spacing: 10, runSpacing: 10, children: [
           FilledButton.icon(
-              onPressed: running || widget.busy
+              onPressed: running || widget.busy || cleanupPending
                   ? null
                   : () => widget.onCommand('replay.set',
                       <String, dynamic>{'enabled': true, 'mode': 'single'}),
               icon: const Icon(Icons.play_arrow),
               label: const Text('開始批次')),
           OutlinedButton.icon(
-              onPressed: running || widget.busy
+              onPressed: running || widget.busy || cleanupPending
                   ? null
                   : () => widget.onCommand('replay.set',
                       <String, dynamic>{'enabled': true, 'mode': 'parallel'}),

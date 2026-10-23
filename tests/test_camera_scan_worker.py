@@ -8,6 +8,46 @@ from gui import camera_devices
 from gui.camera_scan_worker import CameraScanWorker
 
 
+def test_permission_probe_opens_only_avfoundation_and_always_releases(monkeypatch) -> None:
+    from gui.camera_devices import request_macos_camera_permission
+
+    opened, released = [], []
+
+    class Capture:
+        def read(self):
+            pytest.fail("Permission request must not read frames")
+
+        def release(self):
+            released.append(True)
+
+    monkeypatch.setattr(camera_devices.cv2, "VideoCapture", lambda index, api: opened.append((index, api)) or Capture())
+    request_macos_camera_permission()
+    assert opened == [(0, camera_devices.cv2.CAP_AVFOUNDATION)]
+    assert released == [True]
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_permission_worker_requests_once_without_discovery_and_finishes(monkeypatch, failure) -> None:
+    calls, results, errors, finished = [], [], [], []
+
+    def request_permission():
+        calls.append(True)
+        if failure:
+            raise OSError("Permission backend unavailable")
+
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", request_permission, raising=False)
+    monkeypatch.setattr(camera_devices, "list_camera_devices", lambda **_: pytest.fail("Permission probe cannot enumerate cameras"))
+    worker = CameraScanWorker(permission_only=True)
+    worker.succeeded.connect(lambda _worker, devices: results.append(devices))
+    worker.failed.connect(lambda _worker, message: errors.append(message))
+    worker.finished.connect(lambda: finished.append(True))
+    worker.run()
+    assert calls == [True]
+    assert results == ([] if failure else [None])
+    assert errors == (["Permission backend unavailable"] if failure else [])
+    assert finished == [True]
+
+
 @pytest.mark.parametrize("failure", [False, True])
 def test_scan_stop_suppresses_results_and_finishes(
     monkeypatch: pytest.MonkeyPatch, failure: bool
@@ -35,14 +75,16 @@ def test_scan_stop_suppresses_results_and_finishes(
     assert finished == [True]
 
 
+@pytest.mark.parametrize("permission_only", [False, True])
 def test_scan_stopped_before_start_does_not_open_camera(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, permission_only: bool,
 ) -> None:
     def unexpected_probe(**_kwargs: Any) -> None:
         pytest.fail("Stopped discovery must not probe camera hardware")
 
     monkeypatch.setattr(camera_devices, "list_camera_devices", unexpected_probe)
-    worker = CameraScanWorker()
+    monkeypatch.setattr(camera_devices, "request_macos_camera_permission", unexpected_probe)
+    worker = CameraScanWorker(permission_only=permission_only)
     finished: list[bool] = []
     worker.finished.connect(lambda: finished.append(True))
     worker.request_stop()

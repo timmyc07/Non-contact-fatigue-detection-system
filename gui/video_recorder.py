@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import math
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -33,7 +34,10 @@ class VideoRecorderWorker(QObject):
         super().__init__()
         self._queue = frame_queue
         self._output_path = Path(output_path)
-        self._fps = float(fps) if fps > 0 else 30.0
+        self._fps = float(fps) if math.isfinite(fps) and fps > 0 else 30.0
+        self._started_at = time.perf_counter()
+        self._stopped_at: float | None = None
+        self._frames_written = 0
         self._stop = False
         self._proc: Optional[subprocess.Popen] = None
         self._writer: Optional[Any] = None
@@ -52,6 +56,7 @@ class VideoRecorderWorker(QObject):
         with self._encoder_lock:
             if self._stop or self._finished.is_set():
                 return
+            self._stopped_at = time.perf_counter()
             self._stop = True
         self._arm_stop_watchdog()
 
@@ -125,7 +130,7 @@ class VideoRecorderWorker(QObject):
             "-s",
             f"{width}x{height}",
             "-r",
-            f"{self._fps:.2f}",
+            str(self._fps),
             "-i",
             "-",
             "-an",
@@ -186,19 +191,32 @@ class VideoRecorderWorker(QObject):
             return
 
         first_frame_deadline = time.monotonic() + 3.0
+        previous_frame: np.ndarray | None = None
+        previous_timestamp = self._started_at
 
-        while not self._stop:
+        while True:
             try:
-                _ts, frame = self._queue.get(timeout=0.2)
+                timestamp, frame = (
+                    self._queue.get_nowait() if self._stop else self._queue.get(timeout=0.2)
+                )
             except queue.Empty:
+                if self._stop:
+                    break
                 if not self._started and time.monotonic() > first_frame_deadline:
                     self._fail("錄影未收到影像，請確認相機預覽與管線已啟動。")
-                    break
+                    return
                 continue
 
-            if self._stop:
-                break
             if frame is None:
+                continue
+            if (
+                not math.isfinite(timestamp)
+                or timestamp < previous_timestamp
+                or timestamp > time.perf_counter() + 1e-6
+            ):
+                self._fail("影像時間戳無效，已停止錄影以避免時間軸錯誤。")
+                return
+            if self._stopped_at is not None and timestamp > self._stopped_at:
                 continue
 
             if isinstance(frame, QImage):
@@ -220,7 +238,7 @@ class VideoRecorderWorker(QObject):
 
             if not isinstance(frame, np.ndarray):
                 self._fail("影像格式不支援，無法建立影片檔。")
-                break
+                return
 
             if self._proc is None and self._writer is None:
                 self._width = int(frame.shape[1])
@@ -236,35 +254,46 @@ class VideoRecorderWorker(QObject):
                     if self._writer is None:
                         self._fail("找不到 ffmpeg，且 OpenCV VideoWriter 無法啟動。")
                         break
-                if self._stop:
-                    break
                 self._started = True
                 self.started.emit(str(self._output_path))
+                if self._stop:
+                    self._arm_stop_watchdog()
 
             if self._proc is not None and self._proc.poll() is not None:
-                try:
-                    if self._proc.stdin is not None:
-                        self._proc.stdin.close()
-                    self._proc.wait(timeout=0.2)
-                except Exception:
-                    pass
-                self._proc = None
-                self.warning.emit("ffmpeg 已中止，嘗試改用 OpenCV。")
-                if self._writer is None:
-                    self._writer = self._start_opencv_writer(int(frame.shape[1]), int(frame.shape[0]))
-                if self._writer is None:
-                    self._fail("OpenCV VideoWriter 啟動失敗，無法錄製影片。")
-                    break
+                self._fail("ffmpeg 已中止，保留現有影片並停止錄製。")
+                return
 
             try:
-                if self._proc is not None:
-                    assert self._proc.stdin is not None
-                    self._proc.stdin.write(frame.tobytes())
-                elif self._writer is not None:
-                    self._writer.write(frame)
+                # 固定 FPS 編碼依實際時間補／丟幀，不能把節流後預覽當作相機 FPS。
+                held_frame = previous_frame
+                if held_frame is None:
+                    held_frame = (
+                        np.zeros_like(frame)
+                        if timestamp - self._started_at >= 1.0 / self._fps else frame
+                    )
+                self._write_frames_until(held_frame, timestamp)
             except Exception:
                 self._fail("寫入影片失敗，請確認 ffmpeg 狀態與磁碟空間。")
-                break
+                return
+            previous_frame = frame
+            previous_timestamp = timestamp
+
+        if previous_frame is not None and self._stopped_at is not None:
+            self._write_frames_until(previous_frame, self._stopped_at)
+
+    def _write_frames_until(self, frame: np.ndarray, timestamp: float) -> None:
+        # 微小浮點誤差不可在整數幀邊界額外補一幀。
+        target_count = max(1, math.ceil((timestamp - self._started_at) * self._fps - 1e-6))
+        if target_count <= self._frames_written:
+            return
+        encoded = frame.tobytes() if self._proc is not None else None
+        while self._frames_written < target_count:
+            if self._proc is not None:
+                assert self._proc.stdin is not None
+                self._proc.stdin.write(encoded)
+            elif self._writer is not None:
+                self._writer.write(frame)
+            self._frames_written += 1
 
     def _release_encoders(self) -> None:
         proc = self._proc

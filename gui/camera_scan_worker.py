@@ -12,9 +12,10 @@ class CameraScanWorker(QObject):
     failed = Signal(object, str)
     finished = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, *, permission_only: bool = False) -> None:
         super().__init__()
         self._stop = threading.Event()
+        self.permission_only = permission_only
 
     @property
     def stopped(self) -> bool:
@@ -27,6 +28,13 @@ class CameraScanWorker(QObject):
     def run(self) -> None:
         try:
             if self.stopped:
+                return
+            if self.permission_only:
+                from gui.camera_devices import request_macos_camera_permission
+
+                request_macos_camera_permission()
+                if not self.stopped:
+                    self.succeeded.emit(self, None)
                 return
             from gui.camera_devices import list_camera_devices
 

@@ -17,8 +17,8 @@ def _client_factory(monkeypatch):
     clients = []
     closed = []
 
-    def factory():
-        client = FileBrowserClient()
+    def factory(cache_dir):
+        client = FileBrowserClient(cache_dir)
         close_session = client._session.close
 
         def login():
