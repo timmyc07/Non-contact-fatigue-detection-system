@@ -3,6 +3,81 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('settings save status follows the engine state', (tester) async {
+    final calls = <String>[];
+    Future<void> showSettings(bool dirty) => tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SettingsView(
+                state: {'settings_dirty': dirty},
+                busy: false,
+                onCommand: (command, [args]) async => calls.add(command)))));
+
+    await showSettings(true);
+    expect(find.text('有未儲存的變更'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '儲存設定'));
+    expect(calls, ['settings.save']);
+    await showSettings(false);
+    expect(find.text('設定已儲存'), findsOneWidget);
+    expect(find.text('有未儲存的變更'), findsNothing);
+  });
+
+  testWidgets('settings sections adapt to narrow windows and larger text',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    Future<void> showSettings(Size size, double textScale) async {
+      tester.view.physicalSize = size;
+      await tester.pumpWidget(MaterialApp(
+          builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!),
+          home: Scaffold(
+              body: SettingsView(state: const {
+            'resolution': '1920×1080（1080p）',
+            'fps': '30',
+            'backend': 'ffmpeg',
+          }, busy: false, onCommand: (_, [__]) async {}))));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
+
+    await showSettings(const Size(1440, 900), 1);
+    final analysis = tester.getTopLeft(find.text('分析與記錄'));
+    final capture = tester.getTopLeft(find.text('攝影機擷取'));
+    expect(capture.dy, analysis.dy);
+    expect(capture.dx, greaterThan(analysis.dx));
+
+    await showSettings(const Size(400, 780), 1.6);
+    final narrowAnalysis = tester.getTopLeft(find.text('分析與記錄'));
+    final narrowCapture = tester.getTopLeft(find.text('攝影機擷取'));
+    expect(narrowCapture.dx, narrowAnalysis.dx);
+    expect(narrowCapture.dy, greaterThan(narrowAnalysis.dy));
+    await tester.ensureVisible(find.text('全部重設'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('busy settings cannot send duplicate commands', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SettingsView(state: const {
+      'hotkey_registration': {'supported': true},
+      'pipeline_running': true,
+    }, busy: true, onCommand: (_, [__]) async {}))));
+    for (final tile
+        in tester.widgetList<SwitchListTile>(find.byType(SwitchListTile))) {
+      expect(tile.onChanged, isNull);
+    }
+    for (final button in tester.widgetList<ButtonStyleButton>(
+        find.byWidgetPredicate((widget) => widget is ButtonStyleButton))) {
+      expect(button.onPressed, isNull);
+    }
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
+  });
+
   testWidgets('unsupported macOS hotkeys cannot be configured', (tester) async {
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -16,6 +91,7 @@ void main() {
     final button = tester
         .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '快捷鍵'));
     expect(button.onPressed, isNull);
+    expect(find.text('等待設定同步'), findsOneWidget);
   });
 
   testWidgets('overlay opacity sends one command when dragging ends',

@@ -25,7 +25,7 @@ Future<void> _pumpDashboard(
             ],
             'selected_camera_index': 0,
           },
-          previewFrame: null,
+          previewFrames: const Stream<String>.empty(),
           connected: true,
           busy: false,
           error: null,
@@ -75,7 +75,7 @@ void main() {
             body: DashboardView(
       metrics: const {'status': 'OK', 'fusion_state_zh': '極度危險'},
       engineState: const {'monitor_focus': true, 'pipeline_running': true},
-      previewFrame: null,
+      previewFrames: const Stream<String>.empty(),
       connected: true,
       busy: false,
       error: null,

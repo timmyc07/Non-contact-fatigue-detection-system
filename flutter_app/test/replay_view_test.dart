@@ -174,4 +174,122 @@ void main() {
     expect(calls.single.$1, 'replay.configure');
     expect(calls.single.$2, <String, dynamic>{'path': r'D:\replay\manual'});
   });
+
+  testWidgets('short narrow windows can scroll from controls to recordings',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(360, 320));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+      home: MediaQuery(
+        data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+        child: Scaffold(
+          body: PlaybackView(
+            recordings: const [
+              {'session_name': '窄窗監測記錄', 'record_count': 20},
+            ],
+            selected: null,
+            rows: const [],
+            busy: false,
+            state: const {},
+            onCommand: (_, [__]) async {},
+            onRefresh: () async {},
+            onOpen: (_) async {},
+            onClose: () {},
+            onPickReplayFolder: () async => null,
+            offset: 0,
+            total: 0,
+            startTimestamp: 0,
+            onPage: (_) async {},
+          ),
+        ),
+      ),
+    ));
+    expect(tester.takeException(), isNull);
+
+    await tester.scrollUntilVisible(find.text('窄窗監測記錄'), 180,
+        scrollable: find.byType(Scrollable).first);
+    expect(tester.takeException(), isNull);
+    expect(find.text('窄窗監測記錄').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('large text wraps replay metrics and keeps pagination usable',
+      (tester) async {
+    final pages = <int>[];
+    await tester.binding.setSurfaceSize(const Size(360, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+      home: MediaQuery(
+        data: const MediaQueryData(textScaler: TextScaler.linear(2.25)),
+        child: Scaffold(
+          body: PlaybackView(
+            recordings: const [],
+            selected: const {'session_name': '回放指標'},
+            rows: const [
+              {
+                'timestamp': 105.0,
+                'status': 'CRITICAL',
+                'ear': 0.18,
+                'bpm': 72,
+                'perclos': 0.125,
+              },
+            ],
+            busy: false,
+            state: const {},
+            onCommand: (_, [__]) async {},
+            onRefresh: () async {},
+            onOpen: (_) async {},
+            onClose: () {},
+            onPickReplayFolder: () async => null,
+            offset: 200,
+            total: 401,
+            startTimestamp: 100,
+            onPage: (offset) async => pages.add(offset),
+          ),
+        ),
+      ),
+    ));
+    expect(tester.takeException(), isNull);
+
+    await tester.scrollUntilVisible(find.text('PERCLOS 12.5%'), 180,
+        scrollable: find.byType(Scrollable).first);
+    expect(tester.takeException(), isNull);
+    await tester.scrollUntilVisible(find.text('下一頁'), 140,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('下一頁'));
+    expect(pages, [201]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('recordings use lazy construction for long histories',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: PlaybackView(
+          recordings:
+              List.generate(1000, (index) => {'session_name': '監測記錄 $index'}),
+          selected: null,
+          rows: const [],
+          busy: false,
+          state: const {},
+          onCommand: (_, [__]) async {},
+          onRefresh: () async {},
+          onOpen: (_) async {},
+          onClose: () {},
+          onPickReplayFolder: () async => null,
+          offset: 0,
+          total: 0,
+          startTimestamp: 0,
+          onPage: (_) async {},
+        ),
+      ),
+    ));
+
+    expect(find.text('監測記錄 0'), findsOneWidget);
+    expect(find.text('監測記錄 999'), findsNothing);
+    expect(tester.widgetList<ListTile>(find.byType(ListTile)).length,
+        lessThan(20));
+    expect(tester.takeException(), isNull);
+  });
 }

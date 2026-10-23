@@ -26,20 +26,21 @@ class BackendService {
   bool _pollingInFlight = false;
   bool _disposed = false;
   static const _requestTimeout = Duration(seconds: 12);
+  late final StreamController<MetricsSnapshot> _metrics =
+      StreamController<MetricsSnapshot>.broadcast(
+    onListen: _connectMetrics,
+    onCancel: _disconnectMetrics,
+  );
   final StreamController<String> _previewFrames =
       StreamController<String>.broadcast();
 
   Stream<String> get previewFrames => _previewFrames.stream;
 
   Future<void> dispose() async {
+    if (_disposed) return;
     _disposed = true;
-    _stopPolling();
-    _socket?.disconnect();
-    _socket?.dispose();
-    _socket = null;
-    if (!_previewFrames.isClosed) {
-      await _previewFrames.close();
-    }
+    _disconnectMetrics();
+    await Future.wait([_metrics.close(), _previewFrames.close()]);
     if (_ownsClient) {
       _client.close();
     }
@@ -50,14 +51,11 @@ class BackendService {
   }
 
   Stream<MetricsSnapshot> connectMetricSnapshots() {
-    final controller = StreamController<MetricsSnapshot>.broadcast(
-      onCancel: () {
-        _socket?.disconnect();
-        _socket?.dispose();
-        _socket = null;
-        _stopPolling();
-      },
-    );
+    return _metrics.stream;
+  }
+
+  void _connectMetrics() {
+    if (_disposed) return;
     try {
       final socket = _socket ??
           io.io(
@@ -72,8 +70,8 @@ class BackendService {
       _socket = socket;
       socket.on('metrics_update', (dynamic payload) {
         final packet = _packet(payload);
-        if (packet != null && !controller.isClosed) {
-          controller.add(MetricsSnapshot.fromJson(packet));
+        if (packet != null && !_metrics.isClosed) {
+          _metrics.add(MetricsSnapshot.fromJson(packet));
         }
       });
       socket.on('frame_update', (dynamic payload) {
@@ -86,12 +84,17 @@ class BackendService {
         _stopPolling();
         socket.emit('request_metrics');
       });
-      socket.on('connect_error', (_) => _startPolling(controller));
-      socket.on('disconnect', (_) => _startPolling(controller));
+      socket.on('connect_error', (_) => _startPolling());
+      socket.on('disconnect', (_) => _startPolling());
     } catch (_) {
-      _startPolling(controller);
+      _startPolling();
     }
-    return controller.stream;
+  }
+
+  void _disconnectMetrics() {
+    _socket?.dispose();
+    _socket = null;
+    _stopPolling();
   }
 
   Future<List<Map<String, dynamic>>> recordings() async {
@@ -197,9 +200,9 @@ class BackendService {
     return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
-  void _startPolling(StreamController<MetricsSnapshot> controller) {
-    if (_poller != null || _disposed || controller.isClosed) return;
-    _poller = Timer.periodic(const Duration(seconds: 2), (_) async {
+  void _startPolling() {
+    if (_poller != null || _disposed || !_metrics.hasListener) return;
+    _poller = Timer.periodic(const Duration(seconds: 2), (poller) async {
       if (_pollingInFlight) return;
       _pollingInFlight = true;
       try {
@@ -210,9 +213,9 @@ class BackendService {
           final packet = _packet(jsonDecode(response.body));
           if (packet != null &&
               !_disposed &&
-              controller.hasListener &&
-              _poller != null) {
-            controller.add(MetricsSnapshot.fromJson(packet));
+              _metrics.hasListener &&
+              identical(_poller, poller)) {
+            _metrics.add(MetricsSnapshot.fromJson(packet));
           }
         }
       } catch (_) {

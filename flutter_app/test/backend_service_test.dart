@@ -58,6 +58,119 @@ void main() {
     await service.dispose();
   });
 
+  test('metrics subscribers share socket listeners until the last cancellation',
+      () async {
+    final socket = io.io('http://127.0.0.1:1', <String, dynamic>{
+      'autoConnect': false,
+      'reconnection': false,
+      'forceNew': true,
+    });
+    final service = BackendService(socket: socket);
+    final first = <Map<String, dynamic>>[];
+    final second = <Map<String, dynamic>>[];
+    final frames = <String>[];
+    final firstSubscription = service.connectMetrics().listen(first.add);
+    final secondSubscription = service.connectMetrics().listen(second.add);
+    final frameSubscription = service.previewFrames.listen(frames.add);
+
+    socket.emitEvent([
+      'metrics_update',
+      {'fps': 30}
+    ]);
+    socket.emitEvent([
+      'frame_update',
+      {'frame': 'preview'}
+    ]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(first, [
+      {'fps': 30}
+    ]);
+    expect(second, first);
+    expect(frames, ['preview']);
+
+    await firstSubscription.cancel();
+    socket.emitEvent([
+      'metrics_update',
+      {'fps': 31}
+    ]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(first, hasLength(1));
+    expect(second, [
+      {'fps': 30},
+      {'fps': 31}
+    ]);
+
+    await secondSubscription.cancel();
+    socket.emitEvent([
+      'frame_update',
+      {'frame': 'after cancellation'}
+    ]);
+    await Future<void>.delayed(Duration.zero);
+    expect(frames, ['preview']);
+    await frameSubscription.cancel();
+    await service.dispose();
+  });
+
+  test('restarted polling rejects a previous connection response', () async {
+    var requests = 0;
+    final pending = Completer<http.Response>();
+    final socket = io.io('http://127.0.0.1:1', <String, dynamic>{
+      'autoConnect': false,
+      'reconnection': false,
+      'forceNew': true,
+    });
+    final service = BackendService(
+      socket: socket,
+      client: MockClient((_) {
+        requests++;
+        return requests == 1
+            ? pending.future
+            : Future.value(http.Response('{"metrics":{"fps":31}}', 200));
+      }),
+    );
+    final packets = <Map<String, dynamic>>[];
+    final subscription = service.connectMetrics().listen(packets.add);
+    socket.emitEvent(['connect_error', 'offline']);
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(requests, 1);
+
+    socket.emitEvent(['connect', null]);
+    socket.emitEvent(['disconnect', 'offline again']);
+    pending.complete(http.Response('{"metrics":{"fps":10}}', 200));
+    await Future<void>.delayed(Duration.zero);
+    expect(packets, isEmpty);
+
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(requests, 2);
+    expect(packets, [
+      {'fps': 31}
+    ]);
+    await subscription.cancel();
+    await service.dispose();
+  });
+
+  test('dispose completes metrics and frame streams', () async {
+    final socket = io.io('http://127.0.0.1:1', <String, dynamic>{
+      'autoConnect': false,
+      'reconnection': false,
+      'forceNew': true,
+    });
+    final service = BackendService(socket: socket);
+    final metricsDone = Completer<void>();
+    final framesDone = Completer<void>();
+    service
+        .connectMetricSnapshots()
+        .listen((_) {}, onDone: metricsDone.complete);
+    service.previewFrames.listen((_) {}, onDone: framesDone.complete);
+
+    await service.dispose();
+    await Future.wait([metricsDone.future, framesDone.future]);
+    await service.dispose();
+    expect(await service.connectMetricSnapshots().isEmpty, isTrue);
+  });
+
   test('playback sends explicit pagination offset', () async {
     final service = BackendService(client: MockClient((request) async {
       expect(request.url.queryParameters['offset'], '200');

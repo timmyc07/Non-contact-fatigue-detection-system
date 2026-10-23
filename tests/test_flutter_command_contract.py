@@ -8,7 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _flutter_desktop_commands() -> set[str]:
-    source = (ROOT / "flutter_app" / "lib" / "main.dart").read_text(encoding="utf-8")
+    entry = ROOT / "flutter_app" / "lib" / "main.dart"
+    source = entry.read_text(encoding="utf-8")
+    parts = re.findall(r"^part '([^']+)';", source, re.MULTILINE)
+    source += "\n".join((entry.parent / part).read_text(encoding="utf-8") for part in parts)
     return set(re.findall(r"(?:onCommand|_runCommand)\(\s*'([^']+)'", source))
 
 
