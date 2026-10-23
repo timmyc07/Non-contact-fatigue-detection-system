@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from ctypes.util import find_library
 from pathlib import Path
 
@@ -96,6 +97,23 @@ def _runtime_preflight_requested() -> bool:
     return "--runtime-preflight" in sys.argv
 
 
+def _configure_frozen_matplotlib_cache() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    from gui.runtime_paths import data_path
+
+    try:
+        cache = data_path("cache", "matplotlib")
+        cache.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=cache) as probe:
+            probe.write(b"1")
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"[Runtime cache] 無法使用持久字型快取，沿用封裝的暫存目錄：{exc}", file=sys.stderr)
+        return
+    # PyInstaller hook 先覆寫此值；必須在 entry 重新指定，且早於 MediaPipe 匯入 pyplot。
+    os.environ["MPLCONFIGDIR"] = str(cache)
+
+
 def _run_face_landmarker_preflight() -> int:
     try:
         from mediapipe.tasks import python as mp_python
@@ -141,6 +159,7 @@ def _launch_tauri() -> int:
 
 def main() -> int:
     global EngineApplication
+    _configure_frozen_matplotlib_cache()
     if _face_landmarker_preflight_requested():
         return _run_face_landmarker_preflight()
     if _runtime_preflight_requested():

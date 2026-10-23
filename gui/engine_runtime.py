@@ -255,28 +255,39 @@ class EngineRuntime(QObject):
         getattr(worker, "request_stop")()
         return True
 
-    def join_adapter(self, kind: str, timeout_ms: int) -> bool:
+    def join_adapter(self, kind: str, timeout_ms: int | None) -> bool:
         """Quit and join one adapter while retaining ownership on timeout."""
         session = self._adapters.get(kind)
         if session is None:
             return True
         _worker, thread = session
         thread.quit()
-        if thread.wait(timeout_ms) is False:
-            logger.warning(
-                "Engine adapter stop timed out after %d ms: %s",
-                timeout_ms,
-                kind,
-            )
+        joined = thread.wait() if timeout_ms is None else thread.wait(timeout_ms)
+        if joined is False:
+            if timeout_ms is not None and timeout_ms > 0:
+                logger.warning(
+                    "Engine adapter stop timed out after %d ms: %s",
+                    timeout_ms,
+                    kind,
+                )
             return False
         self._release_joined_adapter(kind, thread)
         return True
 
-    def stop_adapter(self, kind: str, timeout_ms: int) -> bool:
+    def stop_adapter(self, kind: str, timeout_ms: int | None) -> bool:
         """Request cooperative stop, then join the adapter thread."""
         if not self.request_adapter_stop(kind):
             return True
         return self.join_adapter(kind, timeout_ms)
+
+    def close_adapters(self) -> bool:
+        """主事件迴圈已結束時，同步停止及 join 剩餘 adapters。"""
+        for kind in tuple(self._adapters):
+            try:
+                self.stop_adapter(kind, None)
+            except Exception:
+                logger.exception("Engine adapter final cleanup failed: %s", kind)
+        return self.all_stopped()
 
     def release_adapter(
         self,

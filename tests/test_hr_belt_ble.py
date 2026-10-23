@@ -220,7 +220,7 @@ def test_belt_client_initial_status_and_stop_without_start():
     st = client.status()
     assert st.state == "idle"
     assert client.running is False
-    client.stop()  # 未啟動時 stop 應為安全 no-op
+    assert client.stop() is True
     assert client.status().state == "stopped"
 
 
@@ -271,13 +271,20 @@ def test_stop_timeout_keeps_ownership_and_rejects_restart(monkeypatch):
     hub = WatchHrHub()
     client = HrBeltBleClient(hub)
     alive = True
-    thread = SimpleNamespace(is_alive=lambda: alive, join=lambda **_: None)
+    waits = []
+
+    def join(*, timeout):
+        assert client._lock.acquire(blocking=False)
+        client._lock.release()
+        waits.append(timeout)
+
+    thread = SimpleNamespace(is_alive=lambda: alive, join=join)
     client._thread = thread
     runtime = BeltRuntime()
     runtime._belt = client
 
-    with pytest.raises(TimeoutError, match="停止中"):
-        runtime.stop_belt()
+    assert runtime.stop_belt() is False
+    assert waits == [0.0]
     assert client._thread is thread
     assert runtime.belt_running
     assert "停止中" in runtime.start_belt()
@@ -286,9 +293,118 @@ def test_stop_timeout_keeps_ownership_and_rejects_restart(monkeypatch):
     assert hub.latest() is None
 
     alive = False
-    runtime.stop_belt()
+    assert runtime.stop_belt(join_timeout=None) is True
     assert runtime._belt is None
     assert client._thread is None
+
+
+def test_stop_poll_does_not_cancel_async_disconnect_again(monkeypatch):
+    import asyncio
+    import threading
+
+    monkeypatch.setitem(sys.modules, "bleak", SimpleNamespace())
+    client = HrBeltBleClient(WatchHrHub())
+    connected = threading.Event()
+    disconnecting = threading.Event()
+    disconnected = threading.Event()
+    release = []
+
+    class Connection:
+        async def __aenter__(self):
+            release.append(asyncio.Event())
+            connected.set()
+
+        async def __aexit__(self, *args):
+            disconnecting.set()
+            await release[0].wait()
+            disconnected.set()
+
+    async def main():
+        async with Connection():
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(client, "_main", main)
+    assert client.start() == ""
+    try:
+        assert connected.wait(2.0)
+        assert client.stop(join_timeout=0.0) is False
+        assert disconnecting.wait(2.0)
+        task = client._main_task
+        assert task is not None
+        for _ in range(5):
+            assert client.stop(join_timeout=0.0) is False
+        assert task.cancelling() == 1
+        assert client.running
+        assert disconnected.is_set() is False
+        assert "停止中" in client.start()
+    finally:
+        if client._loop is not None and release:
+            client._loop.call_soon_threadsafe(release[0].set)
+        assert client.stop(join_timeout=None) is True
+    assert disconnected.is_set()
+    assert client.status().state == "stopped"
+    assert client._thread is None
+
+
+def test_empty_belt_runtime_stop_is_complete():
+    from gui.belt_runtime import BeltRuntime
+
+    assert BeltRuntime().stop_belt() is True
+
+
+def test_stop_before_event_loop_exists_still_drains_thread(monkeypatch):
+    import threading
+
+    monkeypatch.setitem(sys.modules, "bleak", SimpleNamespace(BleakClient=object, BleakScanner=object))
+    client = HrBeltBleClient(WatchHrHub())
+    entered = threading.Event()
+    release = threading.Event()
+    run = client._run
+
+    def delayed_run():
+        entered.set()
+        assert release.wait(2.0)
+        run()
+
+    monkeypatch.setattr(client, "_run", delayed_run)
+    assert client.start() == ""
+    try:
+        assert entered.wait(2.0)
+        assert client._loop is None
+        assert client.stop(join_timeout=0.0) is False
+    finally:
+        release.set()
+        assert client.stop(join_timeout=None) is True
+    assert client.status().state == "stopped"
+
+
+def test_completed_stop_allows_same_client_to_restart(monkeypatch):
+    import asyncio
+    import threading
+
+    monkeypatch.setitem(sys.modules, "bleak", SimpleNamespace())
+    client = HrBeltBleClient(WatchHrHub())
+    started = threading.Event()
+    completed = []
+
+    async def main():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            completed.append(True)
+
+    monkeypatch.setattr(client, "_main", main)
+    for _ in range(2):
+        started.clear()
+        assert client.start() == ""
+        try:
+            assert started.wait(2.0)
+        finally:
+            assert client.stop(join_timeout=None) is True
+        assert client._thread is None
+        assert client.running is False
+    assert len(completed) == 2
 
 
 # ── 設定檔載入（config/hr_belt.json）────────────────────────────────────────

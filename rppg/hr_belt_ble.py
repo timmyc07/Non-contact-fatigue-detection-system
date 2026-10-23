@@ -316,7 +316,7 @@ def pick_heart_rate_device(
 class HrBeltStatus:
     """心跳帶連線狀態快照（GUI 以輪詢方式讀取，跨執行緒安全）。"""
 
-    state: str = "idle"  # idle/scanning/connecting/connected/reconnecting/error/stopped
+    state: str = "idle"  # idle/scanning/connecting/connected/reconnecting/error/stopping/stopped
     device_name: str = ""
     device_address: str = ""
     rssi: float = 0.0
@@ -410,19 +410,21 @@ class HrBeltBleClient:
         self._thread.start()
         return ""
 
-    def stop(self, join_timeout: float = 5.0) -> None:
-        """停止背景連線執行緒。
+    def stop(self, join_timeout: float | None = 5.0) -> bool:
+        """要求停止；背景執行緒已結束回傳 True，仍在收尾回傳 False。
 
-        直接取消 asyncio 主任務：取消會中斷卡在 discover/connect 的
-        await，`async with BleakClient` 的 ``__aexit__`` 仍會執行 GATT
-        斷線收尾，因此典型停止時間 < 1 秒；join 逾時時不誤報 stopped，
-        且 notification handler 會因 stop 旗標拒絕再寫入 hub。
+        join_timeout=0 只送停止要求；None 等待完整斷線收尾。只取消一次主任務，
+        避免後續輪詢再次取消 BleakClient.__aexit__ 內的 disconnect await。
+        收尾期間保留 thread ownership，notification handler 拒絕新樣本。
         """
-        self._stop_event.set()
-        loop = self._loop
-        stop_evt = self._async_stop
-        task = self._main_task
-        if loop is not None and loop.is_running():
+        with self._lock:
+            first_request = not self._stop_event.is_set()
+            self._stop_event.set()
+            loop = self._loop
+            stop_evt = self._async_stop
+            task = self._main_task
+            thread = self._thread
+        if first_request and loop is not None and loop.is_running():
             try:
                 if stop_evt is not None:
                     loop.call_soon_threadsafe(stop_evt.set)
@@ -430,19 +432,16 @@ class HrBeltBleClient:
                     loop.call_soon_threadsafe(task.cancel)
             except RuntimeError:
                 pass
-        thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=join_timeout)
             if thread.is_alive():
-                logger.warning("HrBeltBle 執行緒未能在 %.1fs 內結束，背景仍在收尾", join_timeout)
-                self._set_status(
-                    state="stopping",
-                    connected_since=None,
-                    last_error="停止逾時，背景執行緒仍在收尾（已拒絕新樣本寫入）",
-                )
-                return
+                if join_timeout is not None and join_timeout > 0:
+                    logger.warning("HrBeltBle 執行緒未能在 %.1fs 內結束，背景仍在收尾", join_timeout)
+                self._set_status(state="stopping", connected_since=None)
+                return False
         self._thread = None
         self._set_status(state="stopped", connected_since=None)
+        return True
 
     # ── 內部：狀態管理 ───────────────────────────────────────────────────────
 

@@ -39,6 +39,28 @@ Future<void> _pumpDashboard(
 }
 
 void main() {
+  testWidgets('camera discovery shows progress and disables capture starts',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SingleChildScrollView(
+                child: DesktopControlPanel(state: const {
+      'camera_scanning': true,
+      'selected_camera_index': 0,
+      'cameras': [
+        {'index': 0, 'label': 'Previously found camera'}
+      ],
+    }, busy: false, onCommand: (_, [__]) async {})))));
+    expect(find.text('正在搜尋攝影機…'), findsOneWidget);
+    expect(find.textContaining('尚未偵測到攝影機'), findsNothing);
+    final start = find.widgetWithText(FilledButton, '開始監測');
+    expect(tester.widget<FilledButton>(start).onPressed, isNull);
+    await tester.tap(find.text('自動採集'));
+    await tester.pumpAndSettle();
+    final autoCapture = find.widgetWithText(OutlinedButton, '開始自動採集');
+    expect(tester.widget<OutlinedButton>(autoCapture).onPressed, isNull);
+  });
+
   testWidgets(
       'recording finalization prevents restarting until ownership releases',
       (tester) async {

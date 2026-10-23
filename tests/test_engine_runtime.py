@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Callable
 
 import pytest
@@ -77,7 +78,7 @@ class _FakeThread:
     def quit(self) -> None:
         self.events.append("thread.quit")
 
-    def wait(self, timeout_ms: int) -> bool:
+    def wait(self, timeout_ms: int | None = None) -> bool:
         self.events.append(f"thread.wait:{timeout_ms}")
         return self.wait_result
 
@@ -117,6 +118,57 @@ class _QtWorker(QObject):
 
     def request_stop(self) -> None:
         pass
+
+
+def test_close_adapters_joins_real_worker_without_main_event_loop(qt_app: QApplication) -> None:
+    entered = threading.Event()
+    stopping = threading.Event()
+    drained = threading.Event()
+
+    class Worker(QObject):
+        finished = Signal()
+
+        def run(self) -> None:
+            entered.set()
+            stopping.wait()
+            drained.set()
+            self.finished.emit()
+
+        def request_stop(self) -> None:
+            stopping.set()
+
+    runtime = EngineRuntime(qt_app)
+    thread = runtime.start_adapter("replay", Worker())
+    try:
+        assert entered.wait(2)
+        assert runtime.close_adapters() is True
+        assert drained.is_set()
+        assert runtime.all_stopped() is True
+    finally:
+        stopping.set()
+        thread.quit()
+        thread.wait(2000)
+
+
+def test_close_adapters_continues_after_one_stop_failure(qt_app: QApplication) -> None:
+    events: list[str] = []
+    threads = []
+
+    def make_thread(_parent):
+        thread = _FakeThread(events)
+        threads.append(thread)
+        return thread
+
+    runtime = EngineRuntime(qt_app, thread_factory=make_thread)
+    broken = _FakeWorker(events)
+    broken.request_stop = lambda: (_ for _ in ()).throw(OSError("stop failed"))
+    runtime.start_adapter("camera", broken)
+    runtime.start_adapter("video", _FakeWorker(events))
+
+    assert runtime.close_adapters() is False
+    assert runtime.worker("camera") is broken
+    assert runtime.worker("video") is None
+    runtime.release_adapter("camera", threads[0])
 
 
 class _FakeAlarmController:

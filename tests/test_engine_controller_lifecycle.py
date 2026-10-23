@@ -157,9 +157,10 @@ def test_engine_controller_owns_belt_runtime_lifecycle() -> None:
             self.belt_running = True
             return ""
 
-        def stop_belt(self) -> None:
-            events.append("stop")
+        def stop_belt(self, join_timeout: float | None = 0.0) -> bool:
+            events.append(("stop", join_timeout))
             self.belt_running = False
+            return True
 
         def belt_status(self) -> object:
             events.append("status")
@@ -180,15 +181,31 @@ def test_engine_controller_owns_belt_runtime_lifecycle() -> None:
     assert controller.belt_samples() == ["sample"]
     controller.clear_belt_samples()
     assert controller.create_belt_truth_capture_writer() == "writer"
-    controller.stop_belt()
+    assert controller.stop_belt(join_timeout=None) is True
     assert events == [
         ("start", None),
         "status",
         "snapshot",
         "clear",
         ("writer", None),
-        "stop",
+        ("stop", None),
     ]
+
+
+def test_engine_controller_stop_without_runtime_is_complete() -> None:
+    assert EngineController().stop_belt() is True
+
+
+def test_engine_controller_preserves_pending_belt_stop() -> None:
+    class PendingRuntime:
+        def stop_belt(self, join_timeout: float | None = 0.0) -> bool:
+            assert join_timeout == 0.0
+            return False
+
+    runtime = PendingRuntime()
+    controller = EngineController(belt_runtime=runtime)  # type: ignore[arg-type]
+    assert controller.stop_belt() is False
+    assert controller.belt_runtime is runtime
 
 
 def test_analysis_lifecycle_ports_preserve_worker_start_and_restart_order() -> None:

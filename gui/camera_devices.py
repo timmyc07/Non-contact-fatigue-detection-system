@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import cv2
 
@@ -148,13 +148,22 @@ def _selected_platform_name() -> str:
     return sys.platform
 
 
-def _probe_camera_index(index: int, warmup_read: bool, api_preferences: Sequence[int]) -> bool:
+def _probe_camera_index(
+    index: int,
+    warmup_read: bool,
+    api_preferences: Sequence[int],
+    stop_requested: Callable[[], bool] | None = None,
+) -> bool:
     for api in api_preferences:
+        if stop_requested is not None and stop_requested():
+            return False
         cap: Optional[Any] = None
         try:
             cap = cv2.VideoCapture(index, int(api))
             if not cap.isOpened():
                 continue
+            if stop_requested is not None and stop_requested():
+                return False
             if warmup_read:
                 ok, _ = cap.read()
                 if not ok:
@@ -171,12 +180,19 @@ def _probe_camera_index(index: int, warmup_read: bool, api_preferences: Sequence
     return False
 
 
-def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> list[tuple[int, str]]:
+def list_camera_devices(
+    *,
+    max_index: int = 20,
+    warmup_read: bool = True,
+    stop_requested: Callable[[], bool] | None = None,
+) -> list[tuple[int, str]]:
     """Return ``[(opencv_index, display_name), ...]`` for the camera dropdown.
 
     - **Windows + pygrabber**: same as V1 — enumerate DirectShow names only (no OpenCV open).
     - **Otherwise**: probe indices with OpenCV (DSHOW-first on Windows).
     """
+    if stop_requested is not None and stop_requested():
+        return []
     if cv2 is None:
         return [(0, "Camera 0（未安裝 OpenCV）")]
 
@@ -197,7 +213,9 @@ def list_camera_devices(*, max_index: int = 20, warmup_read: bool = True) -> lis
         candidate_indices = list(range(max_index))
 
     for i in candidate_indices:
-        if not _probe_camera_index(i, warmup_read, api_preferences):
+        if stop_requested is not None and stop_requested():
+            break
+        if not _probe_camera_index(i, warmup_read, api_preferences, stop_requested):
             continue
         if _IS_WIN:
             label = f"Camera {i}"

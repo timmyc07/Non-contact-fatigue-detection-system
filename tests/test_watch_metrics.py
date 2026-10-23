@@ -42,3 +42,14 @@ def test_compute_watch_physio_with_enough_samples():
     state = compute_watch_physio(samples, min_samples=8)
     assert state.sample_count >= 8
     assert state.rmssd >= 0.0
+
+
+def test_compute_watch_physio_excludes_future_and_nonfinite_timestamps(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    valid = [WatchSample(990.0 + i, 70 + i % 3, i, 1000) for i in range(11)]
+    invalid = [
+        WatchSample(stamp, 180, 0, 1000)
+        for stamp in (1000.001, float("inf"), float("-inf"), float("nan"), 909.999)
+    ]
+
+    assert compute_watch_physio(valid + invalid) == compute_watch_physio(valid)

@@ -77,21 +77,23 @@ def test_file_browser_download_closes_upstream_after_http_error(tmp_path, monkey
     assert closed == [True]
 
 
-def test_playback_manager_lists_nested_utarldd_recordings(tmp_path: Path) -> None:
-    db_path = tmp_path / "utarldd_runs" / "run1" / "metrics_utarldd_01_0_20260606_010203.db"
+@pytest.mark.parametrize("run_dir", ["utarldd_runs", "replay_runs"])
+def test_playback_manager_lists_nested_replay_recordings(tmp_path: Path, run_dir: str) -> None:
+    db_path = tmp_path / run_dir / "run1" / "metrics_replay_01_0_20260606_010203.db"
     _write_minimal_metrics_db(db_path)
 
     manager = PlaybackManager(tmp_path)
     recordings = manager.list_recordings()
 
     assert len(recordings) == 1
-    assert recordings[0]["filename"] == "utarldd_runs/run1/metrics_utarldd_01_0_20260606_010203.db"
+    assert recordings[0]["filename"] == f"{run_dir}/run1/{db_path.name}"
     assert recordings[0]["path"] == str(db_path)
     assert recordings[0]["record_count"] == 2
 
 
-def test_playback_api_reads_nested_utarldd_db(tmp_path: Path) -> None:
-    db_path = tmp_path / "utarldd_runs" / "run1" / "metrics_utarldd_01_10_20260606_010203.db"
+@pytest.mark.parametrize("run_dir", ["utarldd_runs", "replay_runs"])
+def test_playback_api_reads_nested_replay_db(tmp_path: Path, run_dir: str) -> None:
+    db_path = tmp_path / run_dir / "run1" / "metrics_replay_01_10_20260606_010203.db"
     _write_minimal_metrics_db(db_path)
     app, _socketio = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
 
@@ -102,10 +104,36 @@ def test_playback_api_reads_nested_utarldd_db(tmp_path: Path) -> None:
     recordings_json = recordings_resp.get_json()
     playback_json = playback_resp.get_json()
     assert recordings_json["success"] is True
-    assert recordings_json["data"][0]["filename"].startswith("utarldd_runs/")
+    assert recordings_json["data"][0]["filename"].startswith(f"{run_dir}/")
     assert playback_json["success"] is True
     assert playback_json["total"] == 2
     assert playback_json["data"][1]["status"] == "DROWSY"
+
+
+def test_generic_labeled_and_root_recordings_coexist_with_sidecar_and_cache_refresh(tmp_path: Path):
+    paths = [
+        tmp_path / "metrics_root.db",
+        tmp_path / "utarldd_runs" / "run1" / "metrics_labeled.db",
+        tmp_path / "replay_runs" / "run1" / "metrics_generic.db",
+    ]
+    for path in paths:
+        _write_minimal_metrics_db(path)
+    generic = paths[-1]
+    generic.with_name(generic.name + ".meta.json").write_text(json.dumps({
+        "schema_version": 1, "rows": 42, "ts_min": 10.0, "ts_max": 99.0,
+    }), encoding="utf-8")
+    manager = PlaybackManager(tmp_path)
+    recordings = manager.list_recordings()
+    assert {entry["filename"] for entry in recordings} == {
+        path.relative_to(tmp_path).as_posix() for path in paths
+    }
+    assert next(entry for entry in recordings if entry["path"] == str(generic))["record_count"] == 42
+    previous_marker = manager._recordings_cache_mtime
+    new = tmp_path / "replay_runs" / "run2" / "metrics_new.db"
+    _write_minimal_metrics_db(new)
+    os.utime(new, (previous_marker - 10, previous_marker - 10))
+    os.utime(new.parent.parent, (previous_marker + 10, previous_marker + 10))
+    assert len(manager.list_recordings()) == 4
 
 
 def _write_paged_metrics_db(path: Path, row_count: int) -> None:

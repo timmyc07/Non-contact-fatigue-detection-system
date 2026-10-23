@@ -1649,6 +1649,7 @@ class DesktopControlPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
+    final cameraScanning = state['camera_scanning'] == true;
     final recording = state['recording'] == true;
     final recordingFinalizing = state['recording_finalizing'] == true;
     final focus = state['monitor_focus'] == true;
@@ -1681,7 +1682,7 @@ class DesktopControlPanel extends StatelessWidget {
                       row['label']?.toString() ?? 'Camera ${row['index']}',
                       overflow: TextOverflow.ellipsis)))
               .toList(),
-          onChanged: busy || running
+          onChanged: busy || running || cameraScanning
               ? null
               : (value) {
                   if (value != null) {
@@ -1690,7 +1691,12 @@ class DesktopControlPanel extends StatelessWidget {
                   }
                 },
         ),
-        if (cameraRows.isEmpty) ...[
+        if (cameraScanning) ...[
+          const SizedBox(height: 8),
+          Text('正在搜尋攝影機…',
+              style: TextStyle(color: kMutedInk, fontSize: 12)),
+        ],
+        if (cameraRows.isEmpty && !cameraScanning) ...[
           const SizedBox(height: 8),
           Text(
             '尚未偵測到攝影機。請確認系統相機權限與裝置連線。',
@@ -1717,7 +1723,7 @@ class DesktopControlPanel extends StatelessWidget {
         ],
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: busy || (!running && selected == null)
+          onPressed: busy || (!running && (selected == null || cameraScanning))
               ? null
               : () => onCommand(
                   'pipeline.set', <String, dynamic>{'enabled': !running}),
@@ -1812,7 +1818,7 @@ class DesktopControlPanel extends StatelessWidget {
                         }),
               ),
               OutlinedButton.icon(
-                onPressed: busy
+                onPressed: busy || (!capturing && cameraScanning)
                     ? null
                     : () => onCommand('auto_capture.set', <String, dynamic>{
                           'enabled': !capturing,

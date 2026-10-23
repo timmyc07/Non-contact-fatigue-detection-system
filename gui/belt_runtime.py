@@ -1,7 +1,7 @@
 """Background BLE heart-rate belt runtime for rPPG truth calibration.
 
 擁有心率參考 hub 與 BLE 心跳帶背景連線。心跳帶樣本推入 :class:`WatchHrHub`，
-供 rPPG 真值校準（讀 ``belt_status()``）與未來 HRV 比對（讀 hub 樣本）使用。
+供 rPPG 真值校準（讀 ``belt_status()``）與目前 90 秒 HRV（讀 hub 樣本）使用。
 原手錶 HTTP 來源已移除。
 """
 
@@ -22,7 +22,7 @@ class BeltRuntime:
     """Owns the HR-reference hub + BLE belt client used for rPPG calibration.
 
     心跳帶樣本沉澱在同一個 :class:`WatchHrHub`；校準讀 ``belt_status()``，
-    HRV 接口（未來）讀 ``hub`` 樣本。切換用途時由呼叫端負責 ``hub.clear()``。
+    HRV 讀 ``hub`` 樣本。切換用途時由呼叫端負責 ``hub.clear()``。
     """
 
     def __init__(self) -> None:
@@ -53,13 +53,14 @@ class BeltRuntime:
             self._belt = None
         return err
 
-    def stop_belt(self) -> None:
+    def stop_belt(self, join_timeout: float | None = 0.0) -> bool:
+        """非阻塞要求停止；完成前保留 client，避免重啟覆蓋斷線收尾。"""
         if self._belt is None:
-            return
-        self._belt.stop()
-        if self._belt.running:
-            raise TimeoutError("心跳帶仍在停止中，背景執行緒尚未結束")
+            return True
+        if not self._belt.stop(join_timeout=join_timeout):
+            return False
         self._belt = None
+        return True
 
     def belt_status(self) -> HrBeltStatus | None:
         if self._belt is None:

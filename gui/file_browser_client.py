@@ -5,6 +5,7 @@ import logging
 import hashlib
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -24,14 +25,19 @@ class FileBrowserClient:
         self._password: Optional[str] = None
         self._token: Optional[str] = None
         self._token_expires: float = 0.0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._download_lock = threading.Lock()
+        self._closing = threading.Event()
+        self._closed = threading.Event()
         self._session = requests.Session()
+        self._active_streams: weakref.WeakSet[requests.Response] = weakref.WeakSet()
         self._heartbeat_thread: Optional[threading.Thread] = None
+        self._heartbeat_threads: list[threading.Thread] = []
         self._heartbeat_stop = threading.Event()
 
     def configure(self, base_url: str, username: str, password: str) -> bool:
         with self._download_lock:
+            self._require_open()
             self._stop_heartbeat()
             with self._lock:
                 self._token = None
@@ -46,7 +52,55 @@ class FileBrowserClient:
             return ok
 
     def is_authenticated(self) -> bool:
-        return bool(self._token and self._base_url)
+        return not self.is_closing and bool(self._token and self._base_url)
+
+    @property
+    def is_closing(self) -> bool:
+        return self._closing.is_set()
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed.is_set()
+
+    def _require_open(self) -> None:
+        if self.is_closing:
+            raise RuntimeError("FileBrowserClient is closed")
+
+    def request_close(self) -> None:
+        """拒絕新連線並停止 heartbeat；不等待 HTTP 或執行緒。"""
+        self._closing.set()
+        self._heartbeat_stop.set()
+
+    def close(self) -> None:
+        """由背景 owner 等待已發出的 HTTP，關閉所有 session 資源。"""
+        self.request_close()
+        with self._download_lock:
+            if self.is_closed:
+                return
+            self._stop_heartbeat()
+            for heartbeat in self._heartbeat_threads:
+                heartbeat.join()
+            self._heartbeat_threads.clear()
+            with self._lock:
+                error: Exception | None = None
+                for response in list(self._active_streams):
+                    try:
+                        response.close()
+                        self._active_streams.discard(response)
+                    except Exception as exc:
+                        error = error or exc
+                try:
+                    self._session.close()
+                except Exception as exc:
+                    error = error or exc
+                self._token = None
+                self._token_expires = 0.0
+                self._base_url = None
+                self._username = None
+                self._password = None
+                if error is not None:
+                    raise error
+                self._closed.set()
 
     def get_info(self) -> dict:
         return {
@@ -103,6 +157,7 @@ class FileBrowserClient:
     def download_db(self, remote_path: str, cache_dir: Path) -> Path:
         # 下載與切換站點互斥，避免快取歸屬及同名 temporary file 競態。
         with self._download_lock:
+            self._require_open()
             namespace = hashlib.sha256(f"{self._base_url}\0{self._username}".encode()).hexdigest()
             cache_dir = Path(cache_dir) / namespace
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +177,7 @@ class FileBrowserClient:
                 resp.raise_for_status()
                 with open(tmp, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=256 * 1024):
+                        self._require_open()
                         if chunk:
                             f.write(chunk)
                 tmp.replace(local_path)
@@ -178,6 +234,8 @@ class FileBrowserClient:
         resp.raise_for_status()
 
     def _do_login_locked(self) -> bool:
+        if self.is_closing:
+            return False
         try:
             resp = self._session.post(
                 f"{self._base_url}/api/login",
@@ -210,29 +268,31 @@ class FileBrowserClient:
         self, method: str, path: str, *,
         data_factory: Optional[Callable] = None, **kwargs,
     ) -> requests.Response:
-        if not self._base_url:
-            raise RuntimeError("FileBrowserClient: 尚未設定連線")
+        with self._lock:
+            self._require_open()
+            if not self._base_url:
+                raise RuntimeError("FileBrowserClient: 尚未設定連線")
 
-        existing_headers = kwargs.pop("headers", {}) or {}
-        headers = {**self._auth_headers(), **existing_headers}
-        kwargs.setdefault("timeout", 30)
-        if data_factory is not None:
-            kwargs["data"] = data_factory()
+            existing_headers = kwargs.pop("headers", {}) or {}
+            headers = {**self._auth_headers(), **existing_headers}
+            kwargs.setdefault("timeout", 30)
+            if data_factory is not None:
+                kwargs["data"] = data_factory()
 
-        resp = self._session.request(
-            method, f"{self._base_url}{path}", headers=headers, **kwargs
-        )
-        if resp.status_code == 401:
-            with self._lock:
-                if self._do_login_locked():
-                    resp.close()
-                    if data_factory is not None:
-                        kwargs["data"] = data_factory()
-                    headers = {**self._auth_headers(), **existing_headers}
-                    resp = self._session.request(
-                        method, f"{self._base_url}{path}", headers=headers, **kwargs
-                    )
-        return resp
+            resp = self._session.request(
+                method, f"{self._base_url}{path}", headers=headers, **kwargs
+            )
+            if resp.status_code == 401 and self._do_login_locked():
+                resp.close()
+                if data_factory is not None:
+                    kwargs["data"] = data_factory()
+                headers = {**self._auth_headers(), **existing_headers}
+                resp = self._session.request(
+                    method, f"{self._base_url}{path}", headers=headers, **kwargs
+                )
+            if kwargs.get("stream"):
+                self._active_streams.add(resp)
+            return resp
 
     def _heartbeat_loop(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
@@ -242,12 +302,16 @@ class FileBrowserClient:
             stop_event.wait(_HEARTBEAT_INTERVAL)
 
     def _start_heartbeat(self) -> None:
+        if self.is_closing:
+            return
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             return
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop, args=(self._heartbeat_stop,), daemon=True,
         )
+        self._heartbeat_threads = [thread for thread in self._heartbeat_threads if thread.is_alive()]
+        self._heartbeat_threads.append(self._heartbeat_thread)
         self._heartbeat_thread.start()
 
     def _stop_heartbeat(self) -> None:

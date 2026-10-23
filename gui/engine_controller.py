@@ -42,7 +42,7 @@ class BeltRuntimePort(Protocol):
     def start_belt(self, config: HrBeltConfig | None = None) -> str:
         ...
 
-    def stop_belt(self) -> None:
+    def stop_belt(self, join_timeout: float | None = 0.0) -> bool:
         ...
 
     def belt_status(self) -> HrBeltStatus | None:
@@ -142,9 +142,10 @@ class EngineController:
     def start_belt(self, config: HrBeltConfig | None = None) -> str:
         return self.belt_runtime.start_belt(config)
 
-    def stop_belt(self) -> None:
-        if self._belt_runtime is not None:
-            self._belt_runtime.stop_belt()
+    def stop_belt(self, join_timeout: float | None = 0.0) -> bool:
+        if self._belt_runtime is None:
+            return True
+        return self._belt_runtime.stop_belt(join_timeout=join_timeout)
 
     def belt_status(self) -> HrBeltStatus | None:
         return self.belt_runtime.belt_status()

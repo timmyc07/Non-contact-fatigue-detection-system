@@ -5,14 +5,13 @@ import logging
 import os
 import queue
 import tempfile
-import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, cast
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, Qt, QThread, QTimer, Slot
 from PySide6.QtGui import (
     QImage,
     QImageWriter,
@@ -27,6 +26,7 @@ from gui.alarm_config import (
     AlarmConfig,
 )
 from gui.belt_runtime import BeltRuntime
+from gui.camera_scan_worker import CameraScanWorker
 from gui.camera_stream_worker import CameraStreamWorker
 from gui.capture_preferences_state import CapturePreferencesState
 from gui.combined_worker import CombinedWorker
@@ -106,10 +106,6 @@ def _classify_log_message(message: str, *, warning_priority: bool = False) -> st
     return "info"
 
 
-class _WebRestartBridge(QObject):
-    stopped = Signal(bool, bool)
-
-
 @dataclass(frozen=True, slots=True)
 class _GlobalHotkeyBinding:
     field: str
@@ -179,17 +175,14 @@ class EngineApplication(QObject):
         self._web_restart_in_progress = False
         self._web_restart_shutdown = False
         self._web_restart_stopping_server: WebServerThread | None = None
+        self._web_finalizing_servers: set[WebServerThread] = set()
+        self._web_finalization_retried: set[WebServerThread] = set()
         self._runtime_cleanup_in_progress = False
         self._runtime_cleanup_complete = False
         self._runtime_cleanup_retry_attempted = False
         self._runtime_cleanup_retry_scheduled = False
         self._runtime_shutdown_waiting_for_adapters = False
         self._adapter_cleanup_in_progress = False
-        self._web_restart_bridge = _WebRestartBridge(self)
-        self._web_restart_bridge.stopped.connect(
-            self._on_web_restart_stopped,
-            Qt.ConnectionType.QueuedConnection,
-        )
         self._desktop_control_broker = DesktopCommandBroker(timeout_seconds=10.0)
         self._web_emit_interval = 0.25
         self._web_frame_interval = 1.0 / WEB_PREVIEW_TARGET_FPS
@@ -723,16 +716,46 @@ class EngineApplication(QObject):
         return path
 
     def _start_camera_scan(self) -> None:
-        """Refresh camera list (same strategy as V1: DirectShow names first, no OpenCV open)."""
-        dev_list: list[tuple[int, str]] = []
-        try:
-            from gui.camera_devices import list_camera_devices
+        if self._runtime_cleanup_in_progress or self._runtime_cleanup_complete:
+            return
+        if self._engine_runtime.worker("camera_scan") is not None:
+            return
+        pipeline = self._engine_controller.pipeline_snapshot()
+        if pipeline.running:
+            raise BusyError("Stop the pipeline before refreshing cameras")
+        if pipeline.cleanup_pending:
+            raise BusyError("Live pipeline adapter cleanup is still pending")
+        worker = CameraScanWorker()
 
-            dev_list = list_camera_devices(max_index=20, warmup_read=True)
+        def connect(current: object) -> None:
+            scan = cast(CameraScanWorker, current)
+            scan.succeeded.connect(self._on_camera_scan_succeeded, Qt.ConnectionType.QueuedConnection)
+            scan.failed.connect(self._on_camera_scan_failed, Qt.ConnectionType.QueuedConnection)
+
+        try:
+            self._engine_runtime.start_adapter("camera_scan", worker, connect=connect)
         except Exception as exc:
-            message = f"攝影機列舉失敗：{exc}"
-            logger.warning(message)
-        self._finish_camera_scan_ui(dev_list)
+            logger.exception("攝影機列舉無法啟動")
+            self._publish_desktop_notice(f"攝影機列舉失敗：{exc}")
+
+    def _camera_scan_result_is_current(self, worker: object) -> bool:
+        return (
+            self._engine_runtime.worker("camera_scan") is worker
+            and not self._runtime_cleanup_in_progress
+            and not self._runtime_cleanup_complete
+            and not cast(CameraScanWorker, worker).stopped
+        )
+
+    @Slot(object, object)
+    def _on_camera_scan_succeeded(self, worker: object, dev_list: object) -> None:
+        if self._camera_scan_result_is_current(worker):
+            self._finish_camera_scan_ui(cast(list[tuple[int, str]], dev_list))
+
+    @Slot(object, str)
+    def _on_camera_scan_failed(self, worker: object, message: str) -> None:
+        if self._camera_scan_result_is_current(worker):
+            logger.warning("攝影機列舉失敗：%s", message)
+            self._publish_desktop_notice(f"攝影機列舉失敗：{message}")
 
     def _finish_camera_scan_ui(self, dev_list: list[tuple[int, str]]) -> None:
         self._engine_controller.replace_cameras(
@@ -857,31 +880,47 @@ class EngineApplication(QObject):
         self._web_server = None
         self._web_restart_stopping_server = server
         self._web_restart_in_progress = True
+        server.request_stop()
+        self._ensure_web_finalization_timer()
 
-        def stop_in_background() -> None:
-            stopped = server.stop(join_timeout=5.0)
-            still_alive = bool(not stopped and server.is_alive())
-            self._web_restart_bridge.stopped.emit(stopped, still_alive)
+    def _ensure_web_finalization_timer(self) -> None:
+        self._poll_web_finalization()
+        if (
+            (self._web_restart_stopping_server is not None or self._web_finalizing_servers)
+            and not self._engine_runtime.timer_active("web_finalize")
+        ):
+            self._engine_runtime.start_periodic_timer("web_finalize", 50, self._poll_web_finalization)
 
-        threading.Thread(
-            target=stop_in_background,
-            daemon=True,
-            name="WebServerRestartStop",
-        ).start()
+    def _retry_web_finalization(self, server: WebServerThread) -> bool:
+        if server.finalization_failed and server not in self._web_finalization_retried:
+            self._web_finalization_retried.add(server)
+            logger.warning("Retrying incomplete Web server cleanup")
+            server.request_stop()
+            return True
+        return False
 
-    def _on_web_restart_stopped(self, _stopped: bool, still_alive: bool) -> None:
-        stopping_server = self._web_restart_stopping_server
-        self._web_restart_in_progress = False
-        self._web_restart_stopping_server = None
-        if still_alive:
+    def _poll_web_finalization(self, *, retry_failed: bool = True) -> None:
+        server = self._web_restart_stopping_server
+        if retry_failed:
+            pending = self._web_finalizing_servers | ({server} if server is not None else set())
+            for current in pending:
+                if not current.is_finalized:
+                    self._retry_web_finalization(current)
+        if server is not None and server.is_finalized:
+            self._web_restart_stopping_server = None
+            self._web_restart_in_progress = False
+            self._web_finalization_retried.discard(server)
             if not self._web_restart_shutdown:
-                self._web_server = stopping_server
-            self._append_log(
-                "⚠ Web 儀表板舊執行緒未能及時結束；若儀表板無法更新，請重新啟動程式。"
-            )
-            return
-        if not self._web_restart_shutdown:
-            self._start_web_server()
+                self._start_web_server()
+        finalized = {
+            server for server in tuple(self._web_finalizing_servers) if server.is_finalized
+        }
+        self._web_finalizing_servers.difference_update(finalized)
+        self._web_finalization_retried.difference_update(finalized)
+        if self._web_restart_stopping_server is None and not self._web_finalizing_servers:
+            self._engine_runtime.cancel_timer("web_finalize")
+            if self._runtime_shutdown_waiting_for_adapters:
+                self._engine_runtime.defer(0, self._shutdown_engine)
 
     def _stop_web_server(self) -> None:
         servers = [
@@ -893,12 +932,11 @@ class EngineApplication(QObject):
             return
         self._web_server = None
         self._web_restart_stopping_server = None
-        for thread in dict.fromkeys(servers):
-            stopped = thread.stop(join_timeout=5.0)
-            if not stopped and thread.is_alive():
-                self._append_log(
-                    "⚠ Web 儀表板舊執行緒未能及時結束；若儀表板無法更新，請重新啟動程式。"
-                )
+        self._web_restart_in_progress = False
+        for server in dict.fromkeys(servers):
+            self._web_finalizing_servers.add(server)
+            server.request_stop()
+        self._ensure_web_finalization_timer()
 
     def _build_web_metrics(self) -> dict:
         pipeline = self._engine_controller.pipeline_snapshot()
@@ -1202,6 +1240,7 @@ class EngineApplication(QObject):
             "auto_capture_active": self._engine_runtime.timer_active("auto_capture"),
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
             "selected_camera_index": camera.selected_index,
+            "camera_scanning": self._engine_runtime.worker("camera_scan") is not None,
             "cameras": cameras,
             "behavior_enabled": analysis.fatigue_enabled,
             "rppg_enabled": analysis.rppg_enabled,
@@ -1256,6 +1295,8 @@ class EngineApplication(QObject):
 
         if command == "pipeline.set":
             enabled = self._require_bool(args, "enabled")
+            if enabled and self._engine_runtime.worker("camera_scan") is not None:
+                raise BusyError("Wait for camera discovery before starting the pipeline")
             if enabled and self.selected_camera_index is None:
                 raise ValueError("Select a camera before starting the pipeline")
             pipeline = self._engine_controller.pipeline_snapshot()
@@ -1275,8 +1316,12 @@ class EngineApplication(QObject):
             pipeline = self._engine_controller.pipeline_snapshot()
             if enabled and not pipeline.running:
                 raise ValueError("Start the pipeline before recording")
-            if enabled and self._finalizing_metrics_recorder is not None:
-                raise BusyError("Previous metrics recorder cleanup is still pending")
+            if enabled and not pipeline.recording and (
+                self._finalizing_metrics_recorder is not None
+                or self._video_thread is not None
+                or self._video_worker is not None
+            ):
+                raise BusyError("Previous recorder cleanup is still pending")
             if enabled != pipeline.recording:
                 self._pipeline_running = pipeline.running
                 self._recording = pipeline.recording
@@ -1348,6 +1393,8 @@ class EngineApplication(QObject):
         elif command == "auto_capture.set":
             enabled = self._require_bool(args, "enabled")
             if enabled:
+                if self._engine_runtime.worker("camera_scan") is not None:
+                    raise BusyError("Wait for camera discovery before starting capture")
                 capture = self._capture_preferences.snapshot()
                 duration = args.get("duration_seconds", capture.auto_capture_seconds)
                 if isinstance(duration, bool) or not isinstance(duration, int) or not 10 <= duration <= 600:
@@ -1562,6 +1609,8 @@ class EngineApplication(QObject):
             if (
                 not self._runtime_adapter_threads_stopped()
                 or self._finalizing_metrics_recorder is not None
+                or self._web_finalizing_servers
+                or self._engine_controller.belt_running
             ):
                 self._runtime_shutdown_waiting_for_adapters = True
                 return
@@ -1582,14 +1631,38 @@ class EngineApplication(QObject):
 
     def close_runtime(self) -> bool:
         """Drain remaining data after the application event loop has returned."""
-        complete = self._cleanup_runtime()
+        self._runtime_shutdown_waiting_for_adapters = False
+        self._stop_replay()
+        self._cleanup_runtime()
+        drains: list[tuple[str, Callable[[], bool]]] = []
         recorder = self._finalizing_metrics_recorder
         if recorder is not None:
-            recorder.wait_closed(timeout_seconds=None)
-            self._runtime_shutdown_waiting_for_adapters = False
-            self._poll_metrics_finalization()
-            complete = self._cleanup_runtime()
-        return complete
+            drains.append(("metrics", lambda: recorder.wait_closed(timeout_seconds=None)))
+        for server in tuple(self._web_finalizing_servers):
+            drains.append(("web server", lambda current=server: self._drain_web_server(current)))
+        if self._engine_controller.belt_running:
+            drains.append(("belt", lambda: self._engine_controller.stop_belt(join_timeout=None)))
+        drains.append(("adapters", self._engine_runtime.close_adapters))
+        drained = True
+        for label, action in drains:
+            try:
+                if action() is False:
+                    drained = False
+            except Exception:
+                drained = False
+                logger.exception("Engine final drain failed: %s", label)
+        self._poll_metrics_finalization()
+        self._poll_web_finalization(retry_failed=False)
+        if self._engine_runtime.timer_active("belt_finalize"):
+            self._poll_belt_finalization()
+        return self._cleanup_runtime() and drained
+
+    def _drain_web_server(self, server: WebServerThread) -> bool:
+        if server.stop(join_timeout=None):
+            return True
+        if self._retry_web_finalization(server):
+            return server.stop(join_timeout=None)
+        return False
 
     def _cleanup_runtime(self) -> bool:
         if self._runtime_cleanup_complete:
@@ -1624,7 +1697,10 @@ class EngineApplication(QObject):
                 "belt timer",
                 lambda: self._engine_runtime.cancel_timer("belt_tick"),
             )
-            cleanup_step("belt runtime", self._engine_controller.stop_belt)
+            cleanup_step("belt runtime", self._stop_belt_runtime)
+            cleanup_step(
+                "camera discovery", lambda: self._engine_runtime.stop_adapter("camera_scan", 0)
+            )
             self._web_restart_shutdown = True
             self._web_restart_scheduled = False
             cleanup_step("web server", self._stop_web_server)
@@ -1636,6 +1712,8 @@ class EngineApplication(QObject):
                 not had_error
                 and adapters_stopped
                 and self._finalizing_metrics_recorder is None
+                and not self._web_finalizing_servers
+                and not self._engine_controller.belt_running
             )
             return self._runtime_cleanup_complete
         finally:
@@ -1746,7 +1824,7 @@ class EngineApplication(QObject):
         stopped = True
         if self._video_thread is not None:
             try:
-                stopped = self._engine_runtime.join_adapter("video", 2000)
+                stopped = self._engine_runtime.join_adapter("video", 0)
             except Exception as exc:
                 stopped = False
                 logger.warning("等待影片記錄執行緒結束失敗：%s", exc)
@@ -2261,7 +2339,9 @@ class EngineApplication(QObject):
 
     def _on_adapter_released(self, kind: str, _thread: object) -> None:
         """Apply adapter queue and shutdown side effects after runtime release."""
-        if kind == "camera":
+        if kind == "camera_scan":
+            self._emit_web_metrics(force=True)
+        elif kind == "camera":
             pass
         elif kind == "combined":
             self._combined_queue = None
@@ -2482,7 +2562,7 @@ class EngineApplication(QObject):
         self._last_calib_fed_metrics = None
         if stop_belt and self._engine_controller.belt_running:
             try:
-                self._engine_controller.stop_belt()
+                self._stop_belt_runtime()
             except Exception:
                 logger.exception("心跳帶校準啟動回滾時停止 BLE 失敗")
 
@@ -2518,8 +2598,23 @@ class EngineApplication(QObject):
             writer.close()
             self._append_log(f"■ belt-truth 同步錄製已停止（{count} 筆）→ {writer.path}")
         if self._engine_controller.belt_running:
-            self._engine_controller.stop_belt()
+            self._stop_belt_runtime()
         self._append_log("■ 心跳帶真值校準停止。")
+
+    def _stop_belt_runtime(self) -> bool:
+        stopped = self._engine_controller.stop_belt()
+        if stopped:
+            if self._engine_runtime.timer_active("belt_finalize"):
+                self._engine_runtime.cancel_timer("belt_finalize")
+        elif not self._engine_runtime.timer_active("belt_finalize"):
+            self._engine_runtime.start_periodic_timer("belt_finalize", 50, self._poll_belt_finalization)
+        return stopped
+
+    def _poll_belt_finalization(self) -> None:
+        if self._stop_belt_runtime():
+            self._emit_web_metrics(force=True)
+            if self._runtime_shutdown_waiting_for_adapters:
+                self._engine_runtime.defer(0, self._shutdown_engine)
 
     def _persist_belt_calibration(self) -> None:
         """把本次收斂的 offset 存成新的自適應校準版本（信心足夠時）。"""
@@ -3062,6 +3157,9 @@ class EngineApplication(QObject):
     def _toggle_pipeline(self) -> None:
         pipeline_running = self._engine_controller.pipeline_snapshot().running
         if not pipeline_running:
+            if self._engine_runtime.worker("camera_scan") is not None:
+                self._publish_desktop_notice("正在搜尋攝影機，請稍候再啟動監測。")
+                return
             self._latest_rppg_metrics = None
             self._latest_fatigue_metrics = None
             self._latest_fused_score = None
@@ -3142,9 +3240,7 @@ class EngineApplication(QObject):
             self._engine_controller.stop_recording()
             self._cancel_pending_auto_capture_timer()
             self._rollback_auto_capture_toggles()
-            if not self._stop_recording():
-                self._engine_controller.mark_pipeline_cleanup_pending()
-                self._fail_closed_pipeline_adapters()
+            self._stop_recording()
             self._append_log("○ 記錄停止。")
             self._emit_web_metrics(force=True)
 
@@ -3179,6 +3275,10 @@ class EngineApplication(QObject):
             # 倒數中再按一次 → 提前停止。
             self._append_log("■ 自動採集：使用者提前按下停止。")
             self._finish_auto_capture(early=True)
+            return
+
+        if self._engine_runtime.worker("camera_scan") is not None:
+            self._publish_desktop_notice("正在搜尋攝影機，請稍候再啟動採集。")
             return
 
         capture = self._capture_preferences.snapshot()

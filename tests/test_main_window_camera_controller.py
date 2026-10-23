@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +12,23 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QThread, QTimer  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import gui.main_window as main_window_module  # noqa: E402
 from gui.engine_controller import CameraDevice  # noqa: E402
 from gui.main_window import EngineApplication  # noqa: E402
+
+
+_START_CAMERA_SCAN = EngineApplication._start_camera_scan
+
+
+def _process_until(condition: Any) -> None:
+    deadline = time.monotonic() + 3.0
+    while not condition() and time.monotonic() < deadline:
+        QTest.qWait(10)
+    assert condition()
 
 
 @pytest.fixture(scope="module")
@@ -123,6 +137,140 @@ def test_scan_adapter_keeps_unavailable_settings_preference(
     window._finish_camera_scan_ui([(2, "USB Camera"), (9, "Later Camera")])
 
     assert window.selected_camera_index == 9
+
+
+def test_camera_discovery_keeps_qt_responsive_and_is_single_flight(
+    camera_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from gui import camera_devices
+    from gui.desktop_control import BusyError
+
+    window = camera_window
+    entered = threading.Event()
+    release = threading.Event()
+    returned = threading.Event()
+    calls: list[QThread] = []
+    heartbeat: list[bool] = []
+    applied_on: list[QThread] = []
+    replace = window._engine_controller.replace_cameras
+
+    def enumerate_devices(**_kwargs: Any) -> list[tuple[int, str]]:
+        calls.append(QThread.currentThread())
+        entered.set()
+        release.wait(2.0)
+        returned.set()
+        return [(9, "Later Camera")]
+
+    def replace_cameras(devices: Any) -> None:
+        applied_on.append(QThread.currentThread())
+        replace(devices)
+
+    monkeypatch.setattr(camera_devices, "list_camera_devices", enumerate_devices)
+    monkeypatch.setattr(window._engine_controller, "replace_cameras", replace_cameras)
+    window._engine_controller.restore_camera(9)
+    try:
+        _START_CAMERA_SCAN(window)
+        _process_until(entered.is_set)
+        QTimer.singleShot(0, lambda: heartbeat.append(True))
+        _process_until(lambda: bool(heartbeat))
+        assert not returned.is_set()
+        assert len(calls) == 1
+        assert calls[0] != QThread.currentThread()
+        _START_CAMERA_SCAN(window)
+        assert len(calls) == 1
+        assert window._desktop_control_state()["camera_scanning"] is True
+        with pytest.raises(BusyError, match="discovery"):
+            window._handle_desktop_command("pipeline.set", {"enabled": True})
+        with pytest.raises(BusyError, match="discovery"):
+            window._handle_desktop_command("auto_capture.set", {"enabled": True})
+        window._toggle_pipeline()
+        assert not window._engine_controller.pipeline_snapshot().running
+    finally:
+        release.set()
+        _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+
+    assert applied_on == [QThread.currentThread()]
+    assert window.selected_camera_index == 9
+    assert window._desktop_control_state()["camera_scanning"] is False
+
+
+def test_camera_discovery_failure_keeps_previous_devices(
+    camera_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from gui import camera_devices
+
+    window = camera_window
+    previous = window._engine_controller.camera_snapshot()
+
+    def fail_scan(**_kwargs: Any) -> list[tuple[int, str]]:
+        raise OSError("camera backend unavailable")
+
+    monkeypatch.setattr(camera_devices, "list_camera_devices", fail_scan)
+    _START_CAMERA_SCAN(window)
+    _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+
+    assert window._engine_controller.camera_snapshot() == previous
+
+
+@pytest.mark.parametrize("ending", ["cancelled", "shutdown"])
+def test_camera_discovery_ignores_result_after_stop(
+    camera_window: EngineApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    ending: str,
+) -> None:
+    from gui import camera_devices
+
+    window = camera_window
+    previous = window._engine_controller.camera_snapshot()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def enumerate_devices(**_kwargs: Any) -> list[tuple[int, str]]:
+        entered.set()
+        release.wait(2.0)
+        return [(9, "Late Camera")]
+
+    monkeypatch.setattr(camera_devices, "list_camera_devices", enumerate_devices)
+    try:
+        _START_CAMERA_SCAN(window)
+        _process_until(entered.is_set)
+        if ending == "cancelled":
+            window._engine_runtime.request_adapter_stop("camera_scan")
+        else:
+            window._runtime_cleanup_in_progress = True
+        release.set()
+        _process_until(lambda: window._engine_runtime.worker("camera_scan") is None)
+        assert window._engine_controller.camera_snapshot() == previous
+    finally:
+        release.set()
+        window._runtime_cleanup_in_progress = False
+
+
+def test_camera_discovery_ignores_replaced_session_and_live_scan_is_busy(
+    camera_window: EngineApplication,
+) -> None:
+    from gui.camera_scan_worker import CameraScanWorker
+    from gui.desktop_control import BusyError
+
+    window = camera_window
+    previous = window._engine_controller.camera_snapshot()
+    obsolete = CameraScanWorker()
+    window._on_camera_scan_succeeded(obsolete, [(9, "Old scan")])
+    assert window._engine_controller.camera_snapshot() == previous
+
+    window._engine_controller.start_pipeline()
+    try:
+        with pytest.raises(BusyError, match="Stop the pipeline"):
+            _START_CAMERA_SCAN(window)
+    finally:
+        window._engine_controller.stop_pipeline()
+
+    window._engine_controller.mark_pipeline_cleanup_pending()
+    try:
+        with pytest.raises(BusyError, match="cleanup"):
+            _START_CAMERA_SCAN(window)
+    finally:
+        window._engine_controller.finish_pipeline_cleanup()
 
 
 class _FakeSignal:

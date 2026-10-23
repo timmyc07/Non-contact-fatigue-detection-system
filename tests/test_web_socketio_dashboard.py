@@ -221,8 +221,8 @@ def test_slow_socket_client_keeps_only_inflight_and_latest_per_event(tmp_path, m
         events = slow.get_received()
         assert _event_payloads(events, "frame_update") == [{"frame": "frame-0"}]
         assert _event_payloads(events, "metrics_update") == [{"metrics": {"timestamp": 0}}]
-        server.socketio.emit("fb_upload_progress", {"progress": 1})
-        assert _event_payloads(slow.get_received(), "fb_upload_progress") == [{"progress": 1}]
+        slow.emit("request_metrics")
+        assert _event_payloads(slow.get_received(), "metrics_history") == [{"data": []}]
         _acknowledge_received(server.socketio, slow)
         latest = slow.get_received()
         assert _event_payloads(latest, "frame_update") == [{"frame": "frame-999"}]
@@ -411,6 +411,62 @@ def test_upload_database_snapshot_includes_committed_wal(tmp_path, monkeypatch):
         assert not captured[0][0].exists()
     finally:
         source.close()
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_upload_progress_is_bounded_per_client_and_http_keeps_final_result(tmp_path, monkeypatch, failure):
+    import sqlite3
+    from gui import web_server
+
+    with sqlite3.connect(tmp_path / "metrics_session.db") as conn:
+        conn.execute("CREATE TABLE metrics (timestamp REAL)")
+        conn.execute("INSERT INTO metrics VALUES (1)")
+    fast = None
+    fast_progress = []
+
+    class FakeFileBrowser:
+        def is_authenticated(self):
+            return True
+
+        def upload_file(self, path, name, progress_cb):
+            for index in range(10000):
+                progress_cb((index + 1) / 10000)
+                fast_progress.extend(_event_payloads(fast.get_received(), "fb_upload_progress"))
+                _acknowledge_received(socketio, fast)
+            if failure:
+                raise RuntimeError("synthetic upload failed")
+
+    monkeypatch.setattr(web_server, "FileBrowserClient", FakeFileBrowser)
+    app, socketio = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
+    slow = socketio.test_client(app)
+    fast = socketio.test_client(app)
+    publisher = app.extensions["ncfd_stream_publisher"]
+    slow.get_received()
+    fast.get_received()
+    try:
+        response = app.test_client().post("/api/fb/upload", json={"recording_name": "metrics_session"})
+        if failure:
+            assert response.status_code == 500
+            assert response.json["success"] is False
+            assert "synthetic upload failed" in response.json["error"]
+        else:
+            assert response.status_code == 200
+            assert response.json == {"success": True, "uploaded": ["metrics_session.db"], "errors": []}
+        assert len(fast_progress) == 10000
+        assert fast_progress[-1]["progress"] == 1.0
+        first = _event_payloads(slow.get_received(), "fb_upload_progress")
+        assert len(first) == 1
+        assert first[0]["progress"] == 0.0
+        assert len(publisher._pending) == 1
+        _acknowledge_received(socketio, slow)
+        latest = _event_payloads(slow.get_received(), "fb_upload_progress")
+        assert latest == [{"recording": "metrics_session", "file": "metrics_session.db", "progress": 1.0}]
+        _acknowledge_received(socketio, slow)
+        assert not publisher._pending
+    finally:
+        slow.disconnect()
+        fast.disconnect()
+    assert not publisher._pending
 
 
 @pytest.mark.parametrize("flag", ["recording", "recording_finalizing"])

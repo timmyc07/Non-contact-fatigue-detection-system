@@ -11,7 +11,7 @@ import numpy as np
 from scipy.interpolate import interp1d as _scipy_interp1d
 from scipy.signal import welch
 
-from rppg.calibration_watch import WatchSample
+from rppg.calibration_watch import WATCH_PHYSIO_WINDOW_SEC, WatchSample
 from rppg.rppg_worker import (
     _safe_welch_params,
     hrv_confidence,
@@ -164,14 +164,14 @@ def _bpm_guard(current_bpm: int, history: list[int], *, jump_bpm: float = 18.0) 
 def compute_watch_physio(
     samples: list[WatchSample],
     *,
-    window_sec: float = 90.0,
+    window_sec: float = WATCH_PHYSIO_WINDOW_SEC,
     min_samples: int = 8,
     still_motion_max: float = 0.35,
 ) -> WatchPhysioState:
     now = time.time()
     recent = [
         s for s in samples
-        if (now - s.received_at) <= window_sec and int(s.bpm) > 0
+        if 0.0 <= now - s.received_at <= window_sec and int(s.bpm) > 0
     ]
     warmup = _clamp(len(recent) / max(min_samples, 1), hi=1.0)
 

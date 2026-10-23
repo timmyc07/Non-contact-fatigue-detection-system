@@ -554,8 +554,9 @@ def test_belt_calibration_start_failure_cleans_new_runtime_resources(
             self.belt_running = True
             return ""
 
-        def stop_belt(self) -> None:
+        def stop_belt(self, join_timeout: float | None = 0.0) -> bool:
             self.belt_running = False
+            return True
 
         def create_truth_capture_writer(self, _path: object = None) -> FakeWriter:
             return self.writer
@@ -2511,7 +2512,7 @@ def test_runtime_cleanup_is_ordered_and_idempotent(
     monkeypatch.setattr(
         settings_window._engine_controller,
         "stop_belt",
-        lambda: events.append("belt.stop"),
+        lambda join_timeout=0.0: (events.append("belt.stop"), True)[1],
     )
     monkeypatch.setattr(
         settings_window,
@@ -2633,7 +2634,7 @@ def test_camera_failure_stops_active_recording_runtime(
         "metrics.request_close",
         "video.stop",
         "thread.quit",
-        ("thread.wait", 2000),
+        ("thread.wait", 0),
     ]
     assert settings_window._recording is False
     assert settings_window._metrics_recorder is None
@@ -2932,6 +2933,7 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
     settings_window: EngineApplication,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    waits: list[int] = []
     class FakeVideoWorker:
         def request_stop(self) -> None:
             pass
@@ -2941,6 +2943,7 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
             pass
 
         def wait(self, _timeout_ms: int) -> bool:
+            waits.append(_timeout_ms)
             return False
 
     worker = FakeVideoWorker()
@@ -2961,6 +2964,7 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
     stopped = settings_window._stop_recording()
 
     assert stopped is False
+    assert waits == [0]
     assert settings_window._video_worker is worker
     assert settings_window._video_thread is thread
     assert settings_window._video_queue is frame_queue
@@ -2970,6 +2974,43 @@ def test_recording_stop_keeps_video_ownership_when_thread_times_out(
     assert settings_window._video_queue is None
     assert settings_window._recording_video_path is None
     assert scheduled == [0]
+
+
+def test_pending_video_stop_keeps_monitoring_and_defers_new_recording(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = settings_window._engine_controller
+    controller.replace_cameras([CameraDevice(0, "Camera")])
+    controller.start_pipeline()
+    controller.start_recording()
+
+    class Worker:
+        def request_stop(self) -> None:
+            pass
+
+    class Thread:
+        def quit(self) -> None:
+            pass
+
+        def wait(self, timeout_ms: int) -> bool:
+            assert timeout_ms == 0
+            return False
+
+    thread = Thread()
+    _install_runtime_adapter(settings_window, "video", Worker(), thread)
+    failures: list[bool] = []
+    monkeypatch.setattr(settings_window, "_fail_closed_pipeline_adapters", lambda: failures.append(True))
+
+    state = settings_window._handle_desktop_command("recording.set", {"enabled": False})
+
+    assert state["recording"] is False
+    assert state["recording_finalizing"] is True
+    assert state["pipeline_running"] is True
+    assert controller.pipeline_snapshot().cleanup_pending is False
+    assert failures == []
+    with pytest.raises(BusyError, match="cleanup"):
+        settings_window._handle_desktop_command("recording.set", {"enabled": True})
+    settings_window._engine_runtime.release_adapter("video", thread)
 
 
 def test_recording_start_rejects_previous_video_cleanup(
@@ -3093,6 +3134,102 @@ def test_close_runtime_drains_metrics_after_event_loop_has_returned(
     assert settings_window._runtime_cleanup_complete is True
 
 
+def test_belt_stop_keeps_ownership_and_shutdown_waits_without_joining(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch, qt_app: QApplication,
+) -> None:
+    runtime = settings_window._engine_controller.belt_runtime
+    state = {"running": True}
+    waits: list[float | None] = []
+    callbacks: list[Callable[[], None]] = []
+    quit_calls: list[bool] = []
+    monkeypatch.setattr(type(runtime), "belt_running", property(lambda _self: state["running"]))
+
+    def stop(join_timeout=0.0) -> bool:
+        waits.append(join_timeout)
+        assert join_timeout == 0
+        return not state["running"]
+
+    monkeypatch.setattr(runtime, "stop_belt", stop)
+    monkeypatch.setattr(qt_app, "quit", lambda: quit_calls.append(True))
+    monkeypatch.setattr(settings_window._engine_runtime, "defer",
+                        lambda _delay, callback: callbacks.append(callback))
+
+    settings_window._shutdown_engine()
+
+    assert waits == [0.0]
+    assert settings_window._engine_runtime.timer_active("belt_finalize") is True
+    assert settings_window._runtime_cleanup_complete is False
+    assert settings_window._runtime_shutdown_waiting_for_adapters is True
+    assert quit_calls == []
+    state["running"] = False
+    settings_window._poll_belt_finalization()
+    assert settings_window._engine_runtime.timer_active("belt_finalize") is False
+    assert callbacks == [settings_window._shutdown_engine]
+    callbacks.pop()()
+    assert settings_window._runtime_cleanup_complete is True
+    assert quit_calls == [True]
+
+
+def test_close_runtime_drains_web_belt_and_replay_without_event_loop(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    runtime = settings_window._engine_controller.belt_runtime
+    state = {"running": True}
+    monkeypatch.setattr(type(runtime), "belt_running", property(lambda _self: state["running"]))
+
+    def stop_belt(join_timeout=0.0) -> bool:
+        if join_timeout is None:
+            events.append("belt.drained")
+            state["running"] = False
+        return not state["running"]
+
+    monkeypatch.setattr(runtime, "stop_belt", stop_belt)
+
+    class Server:
+        is_finalized = False
+        finalization_failed = False
+
+        def request_stop(self) -> None:
+            events.append("web.request_stop")
+
+        def stop(self, *, join_timeout=5.0) -> bool:
+            assert join_timeout is None
+            events.append("web.drained")
+            self.is_finalized = True
+            return True
+
+    class Worker:
+        def request_stop(self) -> None:
+            events.append("replay.request_stop")
+
+    class Thread:
+        def quit(self) -> None:
+            pass
+
+        def wait(self, timeout_ms=None) -> bool:
+            assert timeout_ms is None
+            events.append("replay.drained")
+            return True
+
+        def deleteLater(self) -> None:
+            pass
+
+    settings_window._web_server = Server()
+    settings_window._engine_controller.start_replay()
+    _install_runtime_adapter(settings_window, "replay", Worker(), Thread())
+
+    assert settings_window.close_runtime() is True
+    assert "belt.drained" in events
+    assert "web.drained" in events
+    assert "replay.request_stop" in events
+    assert "replay.drained" in events
+    assert settings_window._web_finalizing_servers == set()
+    assert settings_window._engine_runtime.timer_active("web_finalize") is False
+    assert settings_window._engine_runtime.timer_active("belt_finalize") is False
+    assert settings_window._engine_runtime.all_stopped() is True
+
+
 @pytest.mark.parametrize("metrics_first", [True, False])
 def test_recording_finalization_publishes_both_completion_orders(
     settings_window: EngineApplication,
@@ -3204,19 +3341,21 @@ def test_web_restart_is_background_and_coalesced(
     settings_window: EngineApplication, qt_app: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     main_thread = __import__("threading").get_ident()
-    stop_threads: list[int] = []
+    requests: list[int] = []
     starts: list[int] = []
 
     class Server:
-        def stop(self, *, join_timeout: float = 5.0) -> bool:
-            stop_threads.append(__import__("threading").get_ident())
-            return True
+        is_finalized = False
+        finalization_failed = False
 
-        @staticmethod
-        def is_alive() -> bool:
-            return False
+        def request_stop(self) -> None:
+            requests.append(__import__("threading").get_ident())
 
-    settings_window._web_server = Server()
+        def stop(self, **_kwargs) -> bool:
+            raise AssertionError("The event loop must not wait for HTTP cleanup")
+
+    server = Server()
+    settings_window._web_server = server
     monkeypatch.setattr(
         settings_window,
         "_start_web_server",
@@ -3225,12 +3364,13 @@ def test_web_restart_is_background_and_coalesced(
 
     settings_window._schedule_web_server_restart()
     settings_window._schedule_web_server_restart()
-    deadline = __import__("time").monotonic() + 1.0
-    while not starts and __import__("time").monotonic() < deadline:
-        qt_app.processEvents()
+    qt_app.processEvents()
 
-    assert len(stop_threads) == 1
-    assert stop_threads[0] != main_thread
+    assert requests == [main_thread]
+    assert starts == []
+    assert settings_window._web_restart_stopping_server is server
+    server.is_finalized = True
+    settings_window._poll_web_finalization()
     assert starts == [main_thread]
 
 
@@ -3238,13 +3378,8 @@ def test_web_restart_does_not_rebind_while_old_server_is_alive(
     settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Server:
-        @staticmethod
-        def stop(*, join_timeout: float = 5.0) -> bool:
-            return False
-
-        @staticmethod
-        def is_alive() -> bool:
-            return True
+        is_finalized = False
+        finalization_failed = False
 
     server = Server()
     starts: list[bool] = []
@@ -3256,12 +3391,15 @@ def test_web_restart_does_not_rebind_while_old_server_is_alive(
         lambda: starts.append(True),
     )
 
-    settings_window._on_web_restart_stopped(False, True)
+    settings_window._poll_web_finalization()
 
-    assert settings_window._web_server is server
-    assert settings_window._web_restart_in_progress is False
-    assert settings_window._web_restart_stopping_server is None
+    assert settings_window._web_server is None
+    assert settings_window._web_restart_in_progress is True
+    assert settings_window._web_restart_stopping_server is server
     assert starts == []
+    server.is_finalized = True
+    settings_window._poll_web_finalization()
+    assert starts == [True]
 
 
 def test_web_restart_callback_does_not_start_server_during_shutdown(
@@ -3270,14 +3408,14 @@ def test_web_restart_callback_does_not_start_server_during_shutdown(
     starts: list[bool] = []
     settings_window._web_restart_shutdown = True
     settings_window._web_restart_in_progress = True
-    settings_window._web_restart_stopping_server = object()
+    settings_window._web_restart_stopping_server = type("Server", (), {"is_finalized": True})()
     monkeypatch.setattr(
         settings_window,
         "_start_web_server",
         lambda: starts.append(True),
     )
 
-    settings_window._on_web_restart_stopped(True, False)
+    settings_window._poll_web_finalization()
 
     assert settings_window._web_server is None
     assert settings_window._web_restart_in_progress is False
@@ -3285,24 +3423,114 @@ def test_web_restart_callback_does_not_start_server_during_shutdown(
     assert starts == []
 
 
-def test_web_restart_starts_when_server_exits_just_after_stop_timeout(
+def test_web_shutdown_retains_pending_server_and_resumes_when_cleanup_finishes(
     settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    starts: list[bool] = []
-    settings_window._web_restart_in_progress = True
-    settings_window._web_restart_stopping_server = object()
+    requests: list[bool] = []
+    callbacks: list[Callable[[], None]] = []
+
+    class Server:
+        is_finalized = False
+        finalization_failed = False
+
+        def request_stop(self) -> None:
+            requests.append(True)
+
+        def stop(self, **_kwargs) -> bool:
+            raise AssertionError("The event loop must not wait for HTTP cleanup")
+
+    server = Server()
+    settings_window._web_server = server
+    settings_window._web_restart_shutdown = True
+    settings_window._runtime_shutdown_waiting_for_adapters = True
     monkeypatch.setattr(
-        settings_window,
-        "_start_web_server",
-        lambda: starts.append(True),
+        settings_window._engine_runtime, "defer",
+        lambda _delay, callback: callbacks.append(callback),
     )
 
-    settings_window._on_web_restart_stopped(False, False)
+    settings_window._stop_web_server()
 
     assert settings_window._web_server is None
-    assert settings_window._web_restart_in_progress is False
-    assert settings_window._web_restart_stopping_server is None
-    assert starts == [True]
+    assert requests == [True]
+    assert settings_window._web_finalizing_servers == {server}
+    assert settings_window._engine_runtime.timer_active("web_finalize") is True
+    assert callbacks == []
+    server.is_finalized = True
+    settings_window._poll_web_finalization()
+    assert settings_window._web_finalizing_servers == set()
+    assert settings_window._engine_runtime.timer_active("web_finalize") is False
+    assert callbacks == [settings_window._shutdown_engine]
+
+
+@pytest.mark.parametrize("restart", [True, False])
+def test_web_finalization_retries_each_failed_server_once(
+    settings_window: EngineApplication, monkeypatch: pytest.MonkeyPatch, restart: bool,
+) -> None:
+    requests: list[bool] = []
+    starts: list[bool] = []
+
+    class Server:
+        is_finalized = False
+        finalization_failed = True
+
+        def request_stop(self) -> None:
+            requests.append(True)
+            self.finalization_failed = False
+
+    server = Server()
+    if restart:
+        settings_window._web_restart_stopping_server = server
+        settings_window._web_restart_in_progress = True
+    else:
+        settings_window._web_finalizing_servers.add(server)
+    monkeypatch.setattr(settings_window, "_start_web_server", lambda: starts.append(True))
+
+    settings_window._poll_web_finalization()
+    assert requests == [True]
+    for _ in range(100):
+        settings_window._poll_web_finalization()
+    assert requests == [True]
+    server.finalization_failed = True
+    settings_window._poll_web_finalization()
+    assert requests == [True]
+    assert starts == []
+    server.is_finalized = True
+    settings_window._poll_web_finalization()
+    assert starts == ([True] if restart else [])
+    assert settings_window._web_finalization_retried == set()
+
+
+@pytest.mark.parametrize("retry_succeeds", [True, False])
+def test_close_runtime_drains_web_retry_without_event_loop(
+    settings_window: EngineApplication, retry_succeeds: bool,
+) -> None:
+    requests: list[bool] = []
+    waits: list[None] = []
+
+    class Server:
+        is_finalized = False
+        finalization_failed = False
+
+        def request_stop(self) -> None:
+            requests.append(True)
+            self.finalization_failed = False
+
+        def stop(self, *, join_timeout: float | None = 5.0) -> bool:
+            assert join_timeout is None
+            waits.append(None)
+            self.is_finalized = retry_succeeds and len(waits) == 2
+            self.finalization_failed = not self.is_finalized
+            return self.is_finalized
+
+    server = Server()
+    settings_window._web_server = server
+
+    assert settings_window.close_runtime() is retry_succeeds
+    assert waits == [None, None]
+    assert requests == [True, True]
+    assert settings_window._web_finalizing_servers == (set() if retry_succeeds else {server})
+    server.is_finalized = True
+    settings_window._poll_web_finalization()
 
 
 def test_desktop_settings_contract_module_is_qt_free() -> None:

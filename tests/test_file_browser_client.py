@@ -202,3 +202,168 @@ def test_restarted_heartbeat_cannot_clear_previous_threads_stop_event(monkeypatc
         release.set()
         client._stop_heartbeat()
         previous.join(timeout=2.0)
+
+
+def test_close_is_terminal_idempotent_and_a_new_client_can_connect(monkeypatch):
+    client = FileBrowserClient()
+    closed = []
+    monkeypatch.setattr(client._session, "close", lambda: closed.append(True))
+
+    def login():
+        client._token = "test-token"
+        client._token_expires = float("inf")
+        return True
+
+    monkeypatch.setattr(client, "_do_login_locked", login)
+    assert client.configure("https://file-browser.invalid", "user", "password")
+    heartbeat = client._heartbeat_thread
+    client.close()
+    client.close()
+    assert client.is_closed
+    assert not client.is_authenticated()
+    assert not heartbeat.is_alive()
+    assert closed == [True]
+    assert client.get_info() == {"base_url": None, "username": None}
+    with pytest.raises(RuntimeError, match="closed"):
+        client.configure("https://file-browser.invalid", "user", "password")
+    with pytest.raises(RuntimeError, match="closed"):
+        client._request("GET", "/api/resources/")
+    replacement = FileBrowserClient()
+    try:
+        assert replacement._session is not client._session
+        monkeypatch.setattr(replacement, "_do_login_locked", lambda: True)
+        monkeypatch.setattr(replacement, "_start_heartbeat", lambda: None)
+        assert replacement.configure("https://file-browser.invalid", "user", "password")
+    finally:
+        replacement.close()
+
+
+def test_close_waits_for_inflight_http_before_closing_session(monkeypatch):
+    client = FileBrowserClient()
+    client._base_url = "https://file-browser.invalid"
+    client._token_expires = float("inf")
+    entered = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+    events = []
+    errors = []
+
+    def request(*args, **kwargs):
+        entered.set()
+        assert release.wait(2.0)
+        events.append("request-complete")
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'{"items":[]}'
+        response._content_consumed = True
+        return response
+
+    monkeypatch.setattr(client._session, "request", request)
+    monkeypatch.setattr(client._session, "close", lambda: events.append("session-close"))
+
+    def invoke(action):
+        try:
+            action()
+        except Exception as exc:
+            errors.append(exc)
+
+    operation = threading.Thread(target=invoke, args=(client.list_recordings,))
+    cleanup = threading.Thread(target=lambda: (invoke(client.close), completed.set()))
+    operation.start()
+    try:
+        assert entered.wait(2.0)
+        cleanup.start()
+        assert not completed.wait(0.02)
+        assert "session-close" not in events
+    finally:
+        release.set()
+        operation.join(timeout=2.0)
+        if cleanup.ident is not None:
+            cleanup.join(timeout=2.0)
+    assert not errors
+    assert events == ["request-complete", "session-close"]
+    assert client.is_closed
+
+
+def test_close_closes_active_stream_before_session(monkeypatch):
+    client = FileBrowserClient()
+    client._base_url = "https://file-browser.invalid"
+    client._token_expires = float("inf")
+    response = requests.Response()
+    response.status_code = 200
+    response._content_consumed = True
+    events = []
+    monkeypatch.setattr(response, "close", lambda: events.append("response-close"))
+    monkeypatch.setattr(client._session, "request", lambda *args, **kwargs: response)
+    monkeypatch.setattr(client._session, "close", lambda: events.append("session-close"))
+    assert client.stream_video("video_test.mp4") is response
+    client.close()
+    assert events == ["response-close", "session-close"]
+
+
+def test_close_attempts_all_resources_and_can_retry_after_a_stream_close_error(monkeypatch):
+    client = FileBrowserClient()
+    responses = [requests.Response(), requests.Response()]
+    calls = [0, 0]
+    sessions_closed = []
+    for index, response in enumerate(responses):
+        def close(index=index):
+            calls[index] += 1
+            if index == 0 and calls[index] == 1:
+                raise OSError("stream close failed")
+
+        monkeypatch.setattr(response, "close", close)
+        client._active_streams.add(response)
+    monkeypatch.setattr(client._session, "close", lambda: sessions_closed.append(True))
+    client._base_url = "https://file-browser.invalid"
+    client._username = "user"
+    client._password = "password"
+    with pytest.raises(OSError, match="stream close failed"):
+        client.close()
+    assert calls == [1, 1]
+    assert sessions_closed == [True]
+    assert client.get_info() == {"base_url": None, "username": None}
+    assert client._password is None
+    assert not client.is_closed
+    client.close()
+    assert calls == [2, 1]
+    assert client.is_closed
+
+
+def test_close_waits_for_a_previous_heartbeat_after_restart(monkeypatch):
+    client = FileBrowserClient()
+    client._token = "test-token"
+    client._base_url = "https://file-browser.invalid"
+    entered = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+    refreshes = []
+
+    def refresh():
+        refreshes.append(True)
+        if len(refreshes) == 1:
+            entered.set()
+            assert release.wait(3.0)
+
+    monkeypatch.setattr(client, "_ensure_token", refresh)
+    client._start_heartbeat()
+    previous = client._heartbeat_thread
+    cleanup = threading.Thread(target=lambda: (client.close(), completed.set()))
+    try:
+        assert entered.wait(1.0)
+        client._stop_heartbeat()
+        client._start_heartbeat()
+        current = client._heartbeat_thread
+        assert previous is not current
+        cleanup.start()
+        assert not completed.wait(0.02)
+    finally:
+        release.set()
+        previous.join(timeout=2.0)
+        current.join(timeout=2.0)
+        if cleanup.ident is not None:
+            cleanup.join(timeout=2.0)
+    assert completed.is_set()
+    assert not previous.is_alive()
+    assert not current.is_alive()
+    assert client.is_closed

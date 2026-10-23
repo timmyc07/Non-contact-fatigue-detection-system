@@ -161,6 +161,8 @@ macOS 主面板會在建立 WebView 前解除 WebKit 偏好 60fps 的限制，�
 
 The [macOS REA and module audit](docs/technical/macos_rea_audit_2026-10-22.md) records the installed binary evidence, module contracts, fixes, and remaining hardware validation. The validated Web stack requires `Flask-SocketIO>=5.6.1`, `python-socketio>=5.16.4`, and `python-engineio>=4.14.0`. File Browser uploads require recording and video finalization to finish; databases are uploaded through a consistent SQLite snapshot.
 
+Socket.IO diagnostic consumers must acknowledge `metrics_update`, `frame_update`, and `fb_upload_progress` after accepting each payload. Each client and event keeps one unacknowledged payload and one latest pending snapshot; intermediate upload progress may be replaced. Upload completion and errors remain in the `/api/fb/upload` HTTP response, and `metrics_history` keeps its request/response contract.
+
 ## Technical design
 
 ### One camera, two complementary analysis paths

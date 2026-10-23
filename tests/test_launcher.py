@@ -13,6 +13,78 @@ import main as launcher
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_frozen_entry_reuses_app_font_cache_after_pyinstaller_hook(
+    tmp_path, monkeypatch,
+) -> None:
+    runtime = tmp_path / "runtime-data"
+    cache = runtime / "cache" / "matplotlib"
+    cache.mkdir(parents=True)
+    previous = cache / "fontlist-v390.json"
+    previous.write_text('{"existing": true}', encoding="utf-8")
+    observed = []
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(runtime))
+    monkeypatch.setattr(sys, "argv", ["ncfd-engine", "--runtime-preflight-face-landmarker"])
+
+    def before_first_mediapipe_import():
+        observed.append(os.environ["MPLCONFIGDIR"])
+        return 0
+
+    monkeypatch.setattr(launcher, "_run_face_landmarker_preflight", before_first_mediapipe_import)
+    for hook_cache in (tmp_path / "hook-first", tmp_path / "hook-second"):
+        monkeypatch.setenv("MPLCONFIGDIR", str(hook_cache))
+        assert launcher.main() == 0
+
+    assert observed == [str(cache), str(cache)]
+    assert previous.read_text(encoding="utf-8") == '{"existing": true}'
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_source_entry_preserves_matplotlib_environment(tmp_path, monkeypatch, configured) -> None:
+    runtime = tmp_path / "runtime-data"
+    user_cache = str(tmp_path / "user-matplotlib") if configured else None
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(runtime))
+    if user_cache is None:
+        monkeypatch.delenv("MPLCONFIGDIR", raising=False)
+    else:
+        monkeypatch.setenv("MPLCONFIGDIR", user_cache)
+    monkeypatch.setattr(sys, "argv", ["main.py", "--runtime-preflight-face-landmarker"])
+    monkeypatch.setattr(launcher, "_run_face_landmarker_preflight", lambda: 0)
+
+    assert launcher.main() == 0
+    assert os.environ.get("MPLCONFIGDIR") == user_cache
+    assert not runtime.exists()
+
+
+@pytest.mark.parametrize("failure", ["mkdir", "write"])
+def test_unwritable_app_cache_retains_pyinstaller_temporary_cache(
+    tmp_path, monkeypatch, failure,
+) -> None:
+    runtime = tmp_path / "runtime-data"
+    hook_cache = str(tmp_path / "secure-hook-cache")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("NCFD_DATA_ROOT", str(runtime))
+    monkeypatch.setenv("MPLCONFIGDIR", hook_cache)
+    monkeypatch.setattr(sys, "argv", ["ncfd-engine", "--runtime-preflight-face-landmarker"])
+    observed = []
+    if failure == "mkdir":
+        runtime.mkdir()
+        (runtime / "cache").write_text("Existing user file", encoding="utf-8")
+
+    def deny_cache_write(*_args, **_kwargs):
+        raise PermissionError("Cache is read-only")
+
+    monkeypatch.setattr("tempfile.TemporaryFile", deny_cache_write)
+    monkeypatch.setattr(launcher, "_run_face_landmarker_preflight",
+                        lambda: observed.append(os.environ["MPLCONFIGDIR"]) or 0)
+
+    assert launcher.main() == 0
+    assert observed == [hook_cache]
+    if failure == "mkdir":
+        assert (runtime / "cache").read_text(encoding="utf-8") == "Existing user file"
+
+
 def test_desktop_launcher_uses_asset_preparation_and_propagates_exit_code(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(launcher.shutil, "which", lambda name: f"/tools/{name}")

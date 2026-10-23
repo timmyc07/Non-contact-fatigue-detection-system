@@ -252,6 +252,8 @@ class MetricsBuffer:
             return list(self.data)
 
 class PlaybackManager:
+    _REPLAY_RUN_DIRS = ("utarldd_runs", "replay_runs")
+
     def __init__(self, recordings_dir: str | Path) -> None:
         self.recordings_dir = Path(recordings_dir)
         self.current_db: Optional[str] = None
@@ -264,12 +266,14 @@ class PlaybackManager:
 
     def _candidate_recording_dbs(self) -> list[Path]:
         db_files = set(self.recordings_dir.glob("metrics_*.db"))
-        db_files.update(self.recordings_dir.glob("utarldd_runs/*/metrics_*.db"))
+        for run_dir in self._REPLAY_RUN_DIRS:
+            db_files.update(self.recordings_dir.glob(f"{run_dir}/*/metrics_*.db"))
         return sorted(db_files, key=lambda path: path.stat().st_mtime if path.exists() else 0.0, reverse=True)
 
     def _recordings_mtime_marker(self) -> float:
         mtimes: list[float] = []
-        for path in (self.recordings_dir, self.recordings_dir / "utarldd_runs"):
+        directories = [self.recordings_dir, *(self.recordings_dir / name for name in self._REPLAY_RUN_DIRS)]
+        for path in directories:
             if path.exists():
                 try:
                     mtimes.append(path.stat().st_mtime)
@@ -465,6 +469,7 @@ def create_app(
         return None
 
     app = Flask(__name__, template_folder=None, static_folder=None)
+    app.extensions["ncfd_file_browser_client"] = _fb_client
     app.config["SECRET_KEY"] = secrets.token_hex(32)
     connected_clients: set[str] = set()
     app.extensions["ncfd_connected_clients"] = connected_clients
@@ -954,7 +959,7 @@ def create_app(
 
         def _emit_progress(filename: str, pct: float):
             try:
-                socketio.emit("fb_upload_progress", {
+                stream_publisher.publish("fb_upload_progress", {
                     "recording": recording_name,
                     "file": filename,
                     "progress": round(pct, 3),
@@ -1121,6 +1126,10 @@ class WebServerThread(threading.Thread):
         )
         self._stop_flag = threading.Event()
         self._stopped_event = threading.Event()
+        self._cleanup_lock = threading.Lock()
+        self._stop_lock = threading.Lock()
+        self._cleanup_thread: threading.Thread | None = None
+        self._cleanup_error: Exception | None = None
         wsgi_app = self.app.wsgi_app
 
         def dispatch(environ, start_response):
@@ -1132,6 +1141,8 @@ class WebServerThread(threading.Thread):
 
     def run(self) -> None:
         try:
+            if self._stop_flag.is_set():
+                return
             with make_server(self.host, self.port, self.app, threaded=True) as server:
                 server.timeout = 0.2
                 self.port = server.server_port
@@ -1140,6 +1151,13 @@ class WebServerThread(threading.Thread):
         except Exception:
             logger.exception("Web 服務器執行失敗")
         finally:
+            self._finalize()
+
+    def _finalize(self) -> None:
+        with self._cleanup_lock:
+            if self.is_finalized:
+                return
+            self._cleanup_error = None
             try:
                 # 不等待 polling client 再次取件，避免半開連線阻塞停服。
                 engineio = self.socketio.server.eio
@@ -1147,15 +1165,62 @@ class WebServerThread(threading.Thread):
                     client.close(wait=False, abort=True)
                 engineio.sockets.clear()
                 self.socketio.server.shutdown()
+            except Exception as exc:
+                self._cleanup_error = exc
+                logger.exception("Web transport 收尾失敗")
             finally:
                 self.app.extensions["ncfd_stream_publisher"].clear()
+                try:
+                    self.app.extensions["ncfd_file_browser_client"].close()
+                except Exception as exc:
+                    self._cleanup_error = exc
+                    logger.exception("File Browser 資源收尾失敗")
                 self._stopped_event.set()
 
-    def stop(self, *, join_timeout: float = 5.0) -> bool:
+    @property
+    def is_finalized(self) -> bool:
+        return self._stopped_event.is_set() and self._cleanup_error is None
+
+    @property
+    def finalization_failed(self) -> bool:
+        return (
+            self._stopped_event.is_set()
+            and self._cleanup_error is not None
+            and not self.is_alive()
+            and (self._cleanup_thread is None or not self._cleanup_thread.is_alive())
+        )
+
+    def request_stop(self) -> None:
         self._stop_flag.set()
-        if self.ident is None:
-            return True
-        return self._stopped_event.wait(timeout=join_timeout)
+        self.app.extensions["ncfd_file_browser_client"].request_close()
+        with self._stop_lock:
+            if self.is_finalized or self.is_alive():
+                return
+            if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
+                return
+            self._stopped_event.clear()
+            self._cleanup_thread = threading.Thread(
+                target=self._finalize, name="WebServerCleanup", daemon=True,
+            )
+            self._cleanup_thread.start()
+
+    def stop(self, *, join_timeout: float | None = 5.0) -> bool:
+        deadline = None if join_timeout is None else time.monotonic() + max(0.0, join_timeout)
+        self.request_stop()
+        owners = (self, self._cleanup_thread)
+        if threading.current_thread() in owners:
+            return self.is_finalized
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        if not self._stopped_event.wait(timeout=remaining):
+            return False
+        for owner in owners:
+            if owner is None or owner.ident is None:
+                continue
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            owner.join(timeout=remaining)
+            if owner.is_alive():
+                return False
+        return self.is_finalized
 
     def broadcast_metrics(self, metrics: dict) -> None:
         self.app.extensions["ncfd_stream_publisher"].publish("metrics_update", {"metrics": metrics})
