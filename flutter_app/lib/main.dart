@@ -1696,6 +1696,7 @@ class DesktopControlPanel extends StatelessWidget {
         ),
         const SizedBox(height: 9),
         ExpansionTile(
+            key: const PageStorageKey('auto-capture'),
             tilePadding: EdgeInsets.zero,
             childrenPadding: const EdgeInsets.only(top: 12),
             shape: const Border(),

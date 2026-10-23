@@ -57,3 +57,13 @@
 有效樣本的演算法、模型、濾波、ROI、閾值、融合權重、校準、HRV、警報條件與資料 schema 均未修改。UI 只調整顯示缺值與視覺狀態，不回寫或改造量測值。心跳帶的安全啟用條件、停止與 busy 禁用、設定驗證及 payload 保持原有契約。
 
 未執行真人攝影機／BLE 精度或長時效能壓測，也未宣稱推論加速。完整 Python 演算法 pytest 與 UTA-RLDD golden 不屬本次前端改動的驗證範圍；數值程式沒有改動。本機相機目前未被封裝程式偵測到，需另確認權限／硬體後才可進行監測驗收。
+
+## 切頁後空白與灰框修復
+
+收到實際畫面後，新增保留同一個 `PageStorageBucket` 的「捲動監測頁 → 設定頁 → 返回監測頁」測試，在修復前實際重現 `type 'double' is not a subtype of type 'bool?' in type cast`。原因是未指定 key 的自動採集 `ExpansionTile` 與捲動頁共用祖先的 `PageStorageKey`，使捲動位置（double）和展開狀態（bool）互相覆蓋。
+
+只替自動採集加上獨立 `PageStorageKey('auto-capture')`，讓捲動與展開各自還原；不清除使用者偏好，不變更數值或指令。這符合 [Flutter 官方 ExpansionTile 文件](https://api.flutter.dev/flutter/material/ExpansionTile-class.html) 的唯一 PageStorageKey 要求，並已核對本機 Flutter 3.47.2 的 Expansible 與 ScrollPosition 原始碼；Context7 仍無該版本專屬索引。
+
+新增測試同時驗證捲動後返回保留位置，以及展開自動採集後切頁返回仍保持展開。修復後完整 Flutter 測試為 **77 項通過**、`flutter analyze` 無問題；本次對應 Python UI／shell 契約測試 **18 項通過**，`compileall` 與 `git diff --check` 通過，macOS `.app` 建置成功。
+
+已備份並更新 `/Applications/疲勞監測操作台.app`，簽章驗證通過；實際開啟後確認主面板完整呈現，捲動後切換設定頁再返回仍正常，自動採集可展開。程式保持開啟，未啟動採集或修改偏好。
