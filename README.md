@@ -155,6 +155,8 @@ PyInstaller packages the engine; Tauri bundles it with the model and tuning reso
 
 Current macOS local packages use ad-hoc signing. Public distribution still requires Developer ID signing and notarization. See the [operations guide](docs/guides/operations.md) for packaging, diagnostics, and acceptance procedures.
 
+macOS 主面板會在建立 WebView 前解除 WebKit 偏好 60fps 的限制，讓捲動可配合 ProMotion／高刷新率螢幕；實際頻率仍由系統與負載決定。此功能使用 WebKit 私有 API，API 不可用時保留預設刷新策略，因此不適用 Mac App Store 發佈。測量與限制見 [ProMotion 捲動審查](docs/technical/promotion_scroll_2026-10-23.md)。
+
 The [macOS REA and module audit](docs/technical/macos_rea_audit_2026-10-22.md) records the installed binary evidence, module contracts, fixes, and remaining hardware validation. The validated Web stack requires `Flask-SocketIO>=5.6.1`, `python-socketio>=5.16.4`, and `python-engineio>=4.14.0`. File Browser uploads require recording and video finalization to finish; databases are uploaded through a consistent SQLite snapshot.
 
 ## Technical design

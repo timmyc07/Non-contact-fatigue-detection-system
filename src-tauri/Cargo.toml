@@ -18,6 +18,11 @@ tauri-plugin-single-instance = "2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSString"] }
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "WKPreferences", "WKWebViewConfiguration"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

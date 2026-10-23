@@ -1,8 +1,48 @@
 import 'package:fatigue_monitor_ui/main.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('scrolling reuses the static dashboard paint', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 820));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: DashboardView(
+      metrics: const {},
+      engineState: const {},
+      previewFrames: const Stream<String>.empty(),
+      connected: true,
+      busy: false,
+      error: null,
+      onRetry: () async {},
+      onCommand: (_, [__]) async {},
+    ))));
+    await tester.pumpAndSettle();
+    final paragraph = tester.renderObject<RenderParagraph>(find.text('即時監測'));
+    var paragraphPaints = 0;
+    final previousCallback = debugOnProfilePaint;
+    debugOnProfilePaint = (object) {
+      previousCallback?.call(object);
+      if (identical(object, paragraph)) paragraphPaints++;
+    };
+    final position =
+        tester.state<ScrollableState>(find.byType(Scrollable).first).position;
+    try {
+      for (var frame = 1; frame <= 10; frame++) {
+        position.jumpTo(frame * 8);
+        await tester.pump(const Duration(microseconds: 8333));
+      }
+    } finally {
+      debugOnProfilePaint = previousCallback;
+    }
+
+    expect(position.pixels, 80);
+    expect(paragraphPaints, 0);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'dashboard restores scrolling and expansion independently after navigation',
       (tester) async {

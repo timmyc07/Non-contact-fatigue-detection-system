@@ -19,7 +19,8 @@ class PanelPage extends StatelessWidget {
         builder: (context, constraints) => SingleChildScrollView(
           key: PageStorageKey(title),
           padding: EdgeInsets.all(constraints.maxWidth < 700 ? 18 : 28),
-          child: Align(
+          child: RepaintBoundary(
+              child: Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1440),
@@ -61,7 +62,7 @@ class PanelPage extends StatelessWidget {
                 ],
               ),
             ),
-          ),
+          )),
         ),
       );
 }

@@ -15,6 +15,9 @@ use tauri::{
 };
 use tauri_plugin_dialog::DialogExt;
 
+#[cfg(target_os = "macos")]
+mod macos_refresh;
+
 struct BackendProcess(Mutex<Option<Child>>);
 struct DesktopShutdown(AtomicBool);
 
@@ -629,6 +632,21 @@ fn shutdown_desktop(app_handle: &tauri::AppHandle) {
 }
 
 fn run() {
+    let context = tauri::generate_context!();
+    #[cfg(target_os = "macos")]
+    let context = {
+        let mut context = context;
+        if let Some(main) = context
+            .config_mut()
+            .app
+            .windows
+            .iter_mut()
+            .find(|window| window.label == "main")
+        {
+            main.create = false;
+        }
+        context
+    };
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -641,6 +659,8 @@ fn run() {
         .manage(BackendProcess(Mutex::new(None)))
         .manage(DesktopShutdown(AtomicBool::new(false)))
         .setup(|app: &mut tauri::App| {
+            #[cfg(target_os = "macos")]
+            macos_refresh::create_main_window(app)?;
             let child = spawn_backend(app.handle()).map_err(std::io::Error::other)?;
             *app.state::<BackendProcess>()
                 .0
@@ -665,7 +685,7 @@ fn run() {
             set_overlay_window,
             get_overlay_geometry
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Tauri application");
     app.run(|app_handle, event| {
         match event {
