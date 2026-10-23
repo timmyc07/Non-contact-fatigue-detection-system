@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:js_interop';
 
 @JS('window.__TAURI__.core.invoke')
@@ -5,6 +6,13 @@ external JSPromise<JSAny?> _tauriInvoke(String command, JSAny? args);
 
 @JS('window.__TAURI__')
 external JSAny? get _tauriGlobal;
+
+@JS('window.__TAURI__.event.listen')
+external JSPromise<JSFunction> _tauriListen(String event, JSFunction callback);
+
+extension type _TauriEvent(JSObject _) implements JSObject {
+  external JSAny? get payload;
+}
 
 /// Thin interop layer for Flutter Web running inside Tauri v2.
 /// Browser development falls back with a clear error instead of crashing at startup.
@@ -14,6 +22,51 @@ class TauriBridge {
   static final TauriBridge instance = TauriBridge._();
 
   bool get isAvailable => _tauriGlobal != null;
+
+  Stream<bool> overlayVisibilityChanges() {
+    late StreamController<bool> events;
+    JSFunction? unlisten;
+    var cancelled = false;
+    var changes = 0;
+
+    Future<void> removeListener() async {
+      final callback = unlisten;
+      unlisten = null;
+      if (callback != null) {
+        await (callback.callAsFunction() as JSPromise<JSAny?>).toDart;
+      }
+    }
+
+    events = StreamController<bool>(onListen: () async {
+      try {
+        unlisten = await _tauriListen(
+                'ncfd-overlay-visibility',
+                ((JSObject event) {
+                  final visible = _TauriEvent(event).payload.dartify();
+                  if (!cancelled && visible is bool) {
+                    changes++;
+                    events.add(visible);
+                  }
+                }).toJS)
+            .toDart;
+        if (cancelled) {
+          await removeListener();
+          return;
+        }
+        final beforeQuery = changes;
+        final visible = await invoke('get_overlay_visibility');
+        if (!cancelled && changes == beforeQuery && visible is bool) {
+          events.add(visible);
+        }
+      } catch (error, stack) {
+        if (!cancelled) events.addError(error, stack);
+      }
+    }, onCancel: () async {
+      cancelled = true;
+      await removeListener();
+    });
+    return events.stream;
+  }
 
   Future<dynamic> invoke(String command, [Map<String, dynamic>? args]) async {
     try {

@@ -32,7 +32,7 @@ def test_macos_memory_measurement_includes_children_and_converts_kib(monkeypatch
 def test_synthetic_preview_benchmark_delivers_every_frame(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     result = _benchmark_synthetic_preview(warmup=1, samples=3)
-    assert result["kind"] == "synthetic_in_process"
+    assert result["kind"] == "synthetic_loopback"
     assert result["samples"] == 3
     assert result["dispatch_delivered"] == 3
     assert result["base64_bytes"] > result["jpeg_bytes"] > 0

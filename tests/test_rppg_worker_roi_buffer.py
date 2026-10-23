@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import numpy as np
+import pytest
 
 from gui.mediapipe_tuning import load_mediapipe_tuning  # noqa: E402
 from rppg.rppg_worker import (  # noqa: E402
@@ -229,3 +231,60 @@ def test_reset_clears_roi_buffers() -> None:
         assert len(engine._roi_buffers[name]["r"]) == 0
         assert len(engine._roi_buffers[name]["g"]) == 0
         assert len(engine._roi_buffers[name]["b"]) == 0
+
+
+@pytest.mark.parametrize("timestamps", [
+    [0.0, 1.0, 1.0, 2.0, 4.0, 5.0],
+    [0.0, 10.0, 2.0, 20.0, 3.0],
+    [float("nan"), 1.0, float("inf"), 2.0],
+])
+@pytest.mark.parametrize("window_sec,t_now", [
+    (2.0, None), (0.0, None), (1000.0, None), (-1.0, None),
+    (2.0, 2.0), (2.0, -100.0), (2.0, 100.0), (float("nan"), 5.0),
+])
+def test_roi_window_matches_full_history_mask_for_any_window_and_time_order(
+    timestamps, window_sec, t_now,
+):
+    engine = RppgEngine()
+    for i, timestamp in enumerate(timestamps):
+        engine.push_roi_means(timestamp, {"forehead": (float(i), i * 0.7, -float(i))})
+    buf = engine._roi_buffers["forehead"]
+    times = np.array(buf["t"], dtype=np.float64)
+    cutoff = (float(t_now) if t_now is not None else float(times[-1])) - window_sec
+    mask = times >= cutoff
+    expected = tuple(np.array(buf[key], dtype=np.float64)[mask] for key in ("t", "r", "g", "b"))
+
+    actual = engine.get_roi_window("forehead", window_sec, t_now)
+
+    for output, baseline in zip(actual, expected):
+        np.testing.assert_array_equal(output, baseline)
+        assert output.dtype == np.float64
+        assert output.flags.c_contiguous
+
+
+def test_recent_roi_window_does_not_scan_the_full_ordered_history():
+    visited = []
+
+    class CountedDeque(deque):
+        def __iter__(self):
+            for value in super().__iter__():
+                visited.append(None)
+                yield value
+
+        def __reversed__(self):
+            for value in super().__reversed__():
+                visited.append(None)
+                yield value
+
+    engine = RppgEngine()
+    for i in range(100_000):
+        engine.push_roi_means(i / 30.0, {"forehead": (float(i), float(i + 1), float(i + 2))})
+    buf = engine._roi_buffers["forehead"]
+    for key, values in buf.items():
+        buf[key] = CountedDeque(values, maxlen=values.maxlen)
+
+    times, red, _, _ = engine.get_roi_window("forehead", 12.0)
+
+    assert len(times) == 361
+    np.testing.assert_array_equal(red, np.arange(99_639, 100_000, dtype=np.float64))
+    assert len(visited) < 10_000

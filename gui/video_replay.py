@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+import logging
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -43,6 +44,9 @@ from rppg.rppg_worker import (
     ensure_face_model,
     _MODELS_DIR,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 UTARLDD_LABELS: dict[str, str] = {
@@ -429,47 +433,10 @@ def run_replay_video(
     file_prefix = "utarldd" if labeled else "replay"
     db_path = output_dir / f"metrics_{file_prefix}_{video.subject}_{video.label}_{run_stamp}.db"
     summary.db_path = str(db_path)
-    cap = cv2.VideoCapture(str(video.path))
-    if not cap.isOpened():
-        summary.status = "failed"
-        summary.error = "OpenCV 無法開啟影片"
-        return summary
-
-    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    codec = _fourcc_to_str(int(cap.get(cv2.CAP_PROP_FOURCC) or 0))
-    summary.fps = fps
-    summary.width = width
-    summary.height = height
+    cap = None
     writer = None
-    if write_annotated_video:
-        annotated_path = output_dir / f"video_{file_prefix}_{video.subject}_{video.label}_{run_stamp}.mp4"
-        writer = _writer_for(annotated_path, fps, width, height)
-        if writer.isOpened():
-            summary.annotated_video_path = str(annotated_path)
-        else:
-            writer.release()
-            writer = None
-
-    recorder = MetricsRecorder(str(db_path))
-    rppg_engine = RppgEngine(buffer_sec=12.0, target_fps=fps)
-    roi_tracker = RoiGeometryTracker()
-    fatigue_engine = FatigueEngine()
-    fuser = FatigueFuser()
-    tuning = load_mediapipe_tuning()
-    model_path = ensure_face_model(_MODELS_DIR)
-    options = _mp_vision.FaceLandmarkerOptions(
-        base_options=create_face_landmarker_base_options(_mp_python, model_path),
-        output_face_blendshapes=True,
-        output_facial_transformation_matrixes=True,
-        min_face_detection_confidence=tuning.face_landmarker.min_face_detection_confidence,
-        min_face_presence_confidence=tuning.face_landmarker.min_face_presence_confidence,
-        min_tracking_confidence=tuning.face_landmarker.min_tracking_confidence,
-        num_faces=max(1, int(tuning.face_landmarker.num_faces)),
-        running_mode=_mp_vision.RunningMode.VIDEO,
-    )
-
+    recorder = None
+    fps = 30.0
     fatigue_scores: list[float] = []
     fused_scores: list[float] = []
     perclos_values: list[float] = []
@@ -478,12 +445,46 @@ def run_replay_video(
     sqi_values: list[float] = []
     bpm_values: list[float] = []
     status_counts: dict[str, int] = {}
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    ts_ms_prev = 0
-    preview_interval_sec = 1.0 / min(max(fps, 1.0), _PREVIEW_TARGET_FPS)
-    next_preview_ts = 0.0
-
     try:
+        cap = cv2.VideoCapture(str(video.path))
+        if not cap.isOpened():
+            raise RuntimeError("OpenCV 無法開啟影片")
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        codec = _fourcc_to_str(int(cap.get(cv2.CAP_PROP_FOURCC) or 0))
+        summary.fps = fps
+        summary.width = width
+        summary.height = height
+        if write_annotated_video:
+            annotated_path = output_dir / f"video_{file_prefix}_{video.subject}_{video.label}_{run_stamp}.mp4"
+            writer = _writer_for(annotated_path, fps, width, height)
+            if writer.isOpened():
+                summary.annotated_video_path = str(annotated_path)
+            else:
+                writer.release()
+                writer = None
+        recorder = MetricsRecorder(str(db_path))
+        rppg_engine = RppgEngine(buffer_sec=12.0, target_fps=fps)
+        roi_tracker = RoiGeometryTracker()
+        fatigue_engine = FatigueEngine()
+        fuser = FatigueFuser()
+        tuning = load_mediapipe_tuning()
+        model_path = ensure_face_model(_MODELS_DIR)
+        options = _mp_vision.FaceLandmarkerOptions(
+            base_options=create_face_landmarker_base_options(_mp_python, model_path),
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
+            min_face_detection_confidence=tuning.face_landmarker.min_face_detection_confidence,
+            min_face_presence_confidence=tuning.face_landmarker.min_face_presence_confidence,
+            min_tracking_confidence=tuning.face_landmarker.min_tracking_confidence,
+            num_faces=max(1, int(tuning.face_landmarker.num_faces)),
+            running_mode=_mp_vision.RunningMode.VIDEO,
+        )
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        ts_ms_prev = 0
+        preview_interval_sec = 1.0 / min(max(fps, 1.0), _PREVIEW_TARGET_FPS)
+        next_preview_ts = 0.0
         with _mp_vision.FaceLandmarker.create_from_options(options) as landmarker:
             while True:
                 if stop_requested is not None and stop_requested():
@@ -606,13 +607,26 @@ def run_replay_video(
                 if progress_cb and summary.frames % max(1, int(fps)) == 0:
                     progress_cb("frame", summary.frames, total_frames, replace(summary))
     except Exception as exc:
+        logger.exception("影片回放失敗：%s", video.path)
         summary.status = "failed"
         summary.error = str(exc)
     finally:
-        recorder.close()
-        cap.release()
-        if writer is not None:
-            writer.release()
+        if recorder is not None:
+            try:
+                recorder.request_close()
+                recorder.wait_closed(timeout_seconds=None)
+            except Exception as exc:
+                logger.exception("回放資料庫收尾失敗：%s", db_path)
+                summary.status = "failed"
+                summary.error = f"{summary.error}; {exc}" if summary.error else str(exc)
+        for resource in (cap, writer):
+            if resource is not None:
+                try:
+                    resource.release()
+                except Exception as exc:
+                    logger.exception("回放影像資源釋放失敗：%s", type(resource).__name__)
+                    summary.status = "failed"
+                    summary.error = f"{summary.error}; {exc}" if summary.error else str(exc)
 
     if summary.status == "pending":
         summary.status = "done"

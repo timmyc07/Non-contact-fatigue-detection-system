@@ -36,7 +36,7 @@ from .personal_profile import PersonalProfile
 from .frame_queue import get_latest
 from .mediapipe_tuning import load_mediapipe_tuning
 from .platforms import create_face_landmarker_base_options
-from .worker_safety import fail_closed_worker
+from .worker_safety import ConsecutiveFrameFailures, fail_closed_worker
 from rppg.rppg_worker import ensure_face_model, _MODELS_DIR
 
 
@@ -651,6 +651,7 @@ class FatigueWorker(QObject):
         ts_ms_prev = 0
         last_preview_emit = 0.0
         preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
+        frame_failures = ConsecutiveFrameFailures()
 
         self.status_changed.emit("行為警覺引擎就緒，等待幀資料…")
 
@@ -679,8 +680,10 @@ class FatigueWorker(QObject):
 
                 try:
                     result = landmarker.detect_for_video(mp_img, ts_ms)
-                except Exception:
+                except Exception as exc:
+                    frame_failures.record(exc)
                     continue
+                frame_failures.reset()
 
                 has_face = bool(result.face_landmarks)
                 if has_face != last_face:
@@ -689,7 +692,8 @@ class FatigueWorker(QObject):
 
                 blendshapes = result.face_blendshapes[0] if result.face_blendshapes else None
 
-                annotated = bgr.copy()
+                preview_due = ts - last_preview_emit >= preview_emit_interval
+                annotated = bgr
 
                 if has_face:
                     lm      = result.face_landmarks[0]
@@ -697,7 +701,8 @@ class FatigueWorker(QObject):
                     metrics = engine.step(lm, w_px, h_px, ts, blendshapes=blendshapes)
                     metrics.face_detected = True
 
-                    annotated = draw_fatigue_annotations(annotated, lm, metrics)
+                    if preview_due:
+                        annotated = draw_fatigue_annotations(bgr, lm, metrics)
 
                     if not metrics.calibrated:
                         pct = int(metrics.calib_progress * 100)
@@ -715,7 +720,7 @@ class FatigueWorker(QObject):
 
                 self.metrics_ready.emit(metrics)
 
-                if ts - last_preview_emit >= preview_emit_interval:
+                if preview_due:
                     last_preview_emit = ts
                     rgb_ann  = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
                     rgb_ann  = np.ascontiguousarray(rgb_ann)

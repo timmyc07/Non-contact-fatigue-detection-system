@@ -183,7 +183,9 @@ def main() -> int:
         f"http://127.0.0.1:{WEB_DASHBOARD_DEFAULT_PORT}"
     )
     exit_code = app.exec()
-    engine.close_runtime()
+    if not engine.close_runtime():
+        print("[Engine] Runtime cleanup did not complete", file=sys.stderr)
+        return exit_code or 1
     return exit_code
 
 

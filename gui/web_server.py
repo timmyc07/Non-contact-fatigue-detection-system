@@ -164,6 +164,79 @@ def _row_get(row: dict[str, Any], columns: set[str], key: str, default: Any = No
     return default
 
 
+class _LatestEventPublisher:
+    """每個 client/event 僅保留一筆待 ACK 與一筆最新快照。"""
+
+    def __init__(self, socketio: SocketIO, clients: set[str]) -> None:
+        self.socketio = socketio
+        self.clients = clients
+        self._lock = threading.Lock()
+        self._pending: dict[tuple[str, str], tuple[object, dict | None]] = {}
+
+    def connect(self, sid: str) -> None:
+        with self._lock:
+            self.clients.add(sid)
+
+    def disconnect(self, sid: str) -> None:
+        with self._lock:
+            self.clients.discard(sid)
+            for key in [key for key in self._pending if key[0] == sid]:
+                del self._pending[key]
+
+    def clear(self) -> None:
+        with self._lock:
+            self.clients.clear()
+            self._pending.clear()
+
+    @property
+    def client_count(self) -> int:
+        with self._lock:
+            return len(self.clients)
+
+    def publish(self, event: str, payload: dict, sid: str | None = None) -> None:
+        with self._lock:
+            recipients = [sid] if sid is not None else list(self.clients)
+        for recipient in recipients:
+            key = recipient, event
+            with self._lock:
+                if recipient not in self.clients:
+                    continue
+                pending = self._pending.get(key)
+                if pending is not None:
+                    self._pending[key] = pending[0], payload
+                    continue
+                token = object()
+                self._pending[key] = token, None
+            self._send(key, token, payload)
+
+    def _send(self, key: tuple[str, str], token: object, payload: dict) -> None:
+        sid, event = key
+        try:
+            self.socketio.emit(
+                event, payload, to=sid, namespace="/",
+                callback=lambda *args: self._acknowledge(key, token),
+            )
+        except Exception:
+            with self._lock:
+                pending = self._pending.get(key)
+                if pending is not None and pending[0] is token:
+                    del self._pending[key]
+            logger.exception("Socket.IO 即時快照傳送失敗: %s", event)
+
+    def _acknowledge(self, key: tuple[str, str], token: object) -> None:
+        with self._lock:
+            pending = self._pending.get(key)
+            if pending is None or pending[0] is not token:
+                return
+            payload = pending[1]
+            if payload is None:
+                del self._pending[key]
+                return
+            next_token = object()
+            self._pending[key] = next_token, None
+        self._send(key, next_token, payload)
+
+
 class MetricsBuffer:
     def __init__(self, maxsize: int = 300):
         self.maxsize = maxsize
@@ -264,17 +337,16 @@ class PlaybackManager:
                 if sidecar is not None:
                     count, min_ts_raw, max_ts_raw = sidecar
                 else:
-                    conn = sqlite3.connect(str(db_file))
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM metrics")
-                    count = cursor.fetchone()[0]
-                    cursor.execute("SELECT MIN(timestamp), MAX(timestamp) FROM metrics")
-                    ts_row = cursor.fetchone()
+                    with closing(sqlite3.connect(str(db_file))) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM metrics")
+                        count = cursor.fetchone()[0]
+                        cursor.execute("SELECT MIN(timestamp), MAX(timestamp) FROM metrics")
+                        ts_row = cursor.fetchone()
                     if ts_row is None:
                         min_ts_raw, max_ts_raw = None, None
                     else:
                         min_ts_raw, max_ts_raw = ts_row
-                    conn.close()
 
                 if count > 0:
                     duration = max(_safe_float(max_ts_raw) - _safe_float(min_ts_raw), 0.0)
@@ -328,23 +400,20 @@ class PlaybackManager:
 
     def get_recording_data(self, db_path: str, offset: int = 0, limit: int = 100) -> dict:
         try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT COUNT(*) FROM metrics")
-            total_count = cursor.fetchone()[0]
-
-            cursor.execute(
-                """
-                SELECT * FROM metrics
-                ORDER BY timestamp ASC
-                LIMIT ? OFFSET ?
-            """,
-                (limit, offset),
-            )
-            rows = cursor.fetchall()
-            conn.close()
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM metrics")
+                total_count = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    SELECT * FROM metrics
+                    ORDER BY timestamp ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset),
+                )
+                rows = cursor.fetchall()
 
             data = []
             for row in rows:
@@ -410,6 +479,8 @@ def create_app(
         ping_interval=25,
         max_http_buffer_size=10_000_000,
     )
+    stream_publisher = _LatestEventPublisher(socketio, connected_clients)
+    app.extensions["ncfd_stream_publisher"] = stream_publisher
 
     @app.after_request
     def _add_desktop_cors_headers(response: Response) -> Response:
@@ -633,7 +704,7 @@ def create_app(
             return jsonify({"success": False, "error": "Invalid db_path"}), 403
 
         try:
-            with sqlite3.connect(str(allowed_db_path)) as conn:
+            with closing(sqlite3.connect(str(allowed_db_path))) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(metrics)")
@@ -946,10 +1017,13 @@ def create_app(
         filename = (request.args.get("filename") or "").strip()
         if not filename or ".." in filename or "/" in filename or filename.startswith("\\"):
             return jsonify({"success": False, "error": "不合法的檔名"}), 400
+        fb_resp = None
         try:
             fb_resp = _fb_client._request("GET", f"/api/raw/{filename}", stream=True, timeout=300)
             fb_resp.raise_for_status()
         except Exception:
+            if fb_resp is not None:
+                fb_resp.close()
             logger.exception("下載 File Browser 檔案失敗: %s", filename)
             return jsonify({"success": False, "error": "internal error"}), 502
 
@@ -982,17 +1056,17 @@ def create_app(
                 return False
         sid = getattr(request, "sid", None)
         if sid is not None:
-            connected_clients.add(sid)
+            stream_publisher.connect(sid)
         latest = get_latest_metrics_packet()
         if latest is not None:
-            emit("metrics_update", {"metrics": latest})
+            stream_publisher.publish("metrics_update", {"metrics": latest}, sid=sid)
         emit("connect_response", {"data": "連接成功"})
 
     @socketio.on("disconnect")
     def handle_disconnect():
         sid = getattr(request, "sid", None)
         if sid is not None:
-            connected_clients.discard(sid)
+            stream_publisher.disconnect(sid)
 
     @socketio.on("request_metrics")
     def handle_metrics_request():
@@ -1002,7 +1076,7 @@ def create_app(
             payload["latest"] = latest
         emit("metrics_history", payload)
         if latest is not None:
-            emit("metrics_update", {"metrics": latest})
+            stream_publisher.publish("metrics_update", {"metrics": latest}, sid=request.sid)
 
     return app, socketio
 
@@ -1074,6 +1148,7 @@ class WebServerThread(threading.Thread):
                 engineio.sockets.clear()
                 self.socketio.server.shutdown()
             finally:
+                self.app.extensions["ncfd_stream_publisher"].clear()
                 self._stopped_event.set()
 
     def stop(self, *, join_timeout: float = 5.0) -> bool:
@@ -1083,31 +1158,11 @@ class WebServerThread(threading.Thread):
         return self._stopped_event.wait(timeout=join_timeout)
 
     def broadcast_metrics(self, metrics: dict) -> None:
-        try:
-            with self.app.app_context():
-                self.socketio.emit(
-                    "metrics_update",
-                    {"metrics": metrics},
-                    namespace="/",
-                )
-        except Exception as e:
-            if not getattr(self, '_broadcast_err_logged', False):
-                print(f"[WebServer] broadcast_metrics 出錯: {e}")
-                self._broadcast_err_logged = True
+        self.app.extensions["ncfd_stream_publisher"].publish("metrics_update", {"metrics": metrics})
 
     @property
     def client_count(self) -> int:
-        return len(self.app.extensions["ncfd_connected_clients"])
+        return self.app.extensions["ncfd_stream_publisher"].client_count
 
     def broadcast_frame(self, frame_b64: str) -> None:
-        try:
-            with self.app.app_context():
-                self.socketio.emit(
-                    "frame_update",
-                    {"frame": frame_b64},
-                    namespace="/",
-                )
-        except Exception as e:
-            if not getattr(self, '_broadcast_frame_err_logged', False):
-                print(f"[WebServer] broadcast_frame 出錯: {e}")
-                self._broadcast_frame_err_logged = True
+        self.app.extensions["ncfd_stream_publisher"].publish("frame_update", {"frame": frame_b64})

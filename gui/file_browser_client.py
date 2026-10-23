@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import threading
 import time
 from pathlib import Path
@@ -24,23 +25,25 @@ class FileBrowserClient:
         self._token: Optional[str] = None
         self._token_expires: float = 0.0
         self._lock = threading.Lock()
+        self._download_lock = threading.Lock()
         self._session = requests.Session()
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._heartbeat_stop = threading.Event()
 
     def configure(self, base_url: str, username: str, password: str) -> bool:
-        self._stop_heartbeat()
-        with self._lock:
-            self._token = None
-            self._token_expires = 0.0
-            self._session.cookies.clear()
-            self._base_url = base_url.rstrip("/")
-            self._username = username
-            self._password = password
-            ok = self._do_login_locked()
-        if ok:
-            self._start_heartbeat()
-        return ok
+        with self._download_lock:
+            self._stop_heartbeat()
+            with self._lock:
+                self._token = None
+                self._token_expires = 0.0
+                self._session.cookies.clear()
+                self._base_url = base_url.rstrip("/")
+                self._username = username
+                self._password = password
+                ok = self._do_login_locked()
+            if ok:
+                self._start_heartbeat()
+            return ok
 
     def is_authenticated(self) -> bool:
         return bool(self._token and self._base_url)
@@ -52,13 +55,14 @@ class FileBrowserClient:
         }
 
     def logout(self) -> None:
-        self._stop_heartbeat()
-        with self._lock:
-            self._token = None
-            self._token_expires = 0.0
-            self._base_url = None
-            self._username = None
-            self._password = None
+        with self._download_lock:
+            self._stop_heartbeat()
+            with self._lock:
+                self._token = None
+                self._token_expires = 0.0
+                self._base_url = None
+                self._username = None
+                self._password = None
 
     def list_recordings(self) -> list[dict]:
         resp = self._request("GET", "/api/resources/")
@@ -97,31 +101,36 @@ class FileBrowserClient:
         return result
 
     def download_db(self, remote_path: str, cache_dir: Path) -> Path:
-        cache_dir = Path(cache_dir)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        filename = Path(remote_path).name
-        local_path = cache_dir / filename
+        # 下載與切換站點互斥，避免快取歸屬及同名 temporary file 競態。
+        with self._download_lock:
+            namespace = hashlib.sha256(f"{self._base_url}\0{self._username}".encode()).hexdigest()
+            cache_dir = Path(cache_dir) / namespace
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            filename = Path(remote_path).name
+            local_path = cache_dir / filename
 
-        if local_path.exists() and local_path.stat().st_size > 0:
-            log.debug("FB cache hit: %s", local_path)
+            if local_path.exists() and local_path.stat().st_size > 0:
+                log.debug("FB cache hit: %s", local_path)
+                return local_path
+
+            log.info("FB downloading DB: %s", remote_path)
+            api_path = f"/api/raw/{remote_path.lstrip('/')}"
+            resp = self._request("GET", api_path, stream=True, timeout=120)
+
+            tmp = local_path.with_suffix(".tmp")
+            try:
+                resp.raise_for_status()
+                with open(tmp, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=256 * 1024):
+                        if chunk:
+                            f.write(chunk)
+                tmp.replace(local_path)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise
+            finally:
+                resp.close()
             return local_path
-
-        log.info("FB downloading DB: %s", remote_path)
-        api_path = f"/api/raw/{remote_path.lstrip('/')}"
-        resp = self._request("GET", api_path, stream=True, timeout=120)
-        resp.raise_for_status()
-
-        tmp = local_path.with_suffix(".tmp")
-        try:
-            with open(tmp, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=256 * 1024):
-                    if chunk:
-                        f.write(chunk)
-            tmp.replace(local_path)
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
-        return local_path
 
     def stream_video(self, remote_path: str, range_header: Optional[str] = None) -> requests.Response:
         extra: dict = {}
@@ -129,7 +138,11 @@ class FileBrowserClient:
             extra["headers"] = {"Range": range_header}
         api_path = f"/api/raw/{remote_path.lstrip('/')}"
         resp = self._request("GET", api_path, stream=True, timeout=60, **extra)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except Exception:
+            resp.close()
+            raise
         return resp
 
     def upload_file(self, local_path: Path, remote_path: str, progress_cb: Optional[Callable[[float], None]] = None) -> None:
@@ -221,18 +234,20 @@ class FileBrowserClient:
                     )
         return resp
 
-    def _heartbeat_loop(self) -> None:
-        while not self._heartbeat_stop.is_set():
+    def _heartbeat_loop(self, stop_event: threading.Event) -> None:
+        while not stop_event.is_set():
             if not self.is_authenticated():
                 break
             self._ensure_token()
-            self._heartbeat_stop.wait(_HEARTBEAT_INTERVAL)
+            stop_event.wait(_HEARTBEAT_INTERVAL)
 
     def _start_heartbeat(self) -> None:
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             return
-        self._heartbeat_stop.clear()
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, args=(self._heartbeat_stop,), daemon=True,
+        )
         self._heartbeat_thread.start()
 
     def _stop_heartbeat(self) -> None:

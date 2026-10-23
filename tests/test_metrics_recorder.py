@@ -19,6 +19,8 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -170,4 +172,83 @@ def test_conn_available_synchronously_after_init_for_schema_introspection(tmp_pa
         recorder.close()
     assert "timestamp" in cols
     assert "bpm" in cols
+
+
+def test_request_close_retains_finalization_until_sidecar_is_complete(tmp_path, monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    original = MetricsRecorder._write_meta_sidecar
+
+    def delayed_sidecar(self, *args):
+        entered.set()
+        assert release.wait(2.0)
+        original(self, *args)
+
+    monkeypatch.setattr(MetricsRecorder, "_write_meta_sidecar", delayed_sidecar)
+    monkeypatch.setattr(MetricsRecorder, "JOIN_TIMEOUT_SEC", 0.01)
+    recorder = MetricsRecorder(str(tmp_path / "finalizing.db"))
+    try:
+        recorder.record(_blank_payload(timestamp=1.0))
+        recorder.request_close()
+        assert entered.wait(2.0)
+        assert not recorder.wait_closed(timeout_seconds=0.01)
+        assert not recorder.close()
+        assert not recorder.is_finalized
+    finally:
+        release.set()
+        recorder.close()
+
+    assert recorder.wait_closed(timeout_seconds=2.0)
+    assert recorder.is_finalized
+    assert recorder.close()
+    assert json.loads(Path(f"{recorder.db_path}.meta.json").read_text())["rows"] == 1
+
+
+def test_initialization_timeout_stops_late_writer(tmp_path, monkeypatch):
+    release = threading.Event()
+    original = MetricsRecorder._writer_main
+
+    def delayed_start(self):
+        assert release.wait(2.0)
+        original(self)
+
+    monkeypatch.setattr(MetricsRecorder, "INIT_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr(MetricsRecorder, "_writer_main", delayed_start)
+    recorder = MetricsRecorder.__new__(MetricsRecorder)
+    try:
+        with pytest.raises(RuntimeError, match="startup timed out"):
+            recorder.__init__(str(tmp_path / "late.db"))
+        assert recorder._closed
+        assert recorder._stop_event.is_set()
+    finally:
+        release.set()
+        recorder.close()
+    assert recorder.wait_closed(timeout_seconds=2.0)
+    assert recorder.conn is None
+
+
+def test_record_preparation_cannot_enqueue_after_close(tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowPayload(dict):
+        def get(self, key, default=None):
+            if key == "timestamp":
+                entered.set()
+                assert release.wait(2.0)
+            return super().get(key, default)
+
+    recorder = MetricsRecorder(str(tmp_path / "closing_race.db"))
+    producer = threading.Thread(target=recorder.record, args=(SlowPayload(timestamp=1.0),))
+    producer.start()
+    try:
+        assert entered.wait(2.0)
+        recorder.close()
+    finally:
+        release.set()
+        producer.join(timeout=2.0)
+        recorder.close()
+    assert not producer.is_alive()
+    assert recorder._queue.empty()
+    assert recorder.get_recording_stats()[0] == 0
 

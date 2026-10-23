@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import queue
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -2588,8 +2589,12 @@ def test_camera_failure_stops_active_recording_runtime(
     events: list[object] = []
 
     class FakeMetricsRecorder:
-        def close(self) -> None:
-            events.append("metrics.close")
+        def request_close(self) -> None:
+            events.append("metrics.request_close")
+
+        def wait_closed(self, timeout_seconds: float) -> bool:
+            assert timeout_seconds == 0
+            return True
 
     class FakeVideoWorker:
         def request_stop(self) -> None:
@@ -2625,7 +2630,7 @@ def test_camera_failure_stops_active_recording_runtime(
     settings_window._on_camera_failed("camera disconnected")
 
     assert events == [
-        "metrics.close",
+        "metrics.request_close",
         "video.stop",
         "thread.quit",
         ("thread.wait", 2000),
@@ -2805,8 +2810,12 @@ def test_recording_command_rolls_back_partial_writer_failure(
     events: list[str] = []
 
     class FakeMetricsRecorder:
-        def close(self) -> None:
-            events.append("metrics.close")
+        def request_close(self) -> None:
+            events.append("metrics.request_close")
+
+        def wait_closed(self, timeout_seconds: float) -> bool:
+            assert timeout_seconds == 0
+            return True
 
     class FakeVideoWorker:
         def request_stop(self) -> None:
@@ -2852,7 +2861,7 @@ def test_recording_command_rolls_back_partial_writer_failure(
     assert settings_window._metrics_recorder is None
     assert settings_window._video_worker is None
     assert settings_window._engine_controller.pipeline_snapshot().recording is False
-    assert events == ["metrics.close", "video.stop"]
+    assert events == ["metrics.request_close", "video.stop"]
 
 
 def test_recording_command_uses_controller_pipeline_state(
@@ -2973,6 +2982,153 @@ def test_recording_start_rejects_previous_video_cleanup(
         settings_window._start_recording()
 
     settings_window._engine_runtime.release_adapter("video", thread)
+
+
+def test_metrics_recording_stop_keeps_pending_writer_without_joining(
+    settings_window: EngineApplication,
+) -> None:
+    class SlowRecorder:
+        finalized = False
+        requested = False
+
+        def close(self) -> None:
+            raise AssertionError("The event loop must not block on recorder.close")
+
+        def request_close(self) -> None:
+            self.requested = True
+
+        def wait_closed(self, timeout_seconds: float) -> bool:
+            assert timeout_seconds == 0
+            return self.finalized
+
+    recorder = SlowRecorder()
+    settings_window._metrics_recorder = recorder  # type: ignore[assignment]
+    settings_window._recording = True
+
+    assert settings_window._stop_recording() is True
+
+    assert recorder.requested is True
+    assert settings_window._metrics_recorder is None
+    assert settings_window._finalizing_metrics_recorder is recorder
+    assert settings_window._build_web_metrics()["recording_finalizing"] is True
+    assert settings_window._desktop_control_state()["recording_finalizing"] is True
+    assert settings_window._engine_runtime.timer_active("metrics_finalize") is True
+    with pytest.raises(RuntimeError, match="cleanup"):
+        settings_window._start_recording()
+
+    recorder.finalized = True
+    settings_window._poll_metrics_finalization()
+
+    assert settings_window._finalizing_metrics_recorder is None
+    assert settings_window._build_web_metrics()["recording_finalizing"] is False
+    assert settings_window._desktop_control_state()["recording_finalizing"] is False
+    assert settings_window._engine_runtime.timer_active("metrics_finalize") is False
+
+
+def test_engine_shutdown_waits_for_metrics_writer_then_resumes(
+    settings_window: EngineApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    qt_app: QApplication,
+) -> None:
+    class SlowRecorder:
+        finalized = False
+
+        def request_close(self) -> None:
+            pass
+
+        def wait_closed(self, timeout_seconds: float) -> bool:
+            assert timeout_seconds == 0
+            return self.finalized
+
+    recorder = SlowRecorder()
+    settings_window._metrics_recorder = recorder  # type: ignore[assignment]
+    callbacks: list[Callable[[], None]] = []
+    quit_calls: list[bool] = []
+    monkeypatch.setattr(qt_app, "quit", lambda: quit_calls.append(True))
+    monkeypatch.setattr(
+        settings_window._engine_runtime,
+        "defer",
+        lambda _delay, callback: callbacks.append(callback),
+    )
+
+    settings_window._shutdown_engine()
+
+    assert quit_calls == []
+    assert settings_window._runtime_cleanup_complete is False
+    assert settings_window._runtime_shutdown_waiting_for_adapters is True
+    assert settings_window._finalizing_metrics_recorder is recorder
+
+    recorder.finalized = True
+    settings_window._poll_metrics_finalization()
+    assert len(callbacks) == 1
+    callbacks.pop()()
+
+    assert settings_window._runtime_cleanup_complete is True
+    assert quit_calls == [True]
+
+
+def test_close_runtime_drains_metrics_after_event_loop_has_returned(
+    settings_window: EngineApplication,
+) -> None:
+    waits: list[float | None] = []
+
+    class PendingRecorder:
+        finalized = False
+
+        def request_close(self) -> None:
+            pass
+
+        def wait_closed(self, timeout_seconds: float | None) -> bool:
+            waits.append(timeout_seconds)
+            if timeout_seconds is None:
+                self.finalized = True
+            return self.finalized
+
+    settings_window._metrics_recorder = PendingRecorder()  # type: ignore[assignment]
+
+    assert settings_window.close_runtime() is True
+    assert None in waits
+    assert settings_window._finalizing_metrics_recorder is None
+    assert settings_window._engine_runtime.timer_active("metrics_finalize") is False
+    assert settings_window._runtime_cleanup_complete is True
+
+
+@pytest.mark.parametrize("metrics_first", [True, False])
+def test_recording_finalization_publishes_both_completion_orders(
+    settings_window: EngineApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    metrics_first: bool,
+) -> None:
+    class PendingRecorder:
+        finalized = False
+
+        def wait_closed(self, timeout_seconds: float) -> bool:
+            assert timeout_seconds == 0
+            return self.finalized
+
+    packets: list[dict] = []
+    monkeypatch.setattr(
+        settings_window, "_emit_web_metrics",
+        lambda **_kwargs: packets.append(settings_window._build_web_metrics()),
+    )
+    recorder = PendingRecorder()
+    settings_window._finalizing_metrics_recorder = recorder  # type: ignore[assignment]
+    thread = object()
+    _install_runtime_adapter(settings_window, "video", object(), thread)
+
+    def finish_metrics() -> None:
+        recorder.finalized = True
+        settings_window._poll_metrics_finalization()
+
+    def finish_video() -> None:
+        settings_window._engine_runtime.release_adapter("video", thread)
+
+    first, second = (finish_metrics, finish_video) if metrics_first else (finish_video, finish_metrics)
+    first()
+    assert packets[-1]["recording_finalizing"] is True
+    second()
+    assert packets[-1]["recording_finalizing"] is False
+    assert settings_window._desktop_control_state()["recording_finalizing"] is False
 
 
 def test_normal_camera_stop_timeout_blocks_restart_until_late_finish(

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 import shutil
 import subprocess
+import threading
 
 import cv2
 import numpy as np
@@ -16,6 +17,8 @@ from PySide6.QtGui import QImage
 
 
 class VideoRecorderWorker(QObject):
+    ENCODER_STOP_TIMEOUT_SEC = 2.0
+
     started = Signal(str)
     warning = Signal(str)
     failed = Signal(str)
@@ -37,9 +40,63 @@ class VideoRecorderWorker(QObject):
         self._started = False
         self._width: int | None = None
         self._height: int | None = None
+        self._encoder_lock = threading.Lock()
+        self._stop_watchdog: threading.Timer | None = None
+        self._watchdog_threads: list[threading.Timer] = []
+        self._encoder_timed_out = False
+        self._encoder_eof = False
+        self._failure_reported = False
+        self._finished = threading.Event()
 
     def request_stop(self) -> None:
-        self._stop = True
+        with self._encoder_lock:
+            if self._stop or self._finished.is_set():
+                return
+            self._stop = True
+        self._arm_stop_watchdog()
+
+    def _fail(self, message: str) -> None:
+        with self._encoder_lock:
+            if self._failure_reported:
+                return
+            self._failure_reported = True
+            if self._encoder_timed_out:
+                message = "停止影片編碼逾時，已中止編碼程序，影片可能不完整。"
+        self.failed.emit(message)
+
+    def _arm_stop_watchdog(self) -> None:
+        with self._encoder_lock:
+            previous, self._stop_watchdog = self._stop_watchdog, None
+            if previous is not None:
+                previous.cancel()
+            proc = self._proc
+            if proc is not None and not self._encoder_timed_out and not self._encoder_eof and not self._finished.is_set():
+                def abort_stalled_encoder():
+                    with self._encoder_lock:
+                        if self._stop_watchdog is not timer or self._proc is not proc:
+                            return
+                        self._encoder_timed_out = True
+                    self._fail("停止影片編碼逾時")
+                    try:
+                        proc.kill()
+                    except Exception as exc:
+                        self.warning.emit(f"無法停止影片編碼程序：{exc}")
+
+                timer = threading.Timer(self.ENCODER_STOP_TIMEOUT_SEC, abort_stalled_encoder)
+                timer.daemon = True
+                self._stop_watchdog = timer
+                self._watchdog_threads.append(timer)
+                timer.start()
+
+    def _cancel_stop_watchdog(self) -> None:
+        with self._encoder_lock:
+            self._stop_watchdog = None
+            timers, self._watchdog_threads = self._watchdog_threads, []
+            for timer in timers:
+                timer.cancel()
+        for timer in timers:
+            if timer is not threading.current_thread():
+                timer.join(timeout=self.ENCODER_STOP_TIMEOUT_SEC)
 
     @staticmethod
     def _find_ffmpeg() -> Optional[str]:
@@ -112,14 +169,20 @@ class VideoRecorderWorker(QObject):
         try:
             self._record_frames()
         except Exception as exc:
-            self.failed.emit(f"影片錄製發生未預期錯誤：{exc}")
+            self._fail(f"影片錄製發生未預期錯誤：{exc}")
         finally:
-            self._release_encoders()
-            self.finished.emit()
+            try:
+                self._release_encoders()
+            except Exception as exc:
+                self._fail(f"影片收尾發生未預期錯誤：{exc}")
+            finally:
+                self._finished.set()
+                self._cancel_stop_watchdog()
+                self.finished.emit()
 
     def _record_frames(self) -> None:
         if np is None:
-            self.failed.emit("NumPy 未安裝，無法錄製影片。")
+            self._fail("NumPy 未安裝，無法錄製影片。")
             return
 
         first_frame_deadline = time.monotonic() + 3.0
@@ -129,10 +192,12 @@ class VideoRecorderWorker(QObject):
                 _ts, frame = self._queue.get(timeout=0.2)
             except queue.Empty:
                 if not self._started and time.monotonic() > first_frame_deadline:
-                    self.failed.emit("錄影未收到影像，請確認相機預覽與管線已啟動。")
+                    self._fail("錄影未收到影像，請確認相機預覽與管線已啟動。")
                     break
                 continue
 
+            if self._stop:
+                break
             if frame is None:
                 continue
 
@@ -154,7 +219,7 @@ class VideoRecorderWorker(QObject):
                 frame = np.ascontiguousarray(frame[:, :, ::-1])
 
             if not isinstance(frame, np.ndarray):
-                self.failed.emit("影像格式不支援，無法建立影片檔。")
+                self._fail("影像格式不支援，無法建立影片檔。")
                 break
 
             if self._proc is None and self._writer is None:
@@ -169,8 +234,10 @@ class VideoRecorderWorker(QObject):
                 if self._proc is None:
                     self._writer = self._start_opencv_writer(self._width, self._height)
                     if self._writer is None:
-                        self.failed.emit("找不到 ffmpeg，且 OpenCV VideoWriter 無法啟動。")
+                        self._fail("找不到 ffmpeg，且 OpenCV VideoWriter 無法啟動。")
                         break
+                if self._stop:
+                    break
                 self._started = True
                 self.started.emit(str(self._output_path))
 
@@ -186,7 +253,7 @@ class VideoRecorderWorker(QObject):
                 if self._writer is None:
                     self._writer = self._start_opencv_writer(int(frame.shape[1]), int(frame.shape[0]))
                 if self._writer is None:
-                    self.failed.emit("OpenCV VideoWriter 啟動失敗，無法錄製影片。")
+                    self._fail("OpenCV VideoWriter 啟動失敗，無法錄製影片。")
                     break
 
             try:
@@ -196,24 +263,39 @@ class VideoRecorderWorker(QObject):
                 elif self._writer is not None:
                     self._writer.write(frame)
             except Exception:
-                self.failed.emit("寫入影片失敗，請確認 ffmpeg 狀態與磁碟空間。")
+                self._fail("寫入影片失敗，請確認 ffmpeg 狀態與磁碟空間。")
                 break
 
     def _release_encoders(self) -> None:
-        if self._proc is not None:
+        proc = self._proc
+        if proc is not None:
+            self._arm_stop_watchdog()
             try:
-                if self._proc.stdin is not None:
-                    self._proc.stdin.close()
-                self._proc.wait(timeout=2.0)
-            except Exception:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+                # EOF 已交付，正常收尾由 wait 自己的期限管理。
+                with self._encoder_lock:
+                    self._encoder_eof = True
+                self._cancel_stop_watchdog()
+                returncode = proc.wait(timeout=2.0)
+                if returncode != 0:
+                    self._fail(f"影片收尾失敗：ffmpeg 結束碼 {returncode}，請檢查影片檔。")
+            except Exception as exc:
+                self._fail(f"影片收尾失敗：{exc}，影片可能不完整。")
                 try:
-                    self._proc.kill()
-                except Exception:
-                    pass
-            self._proc = None
-        if self._writer is not None:
+                    proc.kill()
+                except Exception as kill_error:
+                    self.warning.emit(f"無法停止影片編碼程序：{kill_error}")
+                try:
+                    proc.wait(timeout=2.0)
+                except Exception as wait_error:
+                    self.warning.emit(f"無法回收影片編碼程序：{wait_error}")
+            finally:
+                self._cancel_stop_watchdog()
+                self._proc = None
+        writer, self._writer = self._writer, None
+        if writer is not None:
             try:
-                self._writer.release()
-            except Exception:
-                pass
-            self._writer = None
+                writer.release()
+            except Exception as exc:
+                self._fail(f"影片收尾失敗：{exc}，影片可能不完整。")

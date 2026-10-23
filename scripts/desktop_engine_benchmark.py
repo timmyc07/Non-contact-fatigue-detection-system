@@ -3,7 +3,7 @@
 The default run starts ``main.py --engine`` and measures API readiness, RSS,
 and read-only ``state.get`` command latency. Preview measurements use a fixed
 synthetic image, so they cover JPEG encoding, payload size, and Socket.IO
-server dispatch without requiring a camera.
+loopback delivery with acknowledgements without requiring a camera.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from ctypes import wintypes
 import gc
 import json
 import os
+import queue
 import statistics
 import subprocess
 import sys
@@ -237,30 +238,52 @@ def _benchmark_synthetic_preview(*, warmup: int, samples: int) -> dict[str, Any]
         payloads.append(payload)
 
     with tempfile.TemporaryDirectory(prefix="ncfd-preview-bench-") as temp_dir:
-        server = WebServerThread(MetricsBuffer(), PlaybackManager(Path(temp_dir)), host="127.0.0.1")
-        client = server.socketio.test_client(server.app)
-        client.get_received()
-        for _ in range(warmup):
-            server.broadcast_frame(payloads[0])
-            client.get_received()
-        started = time.perf_counter_ns()
-        for payload in payloads:
-            server.broadcast_frame(payload)
-        elapsed = (time.perf_counter_ns() - started) / 1_000_000_000.0
-        events = client.get_received()
-        delivered = sum(1 for event in events if event.get("name") == "frame_update")
-        client.disconnect()
+        import requests
+        import socketio
+
+        server = WebServerThread(
+            MetricsBuffer(), PlaybackManager(Path(temp_dir)), host="127.0.0.1", port=0,
+        )
+        received: queue.Queue = queue.Queue()
+        with requests.Session() as session:
+            client = socketio.Client(http_session=session, reconnection=False, request_timeout=2)
+            # Python Socket.IO handler 返回後會送出原生 ACK。
+            client.on("frame_update", received.put)
+            server.start()
+            try:
+                deadline = time.monotonic() + 5.0
+                while server.port == 0 and server.is_alive() and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                if server.port == 0:
+                    raise RuntimeError("synthetic preview server startup failed")
+                client.connect(f"http://127.0.0.1:{server.port}", transports=["polling"], wait_timeout=2)
+                for _ in range(warmup):
+                    server.broadcast_frame(payloads[0])
+                    received.get(timeout=3)
+                started = time.perf_counter_ns()
+                delivered = 0
+                for payload in payloads:
+                    server.broadcast_frame(payload)
+                    if received.get(timeout=3).get("frame") != payload:
+                        raise RuntimeError("synthetic preview payload mismatch")
+                    delivered += 1
+                elapsed = (time.perf_counter_ns() - started) / 1_000_000_000.0
+            finally:
+                server.stop(join_timeout=3)
+                if client.connected:
+                    client.disconnect()
+                server.join(timeout=3)
 
     payload_bytes = len(payloads[0].encode("ascii"))
     jpeg_bytes = len(base64.b64decode(payloads[0], validate=True))
     return {
-        "kind": "synthetic_in_process", "samples": samples,
+        "kind": "synthetic_loopback", "samples": samples,
         "dimensions": [image.width(), image.height()],
         "jpeg_bytes": jpeg_bytes, "base64_bytes": payload_bytes,
         "encode_latency_ms": _distribution(encode_latencies),
         "dispatch_delivered": delivered,
         "dispatch_frames_per_second": round(samples / elapsed, 3) if elapsed > 0 else 0.0,
-        "limitations": "Excludes camera, network, Tauri WebView decode, and Flutter rendering",
+        "limitations": "Includes loopback polling and ACK; excludes camera, Tauri WebView decode, and Flutter rendering",
     }
 
 
@@ -270,7 +293,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=5, help="Discarded warmup count (default: 5)")
     parser.add_argument("--startup-timeout", type=float, default=45.0, help="Engine startup timeout in seconds")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Loopback engine port (default: 5000)")
-    parser.add_argument("--synthetic-only", action="store_true", help="Run only the process-free preview benchmark")
+    parser.add_argument("--synthetic-only", action="store_true", help="Run only the engine-free loopback preview benchmark")
     parser.add_argument("--output", type=Path, default=None, help="Also write the JSON result to this path")
     return parser.parse_args(argv)
 

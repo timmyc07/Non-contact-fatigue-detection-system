@@ -46,7 +46,7 @@ from gui.platforms import (
     create_face_landmarker_base_options,
     validate_mediapipe_runtime,
 )
-from gui.worker_safety import fail_closed_worker
+from gui.worker_safety import ConsecutiveFrameFailures, fail_closed_worker
 from rppg.adaptive_calibration import recompute_raw_bpm_from_roi_windows
 from rppg.belt_truth_capture import BeltTruthCaptureWriter
 from rppg.rppg_hrv_engine import compute_rppg_hrv_from_pulse, hrv_confidence_rppg
@@ -505,6 +505,8 @@ def roi_mean_from_points(
     frame_bgr: np.ndarray,
     pts: np.ndarray,
     blur_ksize: int = 5,
+    *,
+    blurred_frame: np.ndarray | None = None,
 ) -> Optional[tuple[float, float, float]]:
     h, w = frame_bgr.shape[:2]
     if pts.shape[0] < 3:
@@ -514,7 +516,7 @@ def roi_mean_from_points(
     cv2.fillConvexPoly(mask, pts_i, 255)
     if cv2.countNonZero(mask) < 30:
         return None
-    roi = cv2.GaussianBlur(frame_bgr, (blur_ksize, blur_ksize), 0)
+    roi = blurred_frame if blurred_frame is not None else cv2.GaussianBlur(frame_bgr, (blur_ksize, blur_ksize), 0)
     mean = cv2.mean(roi, mask=mask)
     return float(mean[2]), float(mean[1]), float(mean[0])
 
@@ -553,6 +555,7 @@ def collect_rppg_roi_sample(
     h, w = frame_bgr.shape[:2]
     tracker.begin_frame()
     tracker.update_landmarks(lm, w, h)
+    blurred_frame = cv2.GaussianBlur(frame_bgr, (5, 5), 0)
     roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(transform_matrix, lm, w, h)
     roi_weights = _roi_weights_from_pose(roll_deg, yaw_deg, pitch_deg, lm, w, h, tuning)
     rgbs: list[tuple[float, float, float]] = []
@@ -564,7 +567,7 @@ def collect_rppg_roi_sample(
         else:
             pts = roi_points(frame_bgr, lm, indices, name, transform_matrix, tracker, tuning)
         areas.append(_polygon_area(pts))
-        val = roi_mean_from_points(frame_bgr, pts)
+        val = roi_mean_from_points(frame_bgr, pts, blurred_frame=blurred_frame)
         obstruction = roi_obstruction_score_from_points(frame_bgr, pts, tuning)
         weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
         if weight < tuning.rppg_roi.min_roi_weight:
@@ -608,8 +611,7 @@ def collect_rppg_roi_sample_with_means(
     ``weighted_mix``（P6b-3a 新增）：
     - ``False``（預設）：走原本「有效 ROI 等權平均」路徑。回傳的
       sample/effective_weights/len(rgbs) 與 collect_rppg_roi_sample() 在同一輸入
-      下逐位元相同（程式碼與運算順序未變動，only surfaces 額外資訊）。所有既有
-      呼叫端（含 replay/golden、live worker run() 迴圈）皆走此路徑，逐位元不變。
+      下逐位元相同。replay/golden 與沒有 ROI 權重覆寫的 live worker 走此路徑。
     - ``True``：改用「該幀有效權重加權平均」。加權係數即本函式已算出的
       effective_weights（= override base weight × 姿態/遮蔽懲罰，通過 min_roi_weight
       門檻後的值），與 sample 用同一組權重、同一幀訊號，讓候選 ROI 權重能真正影響
@@ -618,14 +620,14 @@ def collect_rppg_roi_sample_with_means(
       呼叫端只有在 P6b-2 的 ROI 權重 override 存在（``rppg_params`` 不是 None，即
       worker 的 ``self._roi_weights_override is not None``）時才傳 ``True``；override
       為 None 時一律用預設 ``False``，確保無 override 路徑逐位元回退等權平均。
-      **目前（P6b-3a）尚未有任何生產呼叫端傳入 True**——`RppgWorker.run()`/
-      `CombinedWorker` 皆固定用預設 `False` 呼叫，此參數僅供測試與未來 P6b-3b
-      接線使用；本次新增不改變任何現行 live 行為。加權係數用正規化前或正規化後
+      `RppgWorker.run()`／`CombinedWorker` 只在啟動時套用有效 ROI 權重覆寫時
+      傳入 True；未覆寫時保持 False。加權係數用正規化前或正規化後
       皆等價（加權平均 sum(w*x)/sum(w) 對權重同比例縮放不變）。
     """
     h, w = frame_bgr.shape[:2]
     tracker.begin_frame()
     tracker.update_landmarks(lm, w, h)
+    blurred_frame = cv2.GaussianBlur(frame_bgr, (5, 5), 0)
     roll_deg, yaw_deg, pitch_deg, _ = _pose_from_matrix(transform_matrix, lm, w, h)
     roi_weights = _roi_weights_from_pose(roll_deg, yaw_deg, pitch_deg, lm, w, h, tuning)
     rgbs: list[tuple[float, float, float]] = []
@@ -638,7 +640,7 @@ def collect_rppg_roi_sample_with_means(
         else:
             pts = roi_points(frame_bgr, lm, indices, name, transform_matrix, tracker, tuning)
         areas.append(_polygon_area(pts))
-        val = roi_mean_from_points(frame_bgr, pts)
+        val = roi_mean_from_points(frame_bgr, pts, blurred_frame=blurred_frame)
         obstruction = roi_obstruction_score_from_points(frame_bgr, pts, tuning)
         weight = roi_weights.get(name, 0.0) * (1.0 - obstruction)
         if weight < tuning.rppg_roi.min_roi_weight:
@@ -832,13 +834,16 @@ def draw_rois(
     transform_matrix: Any | None = None,
     tracker: RoiGeometryTracker | None = None,
     tuning: MediaPipeTuning | None = None,
+    *,
+    draw: bool = True,
 ) -> None:
     h, w = frame_bgr.shape[:2]
     for name, indices in ROI_SPECS:
         pts = roi_points(frame_bgr, lm, indices, name, transform_matrix, tracker, tuning)
-        pts = np.round(pts).astype(np.int32)
-        if pts.shape[0] >= 3:
-            cv2.polylines(frame_bgr, [pts], True, (0, 200, 255), 1, cv2.LINE_AA)
+        if draw:
+            pts = np.round(pts).astype(np.int32)
+            if pts.shape[0] >= 3:
+                cv2.polylines(frame_bgr, [pts], True, (0, 200, 255), 1, cv2.LINE_AA)
 
 
 def pos_pulse(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -1178,6 +1183,7 @@ class RppgEngine:
             }
             for name, _ in ROI_SPECS
         }
+        self._roi_time_ordered = {name: True for name, _ in ROI_SPECS}
         self._last_fs: float = target_fps
         self._prev_face_center: Optional[tuple[float, float]] = None
         self._prev_face_center_t: Optional[float] = None
@@ -1199,6 +1205,7 @@ class RppgEngine:
         for buf in self._roi_buffers.values():
             buf["t"].clear(); buf["r"].clear()
             buf["g"].clear(); buf["b"].clear()
+        self._roi_time_ordered = {name: True for name, _ in ROI_SPECS}
         self._prev_face_center = None
         self._prev_face_center_t = None
         self._face_motion_speed = 0.0
@@ -1230,6 +1237,8 @@ class RppgEngine:
             buf = self._roi_buffers.get(name)
             if buf is None:
                 continue
+            if not math.isfinite(t) or (buf["t"] and t < buf["t"][-1]):
+                self._roi_time_ordered[name] = False
             buf["t"].append(t)
             buf["r"].append(rgb[0])
             buf["g"].append(rgb[1])
@@ -1253,9 +1262,23 @@ class RppgEngine:
         if buf is None or not buf["t"]:
             empty = np.array([], dtype=np.float64)
             return empty, empty, empty, empty
-        t_arr = np.array(buf["t"], dtype=np.float64)
-        ref_t = float(t_now) if t_now is not None else float(t_arr[-1])
+        ref_t = float(t_now) if t_now is not None else float(buf["t"][-1])
         cutoff = ref_t - window_sec
+        # 順序時間戳只讀視窗尾端；亂序輸入仍完整套用原本的時間遮罩。
+        if self._roi_time_ordered[name]:
+            samples = []
+            for sample in zip(*(reversed(buf[key]) for key in ("t", "r", "g", "b"))):
+                if sample[0] < cutoff:
+                    break
+                if sample[0] >= cutoff:
+                    samples.append(sample)
+            if not samples:
+                empty = np.array([], dtype=np.float64)
+                return empty, empty, empty, empty
+            samples.reverse()
+            t_arr, r_arr, g_arr, b_arr = np.array(samples, dtype=np.float64).T
+            return t_arr.copy(), r_arr.copy(), g_arr.copy(), b_arr.copy()
+        t_arr = np.array(buf["t"], dtype=np.float64)
         mask = t_arr >= cutoff
         r_arr = np.array(buf["r"], dtype=np.float64)[mask]
         g_arr = np.array(buf["g"], dtype=np.float64)[mask]
@@ -1761,6 +1784,7 @@ class RppgWorker(QObject):
         ts_ms_prev = 0
         last_preview_emit = 0.0
         preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
+        frame_failures = ConsecutiveFrameFailures()
 
         # P6b-2：啟動時解析一次 ROI base_weights 覆寫（無覆寫時 rppg_tuning 與
         # self._tuning 為同一物件，逐幀路徑不變）。
@@ -1805,17 +1829,15 @@ class RppgWorker(QObject):
                         data=np.ascontiguousarray(rgb),
                     )
 
-                    try:
-                        result = landmarker.detect_for_video(mp_img, ts_ms)
-                    except Exception:
-                        continue
+                    result = landmarker.detect_for_video(mp_img, ts_ms)
 
                     has_face = bool(result.face_landmarks)
                     if has_face != last_face:
                         self.face_detected.emit(has_face)
                         last_face = has_face
 
-                    annotated = bgr.copy()
+                    preview_due = ts - last_preview_emit >= preview_emit_interval
+                    annotated = bgr
                     metrics: RppgMetrics
 
                     if has_face:
@@ -1831,7 +1853,9 @@ class RppgWorker(QObject):
                             bgr, lm, transform_matrix, roi_tracker, rppg_tuning,
                             weighted_mix=roi_override_active,
                         )
-                        draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
+                        if preview_due:
+                            annotated = bgr.copy()
+                        draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning, draw=preview_due)
                         if sample is not None:
                             engine.push(ts, sample[0], sample[1], sample[2])
                         # P6b-1 新增：per-ROI 旁路緩衝，不影響上面既有 push() 的輸入/行為。
@@ -1874,7 +1898,7 @@ class RppgWorker(QObject):
 
                     self.metrics_ready.emit(metrics)
 
-                    if ts - last_preview_emit >= preview_emit_interval:
+                    if preview_due:
                         last_preview_emit = ts
                         rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
                         rgb_ann = np.ascontiguousarray(rgb_ann)
@@ -1885,8 +1909,10 @@ class RppgWorker(QObject):
                             QImage.Format.Format_RGB888,
                         )
                         self.frame_annotated.emit(qimg.copy())
-                except Exception:
+                    frame_failures.reset()
+                except Exception as exc:
                     log.exception("每幀處理發生未預期例外，略過此幀")
+                    frame_failures.record(exc)
                     continue
 
         self.finished.emit()

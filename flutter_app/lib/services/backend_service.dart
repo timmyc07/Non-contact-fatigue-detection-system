@@ -69,20 +69,23 @@ class BackendService {
           );
       _socket = socket;
       socket.on('metrics_update', (dynamic payload) {
-        final packet = _packet(payload);
-        if (packet != null && !_metrics.isClosed) {
-          _metrics.add(MetricsSnapshot.fromJson(packet));
-        }
+        _consumeSocketEvent(payload, (raw) {
+          final packet = _packet(raw);
+          if (packet != null && !_metrics.isClosed) {
+            _metrics.add(MetricsSnapshot.fromJson(packet));
+          }
+        });
       });
       socket.on('frame_update', (dynamic payload) {
-        final frame = payload is Map ? payload['frame'] : null;
-        if (frame is String && frame.isNotEmpty && !_previewFrames.isClosed) {
-          _previewFrames.add(frame);
-        }
+        _consumeSocketEvent(payload, (raw) {
+          final frame = raw is Map ? raw['frame'] : null;
+          if (frame is String && frame.isNotEmpty && !_previewFrames.isClosed) {
+            _previewFrames.add(frame);
+          }
+        });
       });
       socket.on('connect', (_) {
         _stopPolling();
-        socket.emit('request_metrics');
       });
       socket.on('connect_error', (_) => _startPolling());
       socket.on('disconnect', (_) => _startPolling());
@@ -95,6 +98,16 @@ class BackendService {
     _socket?.dispose();
     _socket = null;
     _stopPolling();
+  }
+
+  void _consumeSocketEvent(dynamic event, void Function(dynamic) consume) {
+    final acknowledged =
+        event is List && event.length == 2 && event.last is Function;
+    try {
+      consume(acknowledged ? event.first : event);
+    } finally {
+      if (acknowledged) Function.apply(event.last as Function, [null]);
+    }
   }
 
   Future<List<Map<String, dynamic>>> recordings() async {

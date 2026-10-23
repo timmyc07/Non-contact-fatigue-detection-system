@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
+import queue
 import socket
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
 
 import pytest
 import requests
 import simple_websocket
+import socketio as socketio_client
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
@@ -22,6 +25,15 @@ from rppg import rppg_worker
 
 def _event_payloads(events: Sequence[Mapping[str, Any]], name: str) -> list[Any]:
     return [event["args"][0] for event in events if event.get("name") == name]
+
+
+def _acknowledge_received(socketio, client):
+    # Flask-SocketIO test_client 不實作 server→client ACK，明確模擬已消費事件。
+    manager = socketio.server.manager
+    sid = manager.sid_from_eio_sid(client.eio_sid, "/")
+    for callback_id in list(manager.callbacks.get(sid, {})):
+        if callback_id != 0:
+            manager.trigger_callback(sid, callback_id, [])
 
 
 def test_socketio_connect_emits_connect_response(tmp_path: Path) -> None:
@@ -92,6 +104,7 @@ def test_socketio_request_metrics_appends_latest_and_rebroadcasts_latest(tmp_pat
 
     try:
         client.get_received()
+        _acknowledge_received(socketio, client)
         client.emit("request_metrics")
         events = client.get_received()
         histories = _event_payloads(events, "metrics_history")
@@ -116,6 +129,7 @@ def test_socketio_request_metrics_does_not_duplicate_current_latest(tmp_path: Pa
 
     try:
         client.get_received()
+        _acknowledge_received(socketio, client)
         client.emit("request_metrics")
         events = client.get_received()
         histories = _event_payloads(events, "metrics_history")
@@ -179,6 +193,112 @@ def test_socketio_broadcast_frame_event_reaches_client(tmp_path: Path) -> None:
         assert frames == [{"frame": "jpeg-base64"}]
     finally:
         client.disconnect()
+
+
+def test_slow_socket_client_keeps_only_inflight_and_latest_per_event(tmp_path, monkeypatch):
+    server = WebServerThread(MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1")
+    callbacks = {"frame_update": [], "metrics_update": []}
+    original = server.socketio.emit
+
+    def emit(event, data, **kwargs):
+        if event in callbacks and kwargs.get("callback"):
+            callbacks[event].append(kwargs["callback"])
+        original(event, data, **kwargs)
+
+    monkeypatch.setattr(server.socketio, "emit", emit)
+    slow = server.socketio.test_client(server.app)
+    fast = server.socketio.test_client(server.app)
+    try:
+        slow.get_received()
+        fast.get_received()
+        for index in range(1000):
+            server.broadcast_frame(f"frame-{index}")
+            server.broadcast_metrics({"timestamp": index})
+            fast_events = fast.get_received()
+            assert _event_payloads(fast_events, "frame_update") == [{"frame": f"frame-{index}"}]
+            assert _event_payloads(fast_events, "metrics_update") == [{"metrics": {"timestamp": index}}]
+            _acknowledge_received(server.socketio, fast)
+        events = slow.get_received()
+        assert _event_payloads(events, "frame_update") == [{"frame": "frame-0"}]
+        assert _event_payloads(events, "metrics_update") == [{"metrics": {"timestamp": 0}}]
+        server.socketio.emit("fb_upload_progress", {"progress": 1})
+        assert _event_payloads(slow.get_received(), "fb_upload_progress") == [{"progress": 1}]
+        _acknowledge_received(server.socketio, slow)
+        latest = slow.get_received()
+        assert _event_payloads(latest, "frame_update") == [{"frame": "frame-999"}]
+        assert _event_payloads(latest, "metrics_update") == [{"metrics": {"timestamp": 999}}]
+        assert len(server.app.extensions["ncfd_stream_publisher"]._pending) == 2
+        slow.disconnect()
+        fast.disconnect()
+        for callback in callbacks["frame_update"]:
+            callback()
+        assert server.client_count == 0
+        assert not server.app.extensions["ncfd_stream_publisher"]._pending
+    finally:
+        if slow.is_connected():
+            slow.disconnect()
+        if fast.is_connected():
+            fast.disconnect()
+
+
+def test_preview_skips_encoding_without_clients_and_sends_first_client_frame(monkeypatch):
+    encoded = []
+    delivered = []
+    server = SimpleNamespace(client_count=0, broadcast_frame=delivered.append)
+    application = SimpleNamespace(
+        _web_server=server, _web_last_frame_emit=0.0, _web_frame_interval=0.1,
+        _encode_frame_jpeg=lambda image: encoded.append(image) or "jpeg",
+    )
+    monkeypatch.setattr(time, "perf_counter", lambda: 1.0)
+    image = object()
+    EngineApplication._emit_web_frame(application, image)
+    assert encoded == []
+    assert application._web_last_frame_emit == 0.0
+    server.client_count = 1
+    EngineApplication._emit_web_frame(application, image)
+    assert encoded == [image]
+    assert delivered == ["jpeg"]
+    assert application._web_last_frame_emit == 1.0
+
+
+def test_real_client_ack_receives_initial_snapshot_and_continues_streaming(tmp_path):
+    latest = [{"timestamp": 1.0}]
+    server = WebServerThread(
+        MetricsBuffer(), PlaybackManager(tmp_path), host="127.0.0.1", port=0,
+        get_latest_packet=lambda: latest[0],
+    )
+    metrics = queue.Queue()
+    frames = queue.Queue()
+    histories = queue.Queue()
+    with requests.Session() as session:
+        client = socketio_client.Client(http_session=session, reconnection=False, request_timeout=2)
+        client.on("metrics_update", metrics.put)
+        client.on("frame_update", frames.put)
+        client.on("metrics_history", histories.put)
+        server.start()
+        try:
+            deadline = time.monotonic() + 3.0
+            while server.port == 0 and server.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            assert server.port != 0
+            client.connect(f"http://127.0.0.1:{server.port}", transports=["polling"], wait_timeout=2)
+            assert metrics.get(timeout=2) == {"metrics": {"timestamp": 1.0}}
+            latest[0] = {"timestamp": 2.0}
+            server.broadcast_metrics(latest[0])
+            assert metrics.get(timeout=2) == {"metrics": {"timestamp": 2.0}}
+            for frame in ("first-jpeg", "second-jpeg"):
+                server.broadcast_frame(frame)
+                assert frames.get(timeout=2) == {"frame": frame}
+            client.emit("request_metrics")
+            assert histories.get(timeout=2)["latest"] == {"timestamp": 2.0}
+            assert metrics.get(timeout=2) == {"metrics": {"timestamp": 2.0}}
+        finally:
+            server.stop(join_timeout=3)
+            if client.connected:
+                client.disconnect()
+            server.join(timeout=3)
+    assert server.client_count == 0
+    assert not server.app.extensions["ncfd_stream_publisher"]._pending
 
 
 def test_server_stop_closes_websocket_and_half_open_polling_and_releases_port(tmp_path):

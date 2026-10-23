@@ -3,9 +3,9 @@
 寫入採「背景 writer thread + queue」設計：呼叫端 ``record()`` 只做 dict→tuple
 組裝並丟進 thread-safe queue，實際 SQLite 連線建立、schema migration、批次
 flush 全部在背景 writer thread 執行，呼叫端執行緒（GUI 主執行緒 / replay
-子行程）不再被 sqlite flush 卡頓。``close()`` 會等待 writer thread 把佇列中
-所有資料落盤後才回傳，維持既有的「close 後資料齊全」語意（video_replay 的
-determinism 依賴此點）。``close()`` 完成後另外寫一份 ``<db>.meta.json``
+子行程）不再被 sqlite flush 卡頓。``close()`` 等待 writer 排空，回傳 True
+才代表收尾完成；逾時回傳 False，可再次等待。即時 UI 使用 ``request_close()``
+與 ``is_finalized`` 避免阻塞事件迴圈。收尾時另外寫一份 ``<db>.meta.json``
 sidecar（schema_version/rows/ts_min/ts_max），供 web dashboard 免逐一開連線
 掃描即可列出錄製清單。
 """
@@ -260,6 +260,7 @@ class MetricsRecorder:
         self.conn: sqlite3.Connection | None = None
         self._start_time: float | None = None
         self._closed = False
+        self._lifecycle_lock = threading.Lock()
 
         self._stats_lock = threading.Lock()
         self._record_count = 0
@@ -283,6 +284,7 @@ class MetricsRecorder:
         self._writer_thread.start()
 
         if not self._ready_event.wait(self.INIT_TIMEOUT_SEC):
+            self.request_close()
             raise RuntimeError(
                 f"Failed to initialize recorder at {db_path}: writer thread startup timed out"
             )
@@ -362,7 +364,10 @@ class MetricsRecorder:
             ts_val = None
 
         try:
-            self._queue.put_nowait((row, ts_val))
+            with self._lifecycle_lock:
+                if self._closed:
+                    return
+                self._queue.put_nowait((row, ts_val))
         except queue.Full:
             with self._stats_lock:
                 self._dropped_count += 1
@@ -380,31 +385,42 @@ class MetricsRecorder:
             )
             return
 
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-
-        thread = getattr(self, "_writer_thread", None)
-        q = getattr(self, "_queue", None)
-        if thread is not None and thread.is_alive() and q is not None:
-            # 主要停止訊號是 event（不受佇列滿影響）；sentinel 僅為了立刻喚醒
-            # 正在 queue.get 等待的 writer，塞不進去也無妨。
+    def request_close(self) -> None:
+        """停止接受新資料並請背景 writer 排空；不等待磁碟 I/O。"""
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
             self._stop_event.set()
             try:
-                q.put_nowait(_STOP)
+                self._queue.put_nowait(_STOP)
             except queue.Full:
                 pass
-            thread.join(timeout=self.JOIN_TIMEOUT_SEC)
+
+    @property
+    def is_finalized(self) -> bool:
+        """資料庫與 metadata 的背景收尾皆已完成。"""
+        return not self._writer_thread.is_alive()
+
+    def wait_closed(self, timeout_seconds: float | None = JOIN_TIMEOUT_SEC) -> bool:
+        """等待已請求的收尾，可在逾時後再次等待。"""
+        thread = getattr(self, "_writer_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout_seconds)
             if thread.is_alive():
-                logger.warning(
-                    "MetricsRecorder(%s): writer thread did not terminate within timeout",
-                    self.db_path,
-                )
-        # writer 正常結束時自行關閉連線；逾時未終止則連線仍歸 writer 所有，
-        # 此處關閉會與其 executemany/commit 競態，故僅在 writer 已停止時清理。
-        if thread is None or not thread.is_alive():
-            self._cleanup()
+                return False
+        self._cleanup()
+        return True
+
+    def close(self) -> bool:
+        self.request_close()
+        finalized = self.wait_closed(timeout_seconds=self.JOIN_TIMEOUT_SEC)
+        if not finalized:
+            logger.warning(
+                "MetricsRecorder(%s): writer thread did not terminate within timeout",
+                self.db_path,
+            )
+        return finalized
 
     def _cleanup(self) -> None:
         conn = getattr(self, "conn", None)

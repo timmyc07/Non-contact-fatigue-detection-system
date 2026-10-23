@@ -44,7 +44,7 @@ from .personal_profile import PersonalProfile
 from .frame_queue import get_latest
 from .mediapipe_tuning import load_mediapipe_tuning
 from .platforms import create_face_landmarker_base_options
-from .worker_safety import fail_closed_worker
+from .worker_safety import ConsecutiveFrameFailures, fail_closed_worker
 from .fatigue_scorer import FatigueFuser, FusedFatigueScore, FuserConfig
 from .fatigue_worker import draw_fatigue_annotations
 from rppg.rppg_worker import (
@@ -284,6 +284,7 @@ class CombinedWorker(QObject):
         ts_ms_prev     = 0
         last_preview_emit = 0.0
         preview_emit_interval = 1.0 / _ANNOTATED_PREVIEW_MAX_FPS
+        frame_failures = ConsecutiveFrameFailures()
 
         # P6b-2：啟動時解析一次 ROI base_weights 覆寫（無覆寫時 rppg_tuning 與
         # self._tuning 為同一物件，逐幀路徑不變）。
@@ -334,10 +335,7 @@ class CombinedWorker(QObject):
                         data=np.ascontiguousarray(rgb),
                     )
 
-                    try:
-                        result = landmarker.detect_for_video(mp_img, ts_ms)
-                    except Exception:
-                        continue
+                    result = landmarker.detect_for_video(mp_img, ts_ms)
 
                     blendshapes = result.face_blendshapes[0] if result.face_blendshapes else None
 
@@ -346,7 +344,8 @@ class CombinedWorker(QObject):
                         self.face_detected.emit(has_face)
                         last_face = has_face
 
-                    annotated = bgr.copy()
+                    preview_due = ts - last_preview_emit >= preview_emit_interval
+                    annotated = bgr
 
                     r_metrics: Optional[RppgMetrics]    = None
                     f_metrics: Optional[FatigueMetrics] = None
@@ -363,7 +362,8 @@ class CombinedWorker(QObject):
                         if fatigue_engine is not None:
                             f_metrics = fatigue_engine.step(lm, w_px, h_px, ts, blendshapes=blendshapes)
                             f_metrics.face_detected = True
-                            annotated = draw_fatigue_annotations(annotated, lm, f_metrics)
+                            if preview_due:
+                                annotated = draw_fatigue_annotations(bgr, lm, f_metrics)
                             self.fatigue_metrics_ready.emit(f_metrics)
 
                         # ── Step 2: rPPG ROI extraction + engine (draws on top)
@@ -373,7 +373,9 @@ class CombinedWorker(QObject):
                                 bgr, lm, transform_matrix, roi_tracker, rppg_tuning,
                                 weighted_mix=roi_override_active,
                             )
-                            draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning)
+                            if preview_due and annotated is bgr:
+                                annotated = bgr.copy()
+                            draw_rois(annotated, lm, transform_matrix, roi_tracker, self._tuning, draw=preview_due)
                             if sample is not None:
                                 rppg_engine.push(ts, sample[0], sample[1], sample[2])
                             # P6b-1 新增：per-ROI 旁路緩衝，不影響上面既有 push() 的輸入/行為。
@@ -427,7 +429,7 @@ class CombinedWorker(QObject):
                     fused = self._fuser.update(rppg=r_metrics, fatigue=f_metrics)
                     self.fused_score_ready.emit(fused)
 
-                    if ts - last_preview_emit >= preview_emit_interval:
+                    if preview_due:
                         last_preview_emit = ts
                         rgb_ann = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
                         rgb_ann = np.ascontiguousarray(rgb_ann)
@@ -438,8 +440,10 @@ class CombinedWorker(QObject):
                             QImage.Format.Format_RGB888,
                         )
                         self.frame_annotated.emit(qimg.copy())
-                except Exception:
+                    frame_failures.reset()
+                except Exception as exc:
                     log.exception("每幀處理發生未預期例外，略過此幀")
+                    frame_failures.record(exc)
                     continue
 
         self.finished.emit()

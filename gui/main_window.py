@@ -148,6 +148,7 @@ class EngineApplication(QObject):
         self._combined_queue: "queue.Queue | None" = None
 
         self._metrics_recorder: MetricsRecorder | None = None
+        self._finalizing_metrics_recorder: MetricsRecorder | None = None
         self._recording_db_path: Path | None = None
         self._recording_started_at: float | None = None
         self._recording_count: int = 0
@@ -950,7 +951,9 @@ class EngineApplication(QObject):
             "camera_running": bool(self._cam_worker is not None),
             "recording": pipeline.recording,
             "recording_finalizing": not pipeline.recording and (
-                self._video_thread is not None or self._video_worker is not None
+                self._video_thread is not None
+                or self._video_worker is not None
+                or self._finalizing_metrics_recorder is not None
             ),
             "fps": float(self._last_fps or 0.0),
             "camera_label": self._engine_controller.selected_camera_label(),
@@ -1190,6 +1193,11 @@ class EngineApplication(QObject):
             "engine_mode": self._engine_mode,
             "pipeline_running": pipeline.running,
             "recording": pipeline.recording,
+            "recording_finalizing": not pipeline.recording and (
+                self._video_thread is not None
+                or self._video_worker is not None
+                or self._finalizing_metrics_recorder is not None
+            ),
             "recording_path": str(self._recording_db_path or ""),
             "auto_capture_active": self._engine_runtime.timer_active("auto_capture"),
             "monitor_focus": bool(getattr(self, "_monitor_focus", False)),
@@ -1267,6 +1275,8 @@ class EngineApplication(QObject):
             pipeline = self._engine_controller.pipeline_snapshot()
             if enabled and not pipeline.running:
                 raise ValueError("Start the pipeline before recording")
+            if enabled and self._finalizing_metrics_recorder is not None:
+                raise BusyError("Previous metrics recorder cleanup is still pending")
             if enabled != pipeline.recording:
                 self._pipeline_running = pipeline.running
                 self._recording = pipeline.recording
@@ -1549,7 +1559,10 @@ class EngineApplication(QObject):
         if self._runtime_cleanup_retry_scheduled:
             return
         if not self._cleanup_runtime():
-            if not self._runtime_adapter_threads_stopped():
+            if (
+                not self._runtime_adapter_threads_stopped()
+                or self._finalizing_metrics_recorder is not None
+            ):
                 self._runtime_shutdown_waiting_for_adapters = True
                 return
             if not self._runtime_cleanup_retry_attempted:
@@ -1568,8 +1581,15 @@ class EngineApplication(QObject):
         self._shutdown_engine()
 
     def close_runtime(self) -> bool:
-        """Release engine resources without requiring a QWidget close event."""
-        return self._cleanup_runtime()
+        """Drain remaining data after the application event loop has returned."""
+        complete = self._cleanup_runtime()
+        recorder = self._finalizing_metrics_recorder
+        if recorder is not None:
+            recorder.wait_closed(timeout_seconds=None)
+            self._runtime_shutdown_waiting_for_adapters = False
+            self._poll_metrics_finalization()
+            complete = self._cleanup_runtime()
+        return complete
 
     def _cleanup_runtime(self) -> bool:
         if self._runtime_cleanup_complete:
@@ -1612,7 +1632,11 @@ class EngineApplication(QObject):
             cleanup_step("camera and analysis adapters", self._stop_camera_worker)
             cleanup_step("alarm", self._engine_runtime.close_alarm)
             adapters_stopped = self._runtime_adapter_threads_stopped()
-            self._runtime_cleanup_complete = not had_error and adapters_stopped
+            self._runtime_cleanup_complete = (
+                not had_error
+                and adapters_stopped
+                and self._finalizing_metrics_recorder is None
+            )
             return self._runtime_cleanup_complete
         finally:
             self._runtime_cleanup_in_progress = False
@@ -1652,7 +1676,7 @@ class EngineApplication(QObject):
         return bytes(cast(Any, buffer.toBase64())).decode("ascii")
 
     def _emit_web_frame(self, image: QImage) -> None:
-        if self._web_server is None:
+        if self._web_server is None or self._web_server.client_count == 0:
             return
         now = time.perf_counter()
         if now - self._web_last_frame_emit < self._web_frame_interval:
@@ -1672,6 +1696,8 @@ class EngineApplication(QObject):
     def _start_recording(self) -> None:
         if self._video_thread is not None or self._video_worker is not None:
             raise RuntimeError("Previous video recorder cleanup is still pending")
+        if self._finalizing_metrics_recorder is not None:
+            raise RuntimeError("Previous metrics recorder cleanup is still pending")
         if self._metrics_recorder is not None:
             return
         rec_dir = self._recordings_dir()
@@ -1699,13 +1725,19 @@ class EngineApplication(QObject):
 
     def _stop_recording(self) -> bool:
         self._engine_controller.stop_recording()
+        self._recording = False
         if self._metrics_recorder is not None:
-            try:
-                self._metrics_recorder.close()
-            except Exception as exc:
-                logger.warning("關閉指標記錄器失敗：%s", exc)
-            finally:
-                self._metrics_recorder = None
+            self._metrics_recorder.request_close()
+            self._finalizing_metrics_recorder = self._metrics_recorder
+            self._metrics_recorder = None
+        self._poll_metrics_finalization()
+        if (
+            self._finalizing_metrics_recorder is not None
+            and not self._engine_runtime.timer_active("metrics_finalize")
+        ):
+            self._engine_runtime.start_periodic_timer(
+                "metrics_finalize", 50, self._poll_metrics_finalization
+            )
         if self._video_worker is not None:
             try:
                 self._engine_runtime.request_adapter_stop("video")
@@ -1718,7 +1750,6 @@ class EngineApplication(QObject):
             except Exception as exc:
                 stopped = False
                 logger.warning("等待影片記錄執行緒結束失敗：%s", exc)
-        self._metrics_recorder = None
         self._recording_db_path = None
         self._recording_started_at = None
         if stopped:
@@ -1726,6 +1757,16 @@ class EngineApplication(QObject):
             self._recording_video_path = None
         self._update_recording_routing()
         return stopped
+
+    def _poll_metrics_finalization(self) -> None:
+        recorder = self._finalizing_metrics_recorder
+        if recorder is None or not recorder.wait_closed(timeout_seconds=0):
+            return
+        self._finalizing_metrics_recorder = None
+        self._engine_runtime.cancel_timer("metrics_finalize")
+        self._emit_web_metrics(force=True)
+        if self._runtime_shutdown_waiting_for_adapters:
+            self._engine_runtime.defer(0, self._shutdown_engine)
 
     def _build_record_payload(self) -> dict:
         r = self._latest_rppg_metrics
@@ -2231,6 +2272,7 @@ class EngineApplication(QObject):
         elif kind == "video":
             self._video_queue = None
             self._recording_video_path = None
+            self._emit_web_metrics(force=True)
         elif kind == "replay":
             self._on_replay_thread_finished()
             return

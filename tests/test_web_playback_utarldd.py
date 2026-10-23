@@ -5,6 +5,9 @@ import os
 import sqlite3
 from pathlib import Path
 
+import pytest
+import requests
+
 from gui.web_server import MetricsBuffer, PlaybackManager, create_app, format_web_dashboard_urls
 
 
@@ -24,6 +27,54 @@ def _write_minimal_metrics_db(path: Path) -> None:
         )
         conn.execute("INSERT INTO metrics (timestamp, fps, status, fatigue_level) VALUES (0.0, 30.0, 'OK', 0.1)")
         conn.execute("INSERT INTO metrics (timestamp, fps, status, fatigue_level) VALUES (1.0, 30.0, 'DROWSY', 0.8)")
+
+
+@pytest.mark.parametrize("endpoint", ["/api/playback", "/api/playback/full", "/api/recordings"])
+@pytest.mark.parametrize("valid_schema", [True, False])
+def test_playback_connections_close_after_success_and_query_error(tmp_path, monkeypatch, endpoint, valid_schema):
+    db_path = tmp_path / "metrics_20260101_010101.db"
+    if valid_schema:
+        _write_minimal_metrics_db(db_path)
+    else:
+        db_path.touch()
+    connections = []
+    original = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        connection = original(*args, **kwargs)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    app, _ = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
+    app.test_client().get(endpoint, query_string={"db_path": str(db_path)})
+    try:
+        assert connections
+        for connection in connections:
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                connection.execute("SELECT 1")
+    finally:
+        for connection in connections:
+            connection.close()
+
+
+def test_file_browser_download_closes_upstream_after_http_error(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from gui import web_server
+
+    response = requests.Response()
+    response.status_code = 500
+    response._content_consumed = True
+    closed = []
+    monkeypatch.setattr(response, "close", lambda: closed.append(True))
+    monkeypatch.setattr(web_server, "FileBrowserClient", lambda: SimpleNamespace(
+        is_authenticated=lambda: True,
+        _request=lambda *args, **kwargs: response,
+    ))
+    app, _ = create_app(MetricsBuffer(), PlaybackManager(tmp_path))
+    result = app.test_client().get("/api/fb/download", query_string={"filename": "metrics_test.db"})
+    assert result.status_code == 502
+    assert closed == [True]
 
 
 def test_playback_manager_lists_nested_utarldd_recordings(tmp_path: Path) -> None:

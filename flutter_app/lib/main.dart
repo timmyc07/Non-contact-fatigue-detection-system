@@ -201,14 +201,18 @@ DesktopNotice? parseDesktopNotice(dynamic raw) {
 }
 
 class MonitorShell extends StatefulWidget {
-  const MonitorShell({super.key});
+  const MonitorShell({this.backend, super.key});
+
+  final BackendService? backend;
 
   @override
   State<MonitorShell> createState() => _MonitorShellState();
 }
 
+enum _MonitorErrorSource { connection, recordings, operation }
+
 class _MonitorShellState extends State<MonitorShell> {
-  final _backend = BackendService();
+  late final BackendService _backend;
   final _bridge = TauriBridge.instance;
   StreamSubscription<Map<String, dynamic>>? _metricsSubscription;
   late final Stream<String> _previewFrames;
@@ -224,7 +228,11 @@ class _MonitorShellState extends State<MonitorShell> {
   double _playbackStart = 0;
   bool _playbackBusy = false;
   bool _stateRefreshInFlight = false;
+  bool _controlStateAvailable = false;
+  bool _recordingsLoaded = false;
+  bool _recordingsLoading = false;
   String? _error;
+  _MonitorErrorSource? _errorSource;
   bool _connected = false;
   bool _commandBusy = false;
   bool _alwaysOnTop = false;
@@ -244,6 +252,7 @@ class _MonitorShellState extends State<MonitorShell> {
   @override
   void initState() {
     super.initState();
+    _backend = widget.backend ?? BackendService();
     _previewFrames = _backend.previewFrames;
     _metricsSubscription = _backend.connectMetrics().listen(
       (packet) {
@@ -260,7 +269,6 @@ class _MonitorShellState extends State<MonitorShell> {
       const Duration(seconds: 1),
       (_) => _refreshEngineState(silent: true),
     );
-    _loadRecordings();
   }
 
   Future<void> _refreshEngineState({bool silent = false}) async {
@@ -269,23 +277,32 @@ class _MonitorShellState extends State<MonitorShell> {
     try {
       final state = await _backend.controlState();
       if (!mounted) return;
+      _controlStateAvailable = true;
       _showNewDesktopNotice(state);
       _requestOverlaySync(state);
       if (!_connected ||
           jsonEncode(state) != jsonEncode(_engineState) ||
-          (!silent && _error != null)) {
+          _errorSource == _MonitorErrorSource.connection) {
         setState(() {
           _engineState = state;
           _connected = true;
-          if (!silent) _error = null;
+          if (_errorSource == _MonitorErrorSource.connection) {
+            _error = null;
+            _errorSource = null;
+          }
         });
       }
+      if (!_recordingsLoaded) unawaited(_loadRecordings());
     } catch (error) {
       _hideOverlayWindow();
       if (!mounted) return;
+      _controlStateAvailable = false;
       setState(() {
         _connected = false;
-        if (!silent) _error = '監測服務暫時無法連線，請稍後重試。';
+        if (!silent && _errorSource != _MonitorErrorSource.operation) {
+          _error = '監測服務暫時無法連線，請稍後重試。';
+          _errorSource = _MonitorErrorSource.connection;
+        }
       });
     } finally {
       _stateRefreshInFlight = false;
@@ -300,6 +317,7 @@ class _MonitorShellState extends State<MonitorShell> {
     setState(() {
       _commandBusy = true;
       _error = null;
+      _errorSource = null;
     });
     try {
       final state = await _backend.command(command, args);
@@ -316,7 +334,10 @@ class _MonitorShellState extends State<MonitorShell> {
       }
     } catch (error) {
       if (mounted) {
-        setState(() => _error = '操作失敗：$error');
+        setState(() {
+          _error = '操作失敗：$error';
+          _errorSource = _MonitorErrorSource.operation;
+        });
         _showCommandMessage('操作失敗：$error', isError: true);
       }
     } finally {
@@ -514,16 +535,29 @@ class _MonitorShellState extends State<MonitorShell> {
   }
 
   Future<void> _loadRecordings() async {
+    if (!_controlStateAvailable || _recordingsLoading) return;
+    _recordingsLoading = true;
     try {
       final values = await _backend.recordings();
       if (mounted) {
         setState(() {
           _recordings = values;
-          _error = null;
+          _recordingsLoaded = true;
+          if (_errorSource == _MonitorErrorSource.recordings) {
+            _error = null;
+            _errorSource = null;
+          }
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = '無法載入歷史記錄，請確認監測服務連線後重試。');
+      if (mounted && _errorSource != _MonitorErrorSource.operation) {
+        setState(() {
+          _error = '無法載入歷史記錄，請確認監測服務連線後重試。';
+          _errorSource = _MonitorErrorSource.recordings;
+        });
+      }
+    } finally {
+      _recordingsLoading = false;
     }
   }
 
@@ -547,6 +581,7 @@ class _MonitorShellState extends State<MonitorShell> {
       if (mounted && requestId == _playbackRequestId) {
         setState(() {
           _error = null;
+          _errorSource = null;
           _playbackRows = (payload['data'] as List?)
                   ?.whereType<Map>()
                   .map((row) => Map<String, dynamic>.from(row))
@@ -561,7 +596,10 @@ class _MonitorShellState extends State<MonitorShell> {
       }
     } catch (error) {
       if (mounted && requestId == _playbackRequestId) {
-        setState(() => _error = '無法載入這段記錄的指標，請稍後重試。');
+        setState(() {
+          _error = '無法載入這段記錄的指標，請稍後重試。';
+          _errorSource = _MonitorErrorSource.operation;
+        });
       }
     } finally {
       if (mounted && requestId == _playbackRequestId) {
@@ -715,11 +753,15 @@ class OverlayShell extends StatefulWidget {
   const OverlayShell({
     this.initialMetrics = const <String, dynamic>{},
     this.initialState = const <String, dynamic>{},
+    this.backend,
+    this.visibilityChanges,
     super.key,
   });
 
   final Map<String, dynamic> initialMetrics;
   final Map<String, dynamic> initialState;
+  final BackendService? backend;
+  final Stream<bool>? visibilityChanges;
 
   @override
   State<OverlayShell> createState() => _OverlayShellState();
@@ -798,54 +840,72 @@ String formatOverlayValue(String key, Object? rawValue) {
 }
 
 class _OverlayShellState extends State<OverlayShell> {
-  final _backend = BackendService();
+  late final BackendService _backend;
   final _bridge = TauriBridge.instance;
   StreamSubscription<Map<String, dynamic>>? _metricsSubscription;
+  StreamSubscription<bool>? _visibilitySubscription;
   late final Stream<String> _previewFrames;
   Timer? _poller;
   Map<String, dynamic> _metrics = <String, dynamic>{};
   Map<String, dynamic> _state = <String, dynamic>{};
-  bool _hiddenAfterDisconnect = false;
-  bool _refreshInFlight = false;
+  bool _visible = false;
+  int _visibilityEpoch = 0;
+  int? _refreshEpoch;
 
   @override
   void initState() {
     super.initState();
+    _backend = widget.backend ?? BackendService();
     _metrics = Map<String, dynamic>.from(widget.initialMetrics);
     _state = Map<String, dynamic>.from(widget.initialState);
     _previewFrames = _backend.previewFrames;
+    final visibility = widget.visibilityChanges;
+    if (visibility != null || _bridge.isAvailable) {
+      _visibilitySubscription =
+          (visibility ?? _bridge.overlayVisibilityChanges()).listen(
+        _setVisibility,
+        onError: (Object error) {
+          debugPrint('Overlay visibility sync failed: $error');
+          _setVisibility(true);
+        },
+      );
+    } else {
+      _setVisibility(true);
+    }
+  }
+
+  void _setVisibility(bool visible) {
+    if (!mounted || _visible == visible) return;
+    _visibilityEpoch++;
+    setState(() => _visible = visible);
+    _metricsSubscription?.cancel();
+    _metricsSubscription = null;
+    _poller?.cancel();
+    _poller = null;
+    if (!visible) return;
+    final epoch = _visibilityEpoch;
     _metricsSubscription = _backend.connectMetrics().listen((packet) {
-      if (mounted) setState(() => _metrics = packet);
+      if (mounted && _visible && epoch == _visibilityEpoch) {
+        setState(() => _metrics = packet);
+      }
     });
     _refresh();
     _poller = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
   }
 
   Future<void> _refresh() async {
-    if (_refreshInFlight) return;
-    _refreshInFlight = true;
+    final epoch = _visibilityEpoch;
+    if (!_visible || _refreshEpoch == epoch) return;
+    _refreshEpoch = epoch;
     try {
       final state = await _backend.controlState();
-      Map<String, dynamic>? metrics;
-      try {
-        metrics = await _backend.metricsSnapshot();
-      } catch (_) {
-        // Socket.IO remains the primary stream when the snapshot is unavailable.
-      }
-      if (mounted) {
-        _hiddenAfterDisconnect = false;
-        setState(() {
-          _state = state;
-          if (metrics != null && metrics.isNotEmpty) _metrics = metrics;
-        });
+      if (mounted && _visible && epoch == _visibilityEpoch) {
+        setState(() => _state = state);
       }
     } catch (_) {
-      if (!_hiddenAfterDisconnect) {
-        _hiddenAfterDisconnect = true;
-        unawaited(_hideOverlayWindow());
-      }
+      // 視窗顯示由主面板控制，避免暫時失敗後自行隱藏而無法恢復。
     } finally {
-      _refreshInFlight = false;
+      if (_refreshEpoch == epoch) _refreshEpoch = null;
     }
   }
 
@@ -860,6 +920,7 @@ class _OverlayShellState extends State<OverlayShell> {
   void dispose() {
     unawaited(_hideOverlayWindow());
     _metricsSubscription?.cancel();
+    _visibilitySubscription?.cancel();
     _poller?.cancel();
     unawaited(_backend.dispose());
     super.dispose();
@@ -875,6 +936,7 @@ class _OverlayShellState extends State<OverlayShell> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_visible) return const SizedBox.shrink();
     final previewOn = _state['overlay_preview'] == true;
     final metricsOn = _state['overlay_metrics'] == true;
     final locked = _state['overlay_locked'] == true;
@@ -1588,6 +1650,7 @@ class DesktopControlPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final running = state['pipeline_running'] == true;
     final recording = state['recording'] == true;
+    final recordingFinalizing = state['recording_finalizing'] == true;
     final focus = state['monitor_focus'] == true;
     final capturing = state['auto_capture_active'] == true;
     final autoDuration = (state['auto_capture_seconds'] as num?)?.toInt() ?? 60;
@@ -1686,13 +1749,17 @@ class DesktopControlPanel extends StatelessWidget {
         ),
         const SizedBox(height: 9),
         OutlinedButton.icon(
-          onPressed: busy || (!running && !recording)
+          onPressed: busy || recordingFinalizing || (!running && !recording)
               ? null
               : () => onCommand(
                   'recording.set', <String, dynamic>{'enabled': !recording}),
           icon: Icon(recording ? Icons.stop : Icons.fiber_manual_record,
               color: recording ? const Color(0xffe77b78) : null),
-          label: Text(recording ? '停止記錄' : '開始記錄'),
+          label: Text(recordingFinalizing
+              ? '記錄收尾中…'
+              : recording
+                  ? '停止記錄'
+                  : '開始記錄'),
         ),
         const SizedBox(height: 9),
         ExpansionTile(

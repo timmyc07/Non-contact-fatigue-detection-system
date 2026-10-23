@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import main as launcher
 
 
@@ -43,8 +45,9 @@ def test_legacy_panel_flag_is_rejected_without_starting_qt() -> None:
     assert "npm run desktop" in result.stdout
 
 
+@pytest.mark.parametrize("cleanup_complete", [True, False])
 def test_engine_entry_creates_only_headless_application_adapter(
-    monkeypatch,
+    monkeypatch, capsys, cleanup_complete,
 ) -> None:
     events: list[object] = []
 
@@ -68,15 +71,17 @@ def test_engine_entry_creates_only_headless_application_adapter(
         def __init__(self) -> None:
             events.append("engine_application")
 
-        def close_runtime(self) -> None:
+        def close_runtime(self) -> bool:
             events.append("engine_close")
+            return cleanup_complete
 
     monkeypatch.setattr(launcher, "QApplication", FakeApplication)
     monkeypatch.setattr(launcher, "EngineApplication", FakeEngineApplication)
     monkeypatch.setattr(launcher, "_missing_linux_qt_runtime_libraries", lambda: [])
     monkeypatch.setattr(sys, "argv", ["main.py", "--engine"])
 
-    assert launcher.main() == 0
+    assert launcher.main() == (0 if cleanup_complete else 1)
+    assert ("cleanup did not complete" in capsys.readouterr().err) is not cleanup_complete
     assert events == [
         ("app", ["main.py"]),
         ("quit_on_last_window", False),

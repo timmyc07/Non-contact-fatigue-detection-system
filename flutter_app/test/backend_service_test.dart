@@ -21,6 +21,89 @@ class _TrackingClient extends http.BaseClient {
 }
 
 void main() {
+  test('metrics and frames acknowledge consumed and discarded server events',
+      () async {
+    final socket = io.io('http://127.0.0.1:1', <String, dynamic>{
+      'autoConnect': false,
+      'reconnection': false,
+      'forceNew': true,
+    });
+    final service = BackendService(socket: socket);
+    final packets = <Map<String, dynamic>>[];
+    final frames = <String>[];
+    final metricsSubscription = service.connectMetrics().listen(packets.add);
+    final frameSubscription = service.previewFrames.listen(frames.add);
+    var acknowledgements = 0;
+    void acknowledge(dynamic _) => acknowledgements++;
+
+    socket.emitEvent([
+      'metrics_update',
+      {'fps': 30},
+      acknowledge
+    ]);
+    socket.emitEvent([
+      'frame_update',
+      {'frame': 'latest'},
+      acknowledge
+    ]);
+    socket.emitEvent(['metrics_update', null, acknowledge]);
+    socket.emitEvent([
+      'frame_update',
+      {'frame': ''},
+      acknowledge
+    ]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(packets, [
+      {'fps': 30}
+    ]);
+    expect(frames, ['latest']);
+    expect(acknowledgements, 4);
+    expect(
+        () => socket.emitEvent([
+              'metrics_update',
+              {7: 'invalid key'},
+              acknowledge
+            ]),
+        throwsA(isA<TypeError>()));
+    expect(acknowledgements, 5);
+    await metricsSubscription.cancel();
+    await frameSubscription.cancel();
+    await service.dispose();
+  });
+
+  test('reconnect consumes latest metrics without requesting unused history',
+      () async {
+    final socket = io.io('http://127.0.0.1:1', <String, dynamic>{
+      'autoConnect': false,
+      'reconnection': false,
+      'forceNew': true,
+    });
+    final service = BackendService(socket: socket);
+    final packets = <Map<String, dynamic>>[];
+    final subscription = service.connectMetrics().listen(packets.add);
+    addTearDown(service.dispose);
+
+    for (final fps in [30, 31]) {
+      socket.emitEvent(['connect', null]);
+      socket.emitEvent([
+        'metrics_update',
+        {
+          'metrics': {'fps': fps}
+        }
+      ]);
+      socket.emitEvent(['disconnect', 'reconnecting']);
+    }
+    await Future<void>.delayed(Duration.zero);
+
+    expect(socket.sendBuffer, isEmpty);
+    expect(packets, [
+      {'fps': 30},
+      {'fps': 31}
+    ]);
+    await subscription.cancel();
+  });
+
   test('fallback polling is single flight and stops on reconnect or cancel',
       () async {
     var requests = 0;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,100 @@ def test_version_store_save_and_switch(tmp_path: Path):
 
     manifest = json.loads((tmp_path / "rppg_calibration" / "manifest.json").read_text(encoding="utf-8"))
     assert len(manifest["versions"]) >= 2
+
+
+def test_version_cache_avoids_repeated_disk_reads_without_sharing_mutable_values(tmp_path, monkeypatch):
+    store = CalibrationVersionStore(root=tmp_path)
+    saved = store.save_new_version(
+        "cached", offset_bpm=3.0,
+        rppg_params={"roi_weights": {"forehead": 0.4}},
+        session={"samples": [1, 2]}, metrics={"errors": [3]},
+    )
+    reads = []
+    read_json = store._read_json
+
+    def read(path):
+        reads.append(path)
+        return read_json(path)
+
+    monkeypatch.setattr(store, "_read_json", read)
+    first = store.get_active_version()
+    assert first.to_dict() == saved.to_dict()
+    first.name = "mutated"
+    first.params.bpm_offset = 100.0
+    first.params.rppg_params["roi_weights"]["forehead"] = 1.0
+    first.session["samples"].append(9)
+    first.metrics["errors"].clear()
+    for _ in range(30):
+        assert store.get_active_version().to_dict() == saved.to_dict()
+    assert reads == [store.versions_dir / f"{saved.id}.json"]
+
+
+@pytest.mark.parametrize("changed_field", ["mtime", "size"])
+def test_version_cache_reloads_external_file_updates(tmp_path, changed_field):
+    store = CalibrationVersionStore(root=tmp_path)
+    saved = store.save_new_version("cached", offset_bpm=3.0)
+    assert store.get_active_version().params.bpm_offset == 3.0
+    path = store.versions_dir / f"{saved.id}.json"
+    before = path.stat()
+    data = json.loads(path.read_text())
+    data["params"]["bpm_offset"] = 4.0 if changed_field == "mtime" else 100.0
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + (1 if changed_field == "mtime" else 0)))
+    if changed_field == "mtime":
+        assert path.stat().st_size == before.st_size
+    else:
+        assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert store.get_active_version().params.bpm_offset == data["params"]["bpm_offset"]
+
+
+def test_version_cache_tracks_active_version_and_manifest_file_path(tmp_path):
+    store = CalibrationVersionStore(root=tmp_path)
+    first = store.save_new_version("first", offset_bpm=1.0)
+    second = store.save_new_version("second", offset_bpm=2.0)
+    assert store.get_active_version().params.bpm_offset == 2.0
+    store.set_active_version(first.id)
+    assert store.get_active_version().params.bpm_offset == 1.0
+    path = store.versions_dir / f"{second.id}.json"
+    target = tmp_path / "replacement.json"
+    target.write_bytes(path.read_bytes())
+    manifest = json.loads(store.manifest_path.read_text())
+    for entry in manifest["versions"]:
+        if entry["id"] == first.id:
+            entry["file"] = target.name
+    store._write_json(store.manifest_path, manifest)
+    assert store.get_active_version().params.bpm_offset == 2.0
+
+
+@pytest.mark.parametrize("origin", [False, True])
+def test_version_cache_detects_missing_files_and_recovers(tmp_path, origin):
+    store = CalibrationVersionStore(root=tmp_path)
+    saved = origin_version() if origin else store.save_new_version("cached", offset_bpm=3.0)
+    path = store.versions_dir / f"{saved.id}.json"
+    contents = path.read_bytes()
+    assert store.get_version(saved.id).to_dict() == saved.to_dict()
+    path.unlink()
+    if origin:
+        assert store.get_version(saved.id).is_identity
+    else:
+        with pytest.raises(FileNotFoundError, match="校準版本檔案不存在"):
+            store.get_version(saved.id)
+    path.write_bytes(contents)
+    assert store.get_version(saved.id).to_dict() == saved.to_dict()
+
+
+def test_version_cache_does_not_hide_corruption_and_recovers(tmp_path):
+    store = CalibrationVersionStore(root=tmp_path)
+    saved = store.save_new_version("cached", offset_bpm=3.0)
+    path = store.versions_dir / f"{saved.id}.json"
+    assert store.get_active_version().params.bpm_offset == 3.0
+    path.write_text("invalid json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        store.get_active_version()
+    data = saved.to_dict()
+    data["params"]["bpm_offset"] = 7.0
+    store._write_json(path, data)
+    assert store.get_active_version().params.bpm_offset == 7.0
 
 
 def test_versions_saved_in_same_second_keep_both_parameter_sets(tmp_path, monkeypatch):

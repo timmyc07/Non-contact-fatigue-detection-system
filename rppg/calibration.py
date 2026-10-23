@@ -12,6 +12,7 @@ import os
 import statistics
 import tempfile
 import time
+from copy import deepcopy
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -349,6 +350,7 @@ class CalibrationVersionStore:
         self.manifest_path = self.root / "manifest.json"
         self._manifest_mtime: float = 0.0
         self._manifest: dict[str, Any] = {}
+        self._version_cache: tuple[tuple[Path, int, int], CalibrationVersion] | None = None
         self.ensure_layout()
 
     def ensure_layout(self) -> None:
@@ -396,17 +398,27 @@ class CalibrationVersionStore:
         vid = version_id or self.get_active_version_id()
         if vid == ORIGIN_VERSION_ID:
             path = self.versions_dir / f"{ORIGIN_VERSION_ID}.json"
-            if path.exists():
-                return CalibrationVersion.from_dict(self._read_json(path))
-            return origin_version()
-        entry = self._find_entry(vid)
-        if entry is None:
-            raise KeyError(f"找不到校準版本：{vid}")
-        rel = str(entry.get("file") or f"versions/{vid}.json")
-        path = self.root / rel
-        if not path.exists():
+        else:
+            entry = self._find_entry(vid)
+            if entry is None:
+                raise KeyError(f"找不到校準版本：{vid}")
+            rel = str(entry.get("file") or f"versions/{vid}.json")
+            path = self.root / rel
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            if vid == ORIGIN_VERSION_ID:
+                return origin_version()
             raise FileNotFoundError(f"校準版本檔案不存在：{path}")
-        return CalibrationVersion.from_dict(self._read_json(path))
+        fingerprint = (path, stat.st_mtime_ns, stat.st_size)
+        cached = self._version_cache
+        if cached is None or cached[0] != fingerprint:
+            version = CalibrationVersion.from_dict(self._read_json(path))
+            self._version_cache = (fingerprint, version)
+        else:
+            version = cached[1]
+        # getter 保留獨立可變物件契約，呼叫端修改不污染後續讀取。
+        return deepcopy(version)
 
     def get_active_version(self) -> CalibrationVersion:
         return self.get_version(self.get_active_version_id())

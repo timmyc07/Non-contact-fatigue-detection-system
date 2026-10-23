@@ -39,6 +39,23 @@ Future<void> _pumpDashboard(
 }
 
 void main() {
+  testWidgets(
+      'recording finalization prevents restarting until ownership releases',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SingleChildScrollView(
+                child: DesktopControlPanel(state: const {
+      'pipeline_running': true,
+      'recording': false,
+      'recording_finalizing': true,
+    }, busy: false, onCommand: (_, [__]) async {})))));
+    final button = find.widgetWithText(OutlinedButton, '記錄收尾中…');
+    expect(button, findsOneWidget);
+    expect(tester.widget<OutlinedButton>(button).onPressed, isNull);
+    expect(find.text('開始記錄'), findsNothing);
+  });
+
   test('fatigue presentation maps severity and prioritizes the fusion result',
       () {
     for (final (status, label) in [

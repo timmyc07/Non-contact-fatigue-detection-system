@@ -11,14 +11,18 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{
-    Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 #[cfg(target_os = "macos")]
 mod macos_refresh;
 
-struct BackendProcess(Mutex<Option<Child>>);
+#[derive(Default)]
+struct BackendProcess {
+    child: Mutex<Option<Child>>,
+    startup: Mutex<Option<thread::JoinHandle<()>>>,
+}
 struct DesktopShutdown(AtomicBool);
 
 const DESKTOP_CONTROL_API_VERSION: u64 = 2;
@@ -294,6 +298,9 @@ async fn set_overlay_window(
             } else {
                 window.hide().map_err(|error| error.to_string())?;
             }
+            window
+                .emit_to("overlay", "ncfd-overlay-visibility", visible)
+                .map_err(|error| error.to_string())?;
             Ok(())
         })();
         if configure_result.is_err() && created {
@@ -303,6 +310,13 @@ async fn set_overlay_window(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn get_overlay_visibility(app: tauri::AppHandle) -> Result<bool, String> {
+    app.get_webview_window("overlay")
+        .map(|window| window.is_visible().map_err(|error| error.to_string()))
+        .unwrap_or(Ok(false))
 }
 
 #[tauri::command]
@@ -488,7 +502,49 @@ fn kill_backend_process_tree(child: &mut Child) {
     let _ = child.kill();
 }
 
-fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
+fn ensure_startup_active(shutting_down: &AtomicBool) -> Result<(), String> {
+    if shutting_down.load(Ordering::Acquire) {
+        Err("Python engine startup cancelled".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+fn wait_for_backend_startup(
+    child: &mut Child,
+    shutting_down: &AtomicBool,
+    mut ready: impl FnMut() -> bool,
+) -> Result<(), String> {
+    let result = (|| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            ensure_startup_active(shutting_down)?;
+            if ready() {
+                ensure_startup_active(shutting_down)?;
+                return Ok(());
+            }
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                return Err(format!("Python engine exited before startup: {status}"));
+            }
+            thread::sleep(Duration::from_millis(150));
+        }
+        Err(format!(
+            "Python engine did not open port {} within 20 seconds",
+            backend_address().port()
+        ))
+    })();
+    if result.is_err() {
+        kill_backend_process_tree(child);
+        let _ = child.wait();
+    }
+    result
+}
+
+fn spawn_backend(
+    app: &tauri::AppHandle,
+    shutting_down: &AtomicBool,
+) -> Result<Option<Child>, String> {
+    ensure_startup_active(shutting_down)?;
     let resource_dir = app
         .path()
         .resource_dir()
@@ -501,6 +557,7 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         request_backend_shutdown();
         let deadline = Instant::now() + Duration::from_secs(3);
         while backend_available() && Instant::now() < deadline {
+            ensure_startup_active(shutting_down)?;
             thread::sleep(Duration::from_millis(100));
         }
         if backend_available() {
@@ -543,26 +600,13 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<Option<Child>, String> {
         .stderr(Stdio::null());
     hide_backend_console(&mut command);
     isolate_backend_process_tree(&mut command);
+    ensure_startup_active(shutting_down)?;
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to start Python engine: {error}"))?;
 
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while Instant::now() < deadline {
-        if backend_api_compatible() {
-            return Ok(Some(child));
-        }
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            return Err(format!("Python engine exited before startup: {status}"));
-        }
-        thread::sleep(Duration::from_millis(150));
-    }
-    kill_backend_process_tree(&mut child);
-    let _ = child.wait();
-    Err(format!(
-        "Python engine did not open port {} within 20 seconds",
-        backend_address().port()
-    ))
+    wait_for_backend_startup(&mut child, shutting_down, backend_api_compatible)?;
+    Ok(Some(child))
 }
 
 fn request_backend_shutdown() {
@@ -580,8 +624,23 @@ fn request_backend_shutdown() {
     }
 }
 
+fn join_backend_startup(state: &BackendProcess) {
+    let startup = state
+        .startup
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    if let Some(startup) = startup {
+        if startup.join().is_err() {
+            eprintln!("監測服務啟動執行緒意外結束，繼續清理服務。");
+        }
+    }
+}
+
 fn stop_owned_backend(state: &BackendProcess) {
-    let mut guard = match state.0.lock() {
+    // 啟動執行緒要先交還 Child；等待期間不可持有 child mutex。
+    join_backend_startup(state);
+    let mut guard = match state.child.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
@@ -609,6 +668,48 @@ fn stop_owned_backend(state: &BackendProcess) {
     kill_backend_process_tree(child);
     let _ = child.wait();
     *guard = None;
+}
+
+fn start_backend(app: &tauri::AppHandle) -> std::io::Result<()> {
+    let worker_app = app.clone();
+    let startup = thread::Builder::new()
+        .name("backend-startup".to_owned())
+        .spawn(move || {
+            let shutdown = worker_app.state::<DesktopShutdown>();
+            match spawn_backend(&worker_app, &shutdown.0) {
+                Ok(child) => {
+                    *worker_app
+                        .state::<BackendProcess>()
+                        .child
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = child;
+                }
+                Err(error) => {
+                    if shutdown.0.load(Ordering::Acquire) {
+                        return;
+                    }
+                    eprintln!("監測服務啟動失敗：{error}");
+                    let dialog_app = worker_app.clone();
+                    if let Err(error) = worker_app.run_on_main_thread(move || {
+                        if !dialog_app.state::<DesktopShutdown>().0.load(Ordering::Acquire) {
+                            dialog_app
+                                .dialog()
+                                .message(format!("監測服務無法啟動，請關閉程式後重試。\n\n{error}"))
+                                .title("監測服務啟動失敗")
+                                .kind(MessageDialogKind::Error)
+                                .show(|_| {});
+                        }
+                    }) {
+                        eprintln!("無法顯示監測服務啟動錯誤：{error}");
+                    }
+                }
+            }
+        })?;
+    *app.state::<BackendProcess>()
+        .startup
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(startup);
+    Ok(())
 }
 
 fn begin_desktop_shutdown(state: &DesktopShutdown) -> bool {
@@ -656,16 +757,12 @@ fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .manage(BackendProcess(Mutex::new(None)))
+        .manage(BackendProcess::default())
         .manage(DesktopShutdown(AtomicBool::new(false)))
         .setup(|app: &mut tauri::App| {
             #[cfg(target_os = "macos")]
             macos_refresh::create_main_window(app)?;
-            let child = spawn_backend(app.handle()).map_err(std::io::Error::other)?;
-            *app.state::<BackendProcess>()
-                .0
-                .lock()
-                .map_err(|_| std::io::Error::other("backend process lock poisoned"))? = child;
+            start_backend(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
             }
@@ -683,6 +780,7 @@ fn run() {
             open_camera_privacy_settings,
             pick_replay_folder,
             set_overlay_window,
+            get_overlay_visibility,
             get_overlay_geometry
         ])
         .build(context)
@@ -701,11 +799,7 @@ fn run() {
             }
             tauri::RunEvent::Exit => {
                 // OS/session shutdown 與未來其他退出路徑的冪等 fallback。
-                if !app_handle
-                    .state::<DesktopShutdown>()
-                    .0
-                    .load(Ordering::Acquire)
-                {
+                if begin_desktop_shutdown(&app_handle.state::<DesktopShutdown>()) {
                     stop_owned_backend(&app_handle.state::<BackendProcess>());
                 }
             }
@@ -727,14 +821,113 @@ fn main() {
 mod tests {
     use super::{
         backend_api_version_from_response, begin_desktop_shutdown, bundled_engine_path,
-        bundled_resource_root, engine_path_for_mode, path_to_frontend_string,
+        bundled_resource_root, engine_path_for_mode, isolate_backend_process_tree,
+        join_backend_startup, kill_backend_process_tree, path_to_frontend_string,
         validate_external_directory, validate_external_url, validate_overlay_geometry,
-        DesktopShutdown, OverlayGeometry,
+        wait_for_backend_startup, BackendProcess, DesktopShutdown, OverlayGeometry,
     };
     use std::fs;
     use std::path::Path;
-    use std::sync::atomic::AtomicBool;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn startup_probe_child() -> Child {
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .args(["--exact", "tests::backend_startup_probe_child"])
+            .env("NCFD_STARTUP_TEST_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        super::hide_backend_console(&mut command);
+        isolate_backend_process_tree(&mut command);
+        command.spawn().expect("startup test child")
+    }
+
+    #[test]
+    fn backend_startup_probe_child() {
+        if std::env::var_os("NCFD_STARTUP_TEST_CHILD").is_some() {
+            let mut input = String::new();
+            let _ = std::io::stdin().read_line(&mut input);
+        }
+    }
+
+    #[test]
+    fn cancelled_startup_kills_and_reaps_child_without_another_probe() {
+        let mut child = startup_probe_child();
+        let result = wait_for_backend_startup(&mut child, &AtomicBool::new(true), || {
+            panic!("cancelled startup must not probe the backend")
+        });
+
+        assert!(result.expect_err("startup cancelled").contains("cancelled"));
+        assert!(!child.try_wait().expect("reaped child").expect("exit status").success());
+    }
+
+    #[test]
+    fn shutdown_during_readiness_probe_kills_and_reaps_child() {
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutting_down.clone();
+        let (probing_tx, probing_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut child = startup_probe_child();
+            let result = wait_for_backend_startup(&mut child, &worker_shutdown, || {
+                probing_tx.send(()).expect("probe notification");
+                release_rx.recv().expect("probe release");
+                true
+            });
+            finished_tx.send((child, result)).expect("startup result");
+        });
+        probing_rx.recv_timeout(Duration::from_secs(3)).expect("probe started");
+        shutting_down.store(true, Ordering::Release);
+        release_tx.send(()).expect("release readiness probe");
+        let (mut child, result) = finished_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("cancelled startup completed");
+        worker.join().expect("startup worker");
+
+        assert!(result.expect_err("shutdown wins over readiness").contains("cancelled"));
+        assert!(!child.try_wait().expect("reaped child").expect("exit status").success());
+    }
+
+    #[test]
+    fn shutdown_joins_startup_before_taking_child_ownership() {
+        let state = Arc::new(BackendProcess::default());
+        let startup_state = state.clone();
+        let (release_tx, release_rx) = mpsc::channel();
+        *state.startup.lock().expect("startup lock") = Some(thread::spawn(move || {
+            release_rx.recv().expect("startup release");
+            *startup_state.child.lock().expect("child lock") = Some(startup_probe_child());
+        }));
+        let shutdown_state = state.clone();
+        let (joining_tx, joining_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let shutdown = thread::spawn(move || {
+            joining_tx.send(()).expect("join notification");
+            join_backend_startup(&shutdown_state);
+            let child = shutdown_state.child.lock().expect("child lock").take();
+            finished_tx.send(child).expect("shutdown ownership");
+        });
+        joining_rx.recv_timeout(Duration::from_secs(3)).expect("shutdown started");
+        assert!(matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_tx.send(()).expect("release late startup");
+        let mut child = finished_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("startup joined")
+            .expect("late child remains owned");
+        shutdown.join().expect("shutdown worker");
+        kill_backend_process_tree(&mut child);
+        child.wait().expect("late child reaped");
+        assert!(state.child.lock().expect("child lock").is_none());
+        assert!(state.startup.lock().expect("startup lock").is_none());
+    }
 
     fn temp_resource_dir() -> std::path::PathBuf {
         let stamp = SystemTime::now()

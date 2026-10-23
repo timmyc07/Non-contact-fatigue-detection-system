@@ -5,6 +5,8 @@ class TauriBridge {
 
   bool get isAvailable => false;
 
+  Stream<bool> overlayVisibilityChanges() => const Stream<bool>.empty();
+
   Future<dynamic> invoke(String command, [Map<String, dynamic>? args]) async {
     throw UnsupportedError(
         'Tauri command "$command" is only available on Web.');
